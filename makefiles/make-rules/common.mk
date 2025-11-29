@@ -104,6 +104,8 @@ BLOCKER_TOOLS ?= gsemver golines go-junit-report golangci-lint addlicense goimpo
 CRITICAL_TOOLS ?= swagger mockgen gotests git-chglog github-release coscmd go-mod-outdated protoc-gen-go cfssl go-gitlint
 TRIVIAL_TOOLS ?= depth go-callvis gothanks richgo rts kube-score
 
+# COMMA value is ','
+# SPACE value is ' '
 COMMA := ,
 SPACE :=
 SPACE +=
