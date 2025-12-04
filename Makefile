@@ -19,17 +19,17 @@ VERSION_PACKAGE := github.com/Ixecd/component-base/pkg/version
 
 # ================================================================
 # Other mk files
-include golang/common.mk
-include golang/golang.mk
-include golang/image.mk
-include golang/deploy.mk
-include golang/copyright.mk
-include golang/gen.mk
-include golang/ca.mk
-include golang/release.mk
-include golang/swagger.mk
-include golang/dependencies.mk
-include golang/tools.mk
+include scripts/make-rules/common.mk
+include scripts/make-rules/golang.mk
+include scripts/make-rules/image.mk
+include scripts/make-rules/deploy.mk
+include scripts/make-rules/copyright.mk
+include scripts/make-rules/gen.mk
+include scripts/make-rules/ca.mk
+include scripts/make-rules/release.mk
+include scripts/make-rules/swagger.mk
+include scripts/make-rules/dependencies.mk
+include scripts/make-rules/tools.mk
 
 # ================================================================
 # Usage
@@ -53,6 +53,10 @@ Options:
   V                Set to 1 enable verbose build. Default is 0.
 endef
 export USAGE_OPTIONS
+
+# ==============================================================================
+# Build targets
+
 
 ## build: Build source code for host platform.
 .PHONY: build
