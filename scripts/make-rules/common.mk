@@ -5,10 +5,15 @@
 SHELL := /bin/bash
 
 # include the common make file
+# MAKEFILE_LIST - make 内置变量，包含所有被包含的 Makefile 路径列表
+# 是 make 已经处理过的 Makefile 文件路径
+# 按照 include/解析的顺序排列
+# 包含主 Makefile 和被 include 的 Makefile
 COMMON_SELF_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
 
 # ROOT_DIR is the root directory of the project.
 ifeq ($(origin ROOT_DIR), undefined)
+# 确保是绝对路径
   ROOT_DIR := $(abspath $(shell cd $(COMMON_SELF_DIR)/../.. && pwd -P))
 endif	
 
