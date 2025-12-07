@@ -1,0 +1,56 @@
+apiVersion: v2
+name: project
+description: A Helm chart for Kubernetes
+
+# A chart can be either an 'application' or a 'library' chart.
+#
+# Application charts are a collection of templates that can be packaged into versioned archives
+# to be deployed.
+#
+# Library charts provide useful utilities or functions for the chart developer. They're included as
+# a dependency of application charts to inject those utilities and functions into the rendering
+# pipeline. Library charts do not define any templates and therefore cannot be deployed.
+type: application
+
+# This is the chart version. This version number should be incremented each time you make changes
+# to the chart and its templates, including the app version.
+# Versions are expected to follow Semantic Versioning (https://semver.org/)
+version: 0.1.0
+
+# This is the version number of the application being deployed. This version number should be
+# incremented each time you make changes to the application. Versions are not expected to
+# follow Semantic Versioning. They should reflect the version the application is using.
+# It is recommended to use it with quotes.
+appVersion: "1.16.0"
+
+kubeVersion: 兼容K8s版本的语义化版本(可选)
+
+keywords:
+  - 关于项目的一组关键字(可选)
+
+home: 项目home页面的URL(可选)
+
+source:
+  - 项目源码的URL列表(可选)
+
+dependencies: # Chart 必要条件列表（可选）
+  - name: Chart名称(nginx)
+    version: Chart版本("2.0.1")
+    repository: 可选 仓库URL("https://example.com/charts")或别名("@repo-name")
+    condition: 可选 解析为bool类型的YAML路径,用于启用/禁用Chart
+    tags: 可选
+      - 用于一次启用/禁用 一组Chart的tag
+    import-values: 可选
+      - ImportValue 保存源值到导入父键的映射。每项可以是字符串或者一对子/父列表项
+    alias: 可选 Chart中使用的别名
+
+maintainers: # 可选
+  - name: 维护者的名字
+    email: 维护者邮箱
+    url: 维护者url
+icon: 用于icon的SVG或者SVG或者PNG图片URL
+
+deprecated: 不被推荐的Chart(可选,bool值)
+
+annotations:
+  example: 按名称输入的批注列表
