@@ -43,8 +43,8 @@ Options:
   IMAGES           Backend images to make. Default is all of cmd starting with project.name-
                    This option is available when using: make image/image.multiarch/push/push.multiarch
                    Example: make image.multiarch IMAGES="client server"
-  REGISTRY_PREFIX  Docker registry prefix. Default is Ixecd. 
-                   Example: make push REGISTRY_PREFIX=github.com/Ixecd VERSION=v2.4.1
+  REGISTRY_PREFIX  Docker registry prefix. Default is qingchun22. 
+                   Example: make push REGISTRY_PREFIX=qingchun22 VERSION=v2.4.1
   PLATFORMS        The multiple platforms to build. Default is linux_amd64 and linux_arm64.
                    This option is available when using: make build.multiarch/image.multiarch/push.multiarch
                    Example: make image.multiarch IMAGES="clinet server" PLATFORMS="linux_amd64 linux_arm64"
