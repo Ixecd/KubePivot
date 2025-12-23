@@ -15,4 +15,9 @@
     "editor.insertSpaces": false,
     "workbench.colorTheme": "Solarized Light",
     "trae.tab.enableSmartEdit": false,
+    "[go]": {
+    "editor.insertSpaces": false,
+    "editor.tabSize": 4,
+    "editor.detectIndentation": false
+    },
 }
