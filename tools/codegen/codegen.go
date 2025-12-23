@@ -3,6 +3,10 @@
 // License that can be found in the LICENSE file.
 package main
 
+import (
+  "log"
+)
+
 var errCodeDocPrefix = `# 错误码
 
 !!系统错误码列表，由 {{.}}codegen -type=int -doc{{.}} 命令生成，不要对此文件做任何更改。
@@ -27,3 +31,7 @@ var errCodeDocPrefix = `# 错误码
 | Identifier | Code | HTTP Code | Description |
 | ---------- | ---- | --------- | ----------- |
 `
+
+func main() {
+	log.Default()
+}
