@@ -420,18 +420,35 @@ func (f *File) genDecl(node ast.Node) bool {
 	return false
 }
 
+// ParseComment严格限制注释的书写格式
 func (v *Value) ParseComment() (string, string) {
+	// \w		->	匹配一个单词字符(字母、数字、下划线),通常是常量名最后一个字符
+	// \s*		->	匹配0个或多个空白字符(空格、制表符)
+	// -		->	匹配字面量横杠
+	// \s*		->	再次允许空格
+	// (\d{3})	->	捕获:精确匹配3个数字(这里是HTTP状态码)
+	// \s*:\s*	->	匹配冒号，周围允许空格
+	// ([A-Z].*)->	捕获:从大写字母开始,一直到字符串结束(描述文本)
+	// \s*\.	->	匹配句点前可能有空格,必须以句点结尾
+	// \n*		->	匹配0个或多个换行符
+	// eg:
+	// ErrNotFound - 404: User not found.
 	reg := regexp.MustCompile(`\w\s*-\s*(\d{3})\s*:\s*([A-Z].*)\s*\.\n*`)
 	if !reg.MatchString(v.comment) {
 		log.Printf("constant '%s' have wrong comment format, register with 500 as default", v.originalName)
-
+		// 不匹配的话,直接返回默认值 500
+		// 这样的设计很友好:工具不会应为一个注释格式错就崩溃,而是降级处理,同时给出提示便于修复
 		return "500", "Internal server error"
 	}
 
+	// 返回所有匹配的子组
 	groups := reg.FindStringSubmatch(v.comment)
 	if len(groups) != 3 {
+		// 防御编程, 降级处理
 		return "500", "Internal server error"
 	}
-
+	// groups[0]: 整个匹配的字符串
+	// groups[1]: 第一个捕获组 -> HTTP状态码
+	// groups[2]: 第二个捕获组 -> 描述文本
 	return groups[1], groups[2]
 }
