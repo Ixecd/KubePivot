@@ -167,21 +167,29 @@ func main() {
 	}
 }
 
-type File struct {
-	pkg  *Package
-	file *ast.File
+// codegen 设计为 Go 代码生成工具中最成熟、最推荐的设计模式
+// Package -> File -> Value 三层包装结构
+// 以及 generator模式
 
-	typeName string
-	values   []Value
-
-	trimPrefix string
+func isDirectory(name string) bool {
+	info, err := os.Stat(name)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return info.IsDir()
 }
 
 // Generator 保存分析的结果，主要是formt.Source的输出
+// 遵循经典的 Builder/Writer模式
+// buf 输出缓冲区
+// pkg 持有解析后的AST+类型信息
+// trimPrefix 保存用户选项
 type Generator struct {
+	// 生成内容的缓冲区
 	buf bytes.Buffer
+	// 持有解析后的整个包信息
 	pkg *Package
-
+	// 保存全局命令行配置, 用于计算短名
 	trimPrefix string
 }
 
@@ -286,7 +294,13 @@ func (g *Generator) generateDocs(typeName string) {
 	g.Printf("\n")
 }
 
+// format: codegen工具的收尾关键步骤,负责将缓冲区累积的原始生成内容美化成标准、整洁的Go源代码
 func (g *Generator) format() []byte {
+	// 这里g.buf.Bytes()是零拷贝
+	// 这里的 Bytes()方法的实现如下所示
+	// func (b *Buffer) Bytes() []byte {
+	// 	return b.buf[b.off:]
+	// }
 	src, err := format.Source(g.buf.Bytes())
 	if err != nil {
 		log.Printf("warning: internal error: invalid Go generated: %s", err)
@@ -297,32 +311,34 @@ func (g *Generator) format() []byte {
 	return src
 }
 
+// Package: 是codegen工具中对一个Go包(package)的完整抽象表示
+// 原始数据从 golang.org/x/tools/go/packages中获取
 type Package struct {
-	name  string
-	defs  map[*ast.Ident]types.Object
+	// 包名
+	name string
+	// 这是最关键的字段, 标识符到类型对象的映射
+	// key: *ast.Ident, AST 中的标识符节点,比如常量名 ErrNotFound 对应的 *ast.Ident
+	// value: types.Object, 类型检查后的得到的真实对象,包含类型、值等信息
+	// 直接来自 packages.Package.TypesInfo.Defs
+	defs map[*ast.Ident]types.Object
+	// 当前包中所有Go文件的包装列表
+	// *ast.File只包装语法树,没有额外状态
+	// 在遍历和提取常量时,需要临时状态
 	files []*File
 }
 
-func isDirectory(name string) bool {
-	info, err := os.Stat(name)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return info.IsDir()
-}
-
-type Value struct {
-	comment      string
-	originalName string
-	name         string
-
-	value  uint64
-	signed bool
-	str    string
-}
-
-func (v *Value) String() string {
-	return v.str
+// File: codegen工具中对单个Go源文件(.go文件)的包装抽象
+type File struct {
+	// 反向指针,指向所属的包
+	pkg *Package
+	// 原始的AST文件节点, 要遍历的核心对象
+	file *ast.File
+	// 当前文件本次遍历要查找的类型名
+	typeName string
+	// 用来保存本文件中提取到的所有常量
+	values []Value
+	// 去前缀配置
+	trimPrefix string
 }
 
 // genDecl 常量提取函数
@@ -418,6 +434,26 @@ func (f *File) genDecl(node ast.Node) bool {
 	}
 	// 一旦处理完一个匹配的const块,返回false停止遍历其子节点
 	return false
+}
+
+// Value: codegen工具中表示单个常量(通常是一个错误码)所有信息的载体
+type Value struct {
+	// 存储该常量对应的原始注释文本
+	comment string
+	// 原始常量名
+	originalName string
+	// 去除前缀后的短命
+	name string
+	// 统一转换为无符号64位整数值
+	value uint64
+	// 原始类型是否有符号, 保留类型信息,以防未来扩展(比如支持负错误码)
+	signed bool
+	// 常量的字符串表示形式, 如果将来需要精确复现源码中的常量表达式
+	str string
+}
+
+func (v *Value) String() string {
+	return v.str
 }
 
 // ParseComment严格限制注释的书写格式
