@@ -63,6 +63,12 @@ export USAGE_OPTIONS
 build:
 	@$(MAKE) go.build
 
+## install: Install dtk binary to GOPATH/bin or GOBIN.
+.PHONY: install
+install:
+	@echo "===========> Installing dtk"
+	@$(GO) install ./cmd/dtk
+
 ## build.multiarch: Build source code for multiple platforms.
 .PHONY: build.multiarch
 build.multiarch:
@@ -118,6 +124,17 @@ cover:
 .PHONY: release
 release:
 	@$(MAKE) release.run
+
+## release.tag: Create and push git tag for release.
+.PHONY: release.tag
+release.tag:
+	@if [ -z "$(VERSION)" ]; then \
+		echo "Usage: make release.tag VERSION=vX.Y.Z"; \
+		exit 1; \
+	fi
+	@echo "===========> Tagging $(VERSION)"
+	@git tag -a "$(VERSION)" -m "release $(VERSION)"
+	@git push origin "$(VERSION)"
 
 ## release.build: Build release binaries.
 .PHONY: release.build

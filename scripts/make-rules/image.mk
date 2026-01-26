@@ -9,7 +9,7 @@
 DOCKER := docker
 DOCKER_SUPPORTED_API_VERSION ?= 1.51
 
-REGISTRY_PREFIX ?= qingchun22
+REGISTRY_PREFIX ?= $(PROJECT_NAME)
 BASE_IMAGE = alpine:3.18
 
 # 确保获取最新版本，避免缓存污染（缓存了不完整的下载），获取最新安全版本

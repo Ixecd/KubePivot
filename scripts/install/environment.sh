@@ -7,6 +7,16 @@
 
 # 当前项目源码根目录
 PROJECT_ROOT=$(dirname "${BASH_SOURCE[0]}")/../..
+
+# 读取项目配置（可选）
+CONFIG_FILE="${PROJECT_ROOT}/configs/project.env"
+if [ -f "${CONFIG_FILE}" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "${CONFIG_FILE}"
+  set +a
+fi
+
 PROJECT_NAME=${PROJECT_NAME:-"dev-toolkit"}
 
 # 生成文件存放目录

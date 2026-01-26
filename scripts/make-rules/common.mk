@@ -17,6 +17,24 @@ ifeq ($(origin ROOT_DIR), undefined)
   ROOT_DIR := $(abspath $(shell cd $(COMMON_SELF_DIR)/../.. && pwd -P))
 endif	
 
+# Load project config if present (KEY=VALUE format).
+-include $(ROOT_DIR)/configs/project.env
+
+# Load components config if present (simple YAML list).
+COMPONENTS_FILE ?= $(ROOT_DIR)/configs/components.yaml
+ifneq ("$(wildcard $(COMPONENTS_FILE))","")
+COMPONENT_NAMES ?= $(shell awk -F': *' '/- name:/{gsub(/"/,"",$$2); print $$2}' $(COMPONENTS_FILE))
+COMPONENT_IMAGES ?= $(shell awk -F': *' '/^ *image:/{gsub(/"/,"",$$2); if ($$2 != "") print $$2}' $(COMPONENTS_FILE))
+endif
+
+ifneq ($(strip $(COMPONENT_NAMES)),)
+COMMANDS ?= $(foreach c,$(COMPONENT_NAMES),$(ROOT_DIR)/cmd/$(c))
+endif
+
+ifneq ($(strip $(COMPONENT_IMAGES)),)
+IMAGES ?= $(COMPONENT_IMAGES)
+endif
+
 # OUTPUT_DIR is the output directory of the project.
 ifeq ($(origin OUTPUT_DIR),undefined)
 OUTPUT_DIR := $(ROOT_DIR)/_output
