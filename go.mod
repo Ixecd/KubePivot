@@ -1,4 +1,4 @@
-module dev-toolkit
+module github.com/Ixecd/dev-toolkit
 
 go 1.24.5
 
