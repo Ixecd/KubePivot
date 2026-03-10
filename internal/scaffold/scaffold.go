@@ -70,7 +70,7 @@ func InitProject(opts InitOptions) error {
 		return err
 	}
 
-	if err := ensureOutputDir(outputDir, opts.Force); err != nil {
+	if err := ensureOutputDir(outputDir, opts.Force, name); err != nil {
 		return err
 	}
 
@@ -111,10 +111,17 @@ func InitProject(opts InitOptions) error {
 		return err
 	}
 
-	fmt.Fprintf(opts.Stdout, "项目已生成：%s\n", outputDir)
+	// 友好路径显示（~/myproject 而不是绝对路径）
+	friendly := friendlyPath(outputDir)
+
+	fmt.Fprintf(opts.Stdout, "✅ 项目已成功生成！\n")
+	fmt.Fprintf(opts.Stdout, "路径：%s\n", friendly)
 	fmt.Fprintf(opts.Stdout, "模块名：%s\n", module)
 	fmt.Fprintf(opts.Stdout, "入口服务：cmd/%s\n", name)
-	fmt.Fprintf(opts.Stdout, "下一步：cd %s && go mod tidy\n", outputDir)
+	fmt.Fprintf(opts.Stdout, "\n下一步执行：\n")
+	fmt.Fprintf(opts.Stdout, "  cd %s\n", friendly)
+	fmt.Fprintf(opts.Stdout, "  go mod tidy\n")
+	fmt.Fprintf(opts.Stdout, "  make help          # 查看可用命令\n")
 	return nil
 }
 
@@ -157,7 +164,7 @@ func resolveOutputDir(explicit, name string) (string, error) {
 	return filepath.Abs(explicit)
 }
 
-func ensureOutputDir(path string, force bool) error {
+func ensureOutputDir(path string, force bool, name string) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -166,17 +173,24 @@ func ensureOutputDir(path string, force bool) error {
 		return err
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("output path exists and is not a directory: %s", path)
+		return fmt.Errorf("输出路径存在但不是目录：%s", friendlyPath(path))
 	}
-	if force {
-		return nil
-	}
+
+	// === 新增严格检查：目录已存在时默认直接失败（保护用户项目）===
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return err
 	}
-	if len(entries) > 0 {
-		return fmt.Errorf("output directory is not empty: %s (use --force to continue)", path)
+	if len(entries) > 0 || !force {
+		// 即使是空目录，也建议用户加 --force（更明确）
+		if force {
+			// force=true 时允许继续（会覆盖）
+			return nil
+		}
+		return fmt.Errorf("输出目录已存在：%s\n\n"+
+			"   请使用其他路径，或加 --force 强制覆盖：\n"+
+			"     dtk init --name %s --output %s --force",
+			friendlyPath(path), name, friendlyPath(path)) // 这里 name 是 InitProject 里的局部变量
 	}
 	return nil
 }
@@ -384,4 +398,30 @@ func replaceInDir(root string, replacements map[string]string) error {
 		}
 		return os.WriteFile(path, []byte(updated), 0o644)
 	})
+}
+
+// friendlyPath 把绝对路径转成用户友好的形式
+// 优先显示 ~/myproject，其次显示相对路径
+func friendlyPath(absPath string) string {
+	home, err := os.UserHomeDir()
+	if err == nil {
+		home = filepath.Clean(home)
+		abs := filepath.Clean(absPath)
+		if strings.HasPrefix(abs, home) {
+			rel := strings.TrimPrefix(abs, home)
+			rel = strings.TrimPrefix(rel, string(filepath.Separator))
+			if rel == "" {
+				return "~"
+			}
+			return "~/" + filepath.ToSlash(rel)
+		}
+	}
+
+	// 尝试转为相对当前目录
+	if cwd, err := os.Getwd(); err == nil {
+		if rel, err := filepath.Rel(cwd, absPath); err == nil && !strings.HasPrefix(rel, "..") {
+			return filepath.ToSlash(rel)
+		}
+	}
+	return absPath
 }
