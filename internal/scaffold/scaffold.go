@@ -99,16 +99,13 @@ func InitProject(opts InitOptions) error {
 		return err
 	}
 
-	if err := replaceInDir(outputDir, map[string]string{
+	replacements := map[string]string{
 		"github.com/Ixecd/dev-toolkit": module,
 		"dev-toolkit":                  name,
-	}); err != nil {
-		return err
 	}
-	if err := replaceInDir(filepath.Join(outputDir, "deployments", name), map[string]string{
-		"project": name,
-	}); err != nil {
-		return err
+
+	if err := replaceInDir(outputDir, replacements); err != nil {
+		return fmt.Errorf("content replacement failed: %w", err)
 	}
 
 	// 友好路径显示（~/myproject 而不是绝对路径）
