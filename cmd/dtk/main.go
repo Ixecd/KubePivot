@@ -13,6 +13,25 @@ import (
 	"github.com/Ixecd/dev-toolkit/internal/scaffold"
 )
 
+func expandHome(path string) string {
+	if path == "" {
+		return path
+	}
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return home + path[1:]
+		}
+	}
+
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+	}
+	return path
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
@@ -47,6 +66,10 @@ func runInit(args []string) {
 		fmt.Fprintln(os.Stderr, "解析参数失败:", err)
 		os.Exit(1)
 	}
+
+	*output = expandHome(*output)
+	*template = expandHome(*template)
+
 	if *name == "" && *output != "" {
 		*name = filepathBase(*output)
 	}
