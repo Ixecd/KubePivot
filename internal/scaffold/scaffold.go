@@ -325,18 +325,26 @@ func writeComponentsConfig(path, name string) error {
 }
 
 func renameDir(oldPath, newPath string) error {
+	// 源目录不存在就跳过（模板里可能没有）
 	if _, err := os.Stat(oldPath); err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
+
+	// === 目标已存在时自动清理（--force 模式下安全）===
+	if _, err := os.Stat(newPath); err == nil {
+		if err := os.RemoveAll(newPath); err != nil {
+			return fmt.Errorf("清理旧目录失败 %s: %w", newPath, err)
+		}
+	}
+
 	if err := os.MkdirAll(filepath.Dir(newPath), 0o755); err != nil {
 		return err
 	}
 	return os.Rename(oldPath, newPath)
 }
-
 
 func isText(data []byte) bool {
 	if !utf8.Valid(data) {
