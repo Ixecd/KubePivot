@@ -323,7 +323,41 @@ func renameDir(oldPath, newPath string) error {
 	return os.Rename(oldPath, newPath)
 }
 
+
+func isText(data []byte) bool {
+	if !utf8.Valid(data) {
+		return false
+	}
+	return !bytesContainsZero(data)
+}
+
+func bytesContainsZero(data []byte) bool {
+	for _, b := range data {
+		if b == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldSkip(name string) bool {
+	switch name {
+	case ".git", ".cursor", "_output", "node_modules", ".DS_Store":
+		return true
+	default:
+		return false
+	}
+}
 func replaceInDir(root string, replacements map[string]string) error {
+	// 目录不存在时优雅跳过
+	// 常见于模板中没有 deployments/project 子目录的情况
+	if _, err := os.Stat(root); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
 	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -350,29 +384,4 @@ func replaceInDir(root string, replacements map[string]string) error {
 		}
 		return os.WriteFile(path, []byte(updated), 0o644)
 	})
-}
-
-func isText(data []byte) bool {
-	if !utf8.Valid(data) {
-		return false
-	}
-	return !bytesContainsZero(data)
-}
-
-func bytesContainsZero(data []byte) bool {
-	for _, b := range data {
-		if b == 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func shouldSkip(name string) bool {
-	switch name {
-	case ".git", ".cursor", "_output", "node_modules", ".DS_Store":
-		return true
-	default:
-		return false
-	}
 }
