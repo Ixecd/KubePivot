@@ -249,17 +249,15 @@ func (g *Generator) generate(typeName string) {
 		log.Fatalf("no values defined for type %s", typeName)
 	}
 
-	// String switch
-	g.Printf("\n// %sString returns \"HTTP: msg\" for code.\n", strings.Title(typeName))
+	// String func
+	g.Printf("\n// %sString returns HTTP:msg for code.\n", strings.Title(typeName))
 	g.Printf("func %sString(code %s) string {\n", typeName, typeName)
 	g.Printf("  switch code {\n")
 	for _, v := range values {
 		code, desc := v.ParseComment()
-		g.Printf("  case %s:\n", v.originalName)
-		g.Printf("    return \"%s: %s\"\n", code, desc)
+		g.Printf("  case %s: return \"%s: %s\"\n", v.originalName, code, desc)
 	}
-	g.Printf("  default:\n")
-	g.Printf("    return \"500: unknown\"\n")
+	g.Printf("  default: return \"500: unknown\"\n")
 	g.Printf("  }\n")
 	g.Printf("}\n")
 }

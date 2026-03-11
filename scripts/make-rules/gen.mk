@@ -16,12 +16,12 @@ gen.errcode: gen.errcode.code gen.errcode.doc
 .PHONY: gen.errcode.code
 gen.errcode.code: tools.verify.codegen
 	@echo "===========> Generating error code go source files"
-	@codegen -type=int ${ROOT_DIR}/internal/pkg/code
+	@codegen -type=ErrorCode ${ROOT_DIR}/internal/pkg/code
 
 .PHONY: gen.errcode.doc
 gen.errcode.doc: tools.verify.codegen
 	@echo "===========> Generating error code markdown documentation"
-	@codegen -type=int -doc \
+	@codegen -type=ErrorCode -doc \
 		-output ${ROOT_DIR}/docs/guide/zh-CN/api/error_code_generated.md ${ROOT_DIR}/internal/pkg/code
 	
 .PHONY: gen.ca.%

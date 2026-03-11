@@ -61,7 +61,7 @@ install.coscli:
 
 .PHONY: install.coscmd
 install.coscmd:
-	@if which pip &>/dev/null; then pip install coscmd; else pip3 install coscmd; fi
+	@pipx install coscmd || brew install tencentyun/tap/coscli || echo "coscmd optional skip"
 
 .PHONY: install.golines
 install.golines:
@@ -85,7 +85,8 @@ install.protoc-gen-go:
 
 .PHONY: install.cfssl
 install.cfssl:
-	@$(ROOT_DIR)/scripts/install/install.sh iam::install::install_cfssl
+	@go install github.com/cloudflare/cfssl/cmd/cfssl@latest
+	@go install github.com/cloudflare/cfssl/cmd/cfssljson@latest
 
 .PHONY: install.addlicense
 install.addlicense:
