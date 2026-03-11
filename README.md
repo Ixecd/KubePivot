@@ -1,52 +1,129 @@
-## 脚手架初始化
+# dev-toolkit (dtk) ⛓️ v1.0
 
-在当前仓库根目录下执行：
+**Go + K8s Helm Scaffold**：1行 init boilerplate，1键 AI-plan + deploy (helm + image + resources + rollout)
 
-```bash
-go run ./cmd/dtk init --name demo-svc --module github.com/you/demo-svc
+## 🚀 Quickstart
+
 ```
-
-安装 `dtk` 二进制（安装到 `GOBIN` 或 `GOPATH/bin`）：
-
-```bash
-make install
-```
-
-安装后可以直接使用：
-
-```bash
-dtk init --name demo-svc --module github.com/you/demo-svc --output=~/demo-svc
-```
-
-远程安装（Go 1.20+）：
-
-```bash
 go install github.com/Ixecd/dev-toolkit/cmd/dtk@latest
+dtk init --name myapp --module github.com/me/myapp
+cd myapp
+go mod tidy
+git init
+git add --all .
+dtk deploy  # 默认即开启认证授权
 ```
 
-## 配置与组件
+**e2e 30s**：boilerplate → helm ns deploy → AI replicas=1 cpu100m mem128Mi → rollout。
 
-默认会扫描 `cmd/*` 作为组件，镜像目录扫描 `build/docker/*`，因此可以支持任意数量的组件。
+## ⚙️ Features
 
-可选配置文件：`configs/project.env`（Makefile 与 `scripts/install/environment.sh` 会读取）：
+- **init**：Makefile + scripts + helm charts + docker + githooks + vscode
+- **deploy**：AI yaml plan (configs/components.yaml) → helm upgrade + k set image/resources/scale + rollout status
+- **multiarch**：make image.multiarch PLATFORMS=linux/amd64,arm64
+- **env**：configs/project.env PROJECT_NAME KUBE_NAMESPACE REGISTRY_PREFIX
+- **vars**：VERSION ARCH REGISTRY_PREFIX auto ?= v0.1.0 amd64 local
 
-## 版本发布（Tag）
+**no bullshit**：no node_modules, alpine base, go mod tidy ready。
 
-发布 tag（示例 `v0.1.0`）：
+## 📋 Commands
 
-```bash
-make release.tag VERSION=v0.1.0
+### dtk init [flags]
+
+```
+--name <lowercase>  # project (ROOT_PACKAGE)
+--module <github.com/me/myapp>  # go mod
+--output ~/myapp  # default ./myapp
+--template <dir>  # DTK_TEMPLATE_ROOT
+--force  # overwrite
 ```
 
-或手动执行：
-
-```bash
-git tag -a v0.1.0 -m "release v0.1.0"
-git push origin v0.1.0
+gen：
+```
+Makefile (tidy gen lint build image push deploy)
+cmd/myapp/main.go (http 8080 /healthz)
+configs/components.yaml (AI plan input)
+configs/project.env (PROJECT_NAME=myapp KUBE_NAMESPACE=myapp REGISTRY_PREFIX=local)
+deployments/myapp/Chart.yaml values.yaml templates/
+build/docker/myapp/Dockerfile
 ```
 
-如果需要从其他目录使用，可指定模板根目录：
+### dtk deploy [flags]
 
-```bash
-go run ./cmd/dtk init --name demo-svc --module github.com/you/demo-svc --template /path/to/dev-toolkit
 ```
+--components configs/components.yaml  # AI input
+--namespace myns  # default project.env KUBE_NAMESPACE
+--context ctx  # k context
+--dry-run  # plan only
+```
+
+flow：
+1. AI plan resources (replicas cpu mem storage)
+2. make deploy.full (helm install + k set image/scale/resources)
+3. rollout status --timeout=300s
+
+**git:master*** ignore (legacy arg)。
+
+## 🛠️ Makefile Targets
+
+```
+make tidy gen lint cover build  # dev
+make image.multiarch push.multiarch  # build/push amd64/arm64
+make deploy.full  # helm + run
+make release VERSION=v1.0.0  # tag push
+make help  # full
+```
+
+vars：
+```
+VERSION=v1.0.0 ARCH=amd64 REGISTRY_PREFIX=local ROOT_DIR=$(pwd)
+```
+
+## 🔧 Customization
+
+**components.yaml**：
+```
+components:
+ - name: first
+   port: 8080
+   image: first
+```
+
+AI → replicas=1 cpu=100m memory=128Mi
+
+**project.env**：
+```
+PROJECT_NAME=first
+KUBE_NAMESPACE=first
+REGISTRY_PREFIX=local
+```
+
+**Chart.yaml/values.yaml**：helm templates deployment svc。
+
+**Dockerfile**：build/docker/first/Dockerfile alpine copy bin。
+
+## 🐛 Troubleshooting
+
+- **HEAD**：git commit/tag v0.1.0 pre-deploy
+- **Chart deps**：template clean (dependencies: [])
+- **image empty**：VERSION/REGISTRY_PREFIX export
+- **override**：Makefile rm release.tag block
+
+## 🎖️ v1.0 Changelog
+
+- template replace demo-svc → name
+- project.env gen
+- Chart.yaml deps clean
+- main.go makeEnv env + vars
+- ROOT_DIR pwd
+- e2e init→deploy pod up
+
+## 🤝 Contrib
+
+1. fork github.com/Ixecd/dev-toolkit
+2. dtk init --name fix --module your/fix
+3. code
+4. make image push deploy
+5. PR
+
+**license**：MIT

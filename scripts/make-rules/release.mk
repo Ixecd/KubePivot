@@ -15,9 +15,14 @@ release.run: release.verify release.ensure-tag
 release.verify: tools.verify.git-chglog tools.verify.github-release tools.verify.coscmd
 
 # Git 标签发布自动化
+# .PHONY: release.tag
+# release.tag: tools.verify.gsemver release.ensure-tag
+# 	@git push origin `git describe --tags --abbrev=0`
 .PHONY: release.tag
-release.tag: tools.verify.gsemver release.ensure-tag
-	@git push origin `git describe --tags --abbrev=0`
+release.tag:
+	@if [ -z "$(VERSION)" ]; then echo "VERSION req"; exit 1; fi
+	@git tag -a "$(VERSION)" -m "release $(VERSION)"
+	@git push origin "$(VERSION)"
 
 .PHONY: release.ensure-tag
 release.ensure-tag: tools.verify.gsemver

@@ -17,6 +17,11 @@ ROOT_PACKAGE := github.com/Ixecd/dev-toolkit
 # Replace with your project's version package
 VERSION_PACKAGE := github.com/Ixecd/component-base/pkg/version
 
+ROOT_DIR := $(shell pwd)
+VERSION ?= v0.1.0
+ARCH ?= amd64
+REGISTRY_PREFIX ?= local
+
 # ================================================================
 # Other mk files
 include scripts/make-rules/common.mk
@@ -126,20 +131,20 @@ release:
 	@$(MAKE) release.run
 
 ## release.tag: Create and push git tag for release.
-.PHONY: release.tag
-release.tag:
-	@if [ -z "$(VERSION)" ]; then \
-		echo "Usage: make release.tag VERSION=vX.Y.Z"; \
-		exit 1; \
-	fi
-	@echo "===========> Tagging $(VERSION)"
-	@git tag -a "$(VERSION)" -m "release $(VERSION)"
-	@git push origin "$(VERSION)"
+# .PHONY: release.tag
+# release.tag:
+# 	@if [ -z "$(VERSION)" ]; then \
+# 		echo "Usage: make release.tag VERSION=vX.Y.Z"; \
+# 		exit 1; \
+# 	fi
+# 	@echo "===========> Tagging $(VERSION)"
+# 	@git tag -a "$(VERSION)" -m "release $(VERSION)"
+# 	@git push origin "$(VERSION)"
 
 ## release.build: Build release binaries.
-.PHONY: release.build
-release.build:
-	@$(MAKE) push.multiarch
+# .PHONY: release.build
+# release.build:
+# 	@$(MAKE) push.multiarch
 
 ## format: Gofmt (reformat) package sources (exclude vendor dir if existed).
 .PHONY: format

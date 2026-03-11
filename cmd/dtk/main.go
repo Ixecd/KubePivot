@@ -170,6 +170,11 @@ func runDeploy(args []string) {
 	if *context != "" {
 		makeEnv = append(makeEnv, "KUBE_CONTEXT="+*context)
 	}
+
+	for k, v := range env {
+		makeEnv = append(makeEnv, k+"="+v)
+	}
+	makeEnv = append(makeEnv, "VERSION=v0.1.0", "ARCH=amd64", "REGISTRY_PREFIX=local")
 	if err := runCmd(root, makeEnv, "make", makeArgs...); err != nil {
 		fmt.Fprintln(os.Stderr, "部署失败:", err)
 		os.Exit(1)
