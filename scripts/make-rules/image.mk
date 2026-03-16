@@ -13,8 +13,8 @@ DOCKER_SUPPORTED_API_VERSION ?= 1.51
 REGISTRY_PREFIX ?= $(PROJECT_NAME)
 BASE_IMAGE = alpine:3.18
 
-# 确保获取最新版本，避免缓存污染（缓存了不完整的下载），获取最新安全版本
-EXTRA_ARGS ?= --no-cache
+# 按需传入，例如：make image EXTRA_ARGS="--no-cache" 强制重新构建避免缓存污染
+EXTRA_ARGS ?=
 _DOCKER_BUILD_EXTRA_ARGS :=
 
 ifdef HTTP_PROXY
@@ -80,15 +80,17 @@ image.build.%: go.build.%
 .PHONY: image.manifest.push
 image.manifest.push:
 	@$(foreach img,$(IMAGES), \
-		docker buildx imagetools create -t $(REGISTRY_PREFIX)/$(img):$(VERSION) \
-		$(foreach plat,$(IMAGE_PLAT),$(REGISTRY_PREFIX)/$(img)-$(subst /,-,$(plat)):$(VERSION)); \
+		if [ "$(words $(PLATFORMS))" -gt "1" ]; then \
+			docker buildx imagetools create -t $(REGISTRY_PREFIX)/$(img):$(VERSION) \
+			$(foreach plat,$(PLATFORMS),$(REGISTRY_PREFIX)/$(img)-$(subst /,-,$(subst _,/,$(plat))):$(VERSION)); \
+		fi; \
 	)
 
 .PHONY: image.push
-image.push: image.verify go.build.verify $(addprefix image.push., $(addprefix $(IMAGE_PLAT)., $(IMAGES))) image.manifest.push
+image.push: image.verify go.build.verify $(addprefix image.push., $(addprefix $(IMAGE_PLAT)., $(IMAGES)))
 
 .PHONY: image.push.multiarch
-image.push.multiarch: image.verify go.build.verify $(foreach p, $(PLATFORMS),$(addprefix image.push., $(addprefix $(p)., $(IMAGES))))
+image.push.multiarch: image.verify go.build.verify $(foreach p, $(PLATFORMS),$(addprefix image.push., $(addprefix $(p)., $(IMAGES)))) image.manifest.push
 
 .PHONY: image.push.%
 image.push.%: image.build.%
