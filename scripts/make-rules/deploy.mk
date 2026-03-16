@@ -36,7 +36,21 @@ deploy.install:
 		$(if $(CONTEXT),--kube-context $(CONTEXT))
 
 .PHONY: deploy.full
-deploy.full: deploy.install deploy.run.all
+deploy.full: deploy.build deploy.push deploy.install deploy.run.all
+
+.PHONY: deploy.build
+deploy.build:
+	@$(foreach img,$(IMAGES), \
+		docker build -t $(REGISTRY_PREFIX)/$(img)-$(ARCH):$(VERSION) \
+		-f $(ROOT_DIR)/build/docker/$(img)/Dockerfile \
+		--build-arg SERVICE_NAME=$(img) $(ROOT_DIR); \
+	)
+
+.PHONY: deploy.push
+deploy.push:
+	@$(foreach img,$(IMAGES), \
+		docker push $(REGISTRY_PREFIX)/$(img)-$(ARCH):$(VERSION); \
+	)
 
 .PHONY: deploy.run
 deploy.run: $(addprefix deploy.run., $(DEPLOYS))
@@ -45,6 +59,6 @@ deploy.run: $(addprefix deploy.run., $(DEPLOYS))
 deploy.run.%:
 	@echo "===========> Deploying $* $(VERSION) on $(ARCH)"
 	@$(KUBECTL) $(if $(CONTEXT),--context $(CONTEXT)) --namespace $(NAMESPACE) \
-		set image deployment/$(PROJECT_NAME) $*=$(REGISTRY_PREFIX)/$*-$(ARCH):$(VERSION) --record
+		set image deployment/$* $*=$(REGISTRY_PREFIX)/$*-$(ARCH):$(VERSION) --record
 	@$(KUBECTL) $(if $(CONTEXT),--context $(CONTEXT)) --namespace $(NAMESPACE) \
-		rollout status deployment/$(PROJECT_NAME) --timeout=300s
+		rollout status deployment/$* --timeout=300s

@@ -174,7 +174,27 @@ func runDeploy(args []string) {
 	for k, v := range env {
 		makeEnv = append(makeEnv, k+"="+v)
 	}
-	makeEnv = append(makeEnv, "VERSION=v0.1.0", "ARCH=amd64", "REGISTRY_PREFIX=local")
+
+	// 从project.env读，读不到再用默认值
+	version := env["VERSION"]
+	if version == "" {
+		version = "v0.1.0"
+	}
+	arch := env["ARCH"]
+	if arch == "" {
+		arch = "amd64"
+	}
+	registryPrefix := env["REGISTRY_PREFIX"]
+	if registryPrefix == "" {
+		registryPrefix = projectName
+	}
+
+	makeEnv = append(makeEnv,
+		"VERSION="+version,
+		"ARCH="+arch,
+		"REGISTRY_PREFIX="+registryPrefix,
+	)
+
 	if err := runCmd(root, makeEnv, "make", makeArgs...); err != nil {
 		fmt.Fprintln(os.Stderr, "部署失败:", err)
 		os.Exit(1)
