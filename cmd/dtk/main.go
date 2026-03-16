@@ -171,11 +171,6 @@ func runDeploy(args []string) {
 		makeEnv = append(makeEnv, "KUBE_CONTEXT="+*context)
 	}
 
-	for k, v := range env {
-		makeEnv = append(makeEnv, k+"="+v)
-	}
-
-	// 从project.env读，读不到再用默认值
 	version := env["VERSION"]
 	if version == "" {
 		version = "v0.1.0"
@@ -187,6 +182,13 @@ func runDeploy(args []string) {
 	registryPrefix := env["REGISTRY_PREFIX"]
 	if registryPrefix == "" {
 		registryPrefix = projectName
+	}
+
+	skipKeys := map[string]bool{"VERSION": true, "ARCH": true, "REGISTRY_PREFIX": true}
+	for k, v := range env {
+		if !skipKeys[k] {
+			makeEnv = append(makeEnv, k+"="+v)
+		}
 	}
 
 	makeEnv = append(makeEnv,
