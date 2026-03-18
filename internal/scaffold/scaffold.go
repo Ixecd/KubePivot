@@ -101,6 +101,9 @@ func InitProject(opts InitOptions) error {
 	if err := writeTestSkeleton(outputDir, name, module); err != nil {
 		return err
 	}
+	if err := writeSnapshotSkeleton(outputDir, name); err != nil {
+		return err
+	}
 
 	// 🔥 FIXED: gen project.env for deploy (raw string)
 	configsPath := filepath.Join(outputDir, "configs", "project.env")
@@ -198,6 +201,26 @@ func runInDir(dir string, name string, args ...string) error {
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	return cmd.Run()
+}
+
+func writeSnapshotSkeleton(outputDir, name string) error {
+	readmeContent := fmt.Sprintf(`# %s 快照归档
+
+命名格式：SNAPSHOT-{日期}-{里程碑}.md
+
+示例：
+- SNAPSHOT-2026-03-18-init.md        # 项目初始化
+- SNAPSHOT-2026-03-18-feature-x.md  # 完成某个功能
+`, name)
+
+	readmePath := filepath.Join(outputDir, "snapshots", "README.md")
+	if err := os.MkdirAll(filepath.Dir(readmePath), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(readmePath, []byte(readmeContent), 0o644); err != nil {
+		return fmt.Errorf("gen snapshots/README.md: %w", err)
+	}
+	return nil
 }
 
 func writeTestSkeleton(outputDir, name, module string) error {
