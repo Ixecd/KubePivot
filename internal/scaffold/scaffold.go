@@ -233,7 +233,9 @@ func writeSnapshotSkeleton(outputDir, name string) error {
 func writeTestSkeleton(outputDir, name, module string) error {
 	camel := toCamel(name)
 
-	e2eContent := fmt.Sprintf(`package e2e
+	e2eContent := fmt.Sprintf(`//go:build e2e
+
+package e2e
 
 import (
 	"net/http"
@@ -281,7 +283,9 @@ func TestAPI_Healthz(t *testing.T) {
 }
 `
 
-	smokeContent := `package smoke
+	smokeContent := `//go:build e2e
+
+package smoke
 
 import (
 	"net/http"
