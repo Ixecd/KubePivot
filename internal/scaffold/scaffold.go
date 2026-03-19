@@ -812,6 +812,39 @@ func writeAuthPackage(outputDir string) error {
 	files := map[string]string{
 		filepath.Join(outputDir, "internal", "auth", "auth.go"):       authContent,
 		filepath.Join(outputDir, "internal", "auth", "middleware.go"): middlewareContent,
+		filepath.Join(outputDir, "internal", "auth", "rbac.go"): `package auth
+
+import (
+	"context"
+	"net/http"
+)
+
+// PermissionChecker 权限检查接口，业务层实现
+type PermissionChecker interface {
+	HasPermission(ctx context.Context, userID int64, permission string) (bool, error)
+}
+
+// RBACMiddleware 权限中间件，需要先经过 JWTMiddleware
+func RBACMiddleware(checker PermissionChecker, permission string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := GetClaims(r)
+		if claims == nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		ok, err := checker.HasPermission(r.Context(), claims.UserID, permission)
+		if err != nil {
+			http.Error(w, "权限查询失败", http.StatusInternalServerError)
+			return
+		}
+		if !ok {
+			http.Error(w, "权限不足", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	}
+}
+`,
 	}
 
 	for path, content := range files {
