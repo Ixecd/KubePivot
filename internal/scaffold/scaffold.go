@@ -107,6 +107,9 @@ func InitProject(opts InitOptions) error {
 	if err := writeSnapshotSkeleton(outputDir, name); err != nil {
 		return err
 	}
+	if err := writeSwaggerSpec(outputDir, name); err != nil {
+		return err
+	}
 
 	// 🔥 FIXED: gen project.env for deploy (raw string)
 	configsPath := filepath.Join(outputDir, "configs", "project.env")
@@ -820,4 +823,86 @@ func writeAuthPackage(outputDir string) error {
 		}
 	}
 	return nil
+}
+
+func writeSwaggerSpec(outputDir, name string) error {
+	content := fmt.Sprintf(`swagger: "2.0"
+info:
+  title: %s API
+  description: %s 服务 API 文档
+  version: "1.0.0"
+
+host: localhost:8080
+basePath: /
+schemes:
+  - http
+
+securityDefinitions:
+  Bearer:
+    type: apiKey
+    name: Authorization
+    in: header
+    description: "格式: Bearer <access_token>"
+
+consumes:
+  - application/json
+produces:
+  - application/json
+
+definitions:
+  Response:
+    type: object
+    properties:
+      code:
+        type: integer
+      message:
+        type: string
+      data:
+        description: 成功数据
+
+paths:
+  /healthz:
+    get:
+      tags:
+        - System
+      summary: 健康检查
+      produces:
+        - text/plain
+      responses:
+        200:
+          description: ok
+
+  /:
+    get:
+      tags:
+        - System
+      summary: 服务信息
+      security:
+        - Bearer: []
+      responses:
+        200:
+          description: 服务信息
+          schema:
+            type: object
+            properties:
+              data:
+                type: object
+                properties:
+                  service:
+                    type: string
+                    example: %q
+                  status:
+                    type: string
+                    example: "ok"
+        401:
+          description: 未认证
+          schema:
+            $ref: "#/definitions/Response"
+`, name, name, name)
+
+	path := filepath.Join(outputDir, "docs", "swagger.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(content), 0o644)
 }
