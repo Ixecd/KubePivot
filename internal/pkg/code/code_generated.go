@@ -11,17 +11,17 @@ func ErrorCodeString(code ErrorCode) string {
 	case ErrUnknown:
 		return "500: Internal server error"
 	case ErrInvalidArg:
-		return "500: Internal server error"
+		return "400: Invalid argument"
 	case ErrUnauthorized:
-		return "500: Internal server error"
+		return "401: Unauthorized"
 	case ErrForbidden:
-		return "500: Internal server error"
+		return "403: Forbidden"
 	case ErrNotFound:
-		return "500: Internal server error"
+		return "404: Not found"
 	case ErrInternal:
 		return "500: Internal server error"
 	case ErrDeadlineExceeded:
-		return "500: Internal server error"
+		return "408: Deadline exceeded"
 	default:
 		return "500: unknown"
 	}

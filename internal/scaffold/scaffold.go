@@ -98,6 +98,9 @@ func InitProject(opts InitOptions) error {
 	if err := writeInternalSkeleton(outputDir, name, module); err != nil {
 		return err
 	}
+	if err := writeAuthPackage(outputDir); err != nil {
+		return err
+	}
 	if err := writeTestSkeleton(outputDir, name, module); err != nil {
 		return err
 	}
@@ -162,7 +165,7 @@ REGISTRY_PREFIX=qingchun22
 	if err := renameDir(filepath.Join(outputDir, "build", "docker", "dev-toolkit"), filepath.Join(outputDir, "build", "docker", name)); err != nil {
 	}
 
-	// 自动安装依赖之前加
+	// 自动安装依赖
 	if err := runInDir(outputDir, "git", "init"); err != nil {
 		fmt.Fprintf(opts.Stdout, "[WARN] git init 失败，请手动执行\n")
 	}
@@ -172,13 +175,17 @@ REGISTRY_PREFIX=qingchun22
 	if err := runInDir(outputDir, "git", "commit", "-m", "chore: init project by dtk"); err != nil {
 		fmt.Fprintf(opts.Stdout, "[WARN] git commit 失败，请手动执行\n")
 	}
-
-	// 自动安装依赖
 	if err := runInDir(outputDir, "go", "get", "github.com/stretchr/testify@latest"); err != nil {
 		fmt.Fprintf(opts.Stdout, "[WARN] go get testify 失败，请手动执行: go get github.com/stretchr/testify\n")
 	}
 	if err := runInDir(outputDir, "go", "mod", "tidy"); err != nil {
 		fmt.Fprintf(opts.Stdout, "[WARN] go mod tidy 失败，请手动执行\n")
+	}
+	if err := runInDir(outputDir, "go", "get", "github.com/golang-jwt/jwt/v5"); err != nil {
+		fmt.Fprintf(opts.Stdout, "[WARN] go get jwt 失败，请手动执行\n")
+	}
+	if err := runInDir(outputDir, "go", "get", "golang.org/x/crypto/bcrypt"); err != nil {
+		fmt.Fprintf(opts.Stdout, "[WARN] go get bcrypt 失败，请手动执行\n")
 	}
 
 	// 友好路径显示（~/myproject 而不是绝对路径）
@@ -476,7 +483,9 @@ func writeGoMod(templatePath, outputPath, module string) error {
 	for i, line := range lines {
 		if strings.HasPrefix(strings.TrimSpace(line), "module ") {
 			lines[i] = "module " + module
-			break
+		}
+		if strings.HasPrefix(strings.TrimSpace(line), "go ") {
+			lines[i] = "go 1.25"
 		}
 	}
 	return os.WriteFile(outputPath, []byte(strings.Join(lines, "\n")), 0o644)
@@ -759,7 +768,7 @@ func writeDockerfile(path, name string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	content := fmt.Sprintf(`FROM golang:1.24-alpine AS builder
+	content := fmt.Sprintf(`FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 COPY . .
@@ -786,4 +795,25 @@ TAG=${2:-latest}
 docker build -t "$IMAGE_NAME:$TAG" -f "$(dirname "$0")/Dockerfile" .
 `, name)
 	return os.WriteFile(path, []byte(content), 0o755)
+}
+
+func writeAuthPackage(outputDir string) error {
+	authContent := "package auth\n\nimport (\n\t\"fmt\"\n\t\"time\"\n\n\t\"github.com/golang-jwt/jwt/v5\"\n\t\"golang.org/x/crypto/bcrypt\"\n)\n\nconst tokenExpiry = 24 * time.Hour\n\ntype Claims struct {\n\tUserID   int64  `json:\"user_id\"`\n\tUsername string `json:\"username\"`\n\tjwt.RegisteredClaims\n}\n\nfunc HashPassword(password string) (string, error) {\n\tbytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)\n\tif err != nil {\n\t\treturn \"\", fmt.Errorf(\"密码加密失败: %w\", err)\n\t}\n\treturn string(bytes), nil\n}\n\nfunc CheckPassword(password, hash string) bool {\n\treturn bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil\n}\n\nfunc GenerateToken(userID int64, username, secret string) (string, error) {\n\tclaims := Claims{\n\t\tUserID:   userID,\n\t\tUsername: username,\n\t\tRegisteredClaims: jwt.RegisteredClaims{\n\t\t\tExpiresAt: jwt.NewNumericDate(time.Now().Add(tokenExpiry)),\n\t\t\tIssuedAt:  jwt.NewNumericDate(time.Now()),\n\t\t},\n\t}\n\ttoken := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)\n\treturn token.SignedString([]byte(secret))\n}\n\nfunc ParseToken(tokenStr, secret string) (*Claims, error) {\n\ttoken, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(t *jwt.Token) (interface{}, error) {\n\t\tif _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {\n\t\t\treturn nil, fmt.Errorf(\"非法签名方法: %v\", t.Header[\"alg\"])\n\t\t}\n\t\treturn []byte(secret), nil\n\t})\n\tif err != nil {\n\t\treturn nil, fmt.Errorf(\"token 解析失败: %w\", err)\n\t}\n\tclaims, ok := token.Claims.(*Claims)\n\tif !ok || !token.Valid {\n\t\treturn nil, fmt.Errorf(\"token 无效\")\n\t}\n\treturn claims, nil\n}\n"
+
+	middlewareContent := "package auth\n\nimport (\n\t\"context\"\n\t\"net/http\"\n\t\"strings\"\n)\n\ntype contextKey string\n\nconst claimsKey contextKey = \"claims\"\n\nfunc JWTMiddleware(secret string, next http.HandlerFunc) http.HandlerFunc {\n\treturn func(w http.ResponseWriter, r *http.Request) {\n\t\theader := r.Header.Get(\"Authorization\")\n\t\tif header == \"\" {\n\t\t\thttp.Error(w, \"缺少 Authorization header\", http.StatusUnauthorized)\n\t\t\treturn\n\t\t}\n\t\tparts := strings.SplitN(header, \" \", 2)\n\t\tif len(parts) != 2 || parts[0] != \"Bearer\" {\n\t\t\thttp.Error(w, \"Authorization 格式错误\", http.StatusUnauthorized)\n\t\t\treturn\n\t\t}\n\t\tclaims, err := ParseToken(parts[1], secret)\n\t\tif err != nil {\n\t\t\thttp.Error(w, \"token 无效: \"+err.Error(), http.StatusUnauthorized)\n\t\t\treturn\n\t\t}\n\t\tctx := context.WithValue(r.Context(), claimsKey, claims)\n\t\tnext(w, r.WithContext(ctx))\n\t}\n}\n\nfunc GetClaims(r *http.Request) *Claims {\n\tclaims, _ := r.Context().Value(claimsKey).(*Claims)\n\treturn claims\n}\n"
+
+	files := map[string]string{
+		filepath.Join(outputDir, "internal", "auth", "auth.go"):       authContent,
+		filepath.Join(outputDir, "internal", "auth", "middleware.go"): middlewareContent,
+	}
+
+	for path, content := range files {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			return fmt.Errorf("gen auth file %s: %w", path, err)
+		}
+	}
+	return nil
 }

@@ -22,10 +22,10 @@
 | Identifier | Code | HTTP Code | Description |
 | ---------- | ---- | --------- | ----------- |
 | ErrUnknown | 100000 | 500 | Internal server error |
-| ErrInvalidArg | 100001 | 500 | Internal server error |
-| ErrUnauthorized | 100002 | 500 | Internal server error |
-| ErrForbidden | 100003 | 500 | Internal server error |
-| ErrNotFound | 100004 | 500 | Internal server error |
+| ErrInvalidArg | 100001 | 400 | Invalid argument |
+| ErrUnauthorized | 100002 | 401 | Unauthorized |
+| ErrForbidden | 100003 | 403 | Forbidden |
+| ErrNotFound | 100004 | 404 | Not found |
 | ErrInternal | 100005 | 500 | Internal server error |
-| ErrDeadlineExceeded | 100006 | 500 | Internal server error |
+| ErrDeadlineExceeded | 100006 | 408 | Deadline exceeded |
 
