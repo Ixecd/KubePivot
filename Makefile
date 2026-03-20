@@ -7,20 +7,25 @@
 .DEFAULT_GOAL := all
 
 .PHONY := all
-all: tidy gen add-copyright format lint cover build
+all: tidy gen add-copyright format lint cover build frontend.build
 
 # ================================================================
 # Build options
 
-# Replace with your project's root package
-ROOT_PACKAGE := github.com/Ixecd/dev-toolkit
-# Replace with your project's version package
+# Replace with your web3-blitz's root package
+ROOT_PACKAGE := github.com/Ixecd/web3-blitz
+# Replace with your web3-blitz's version package
 VERSION_PACKAGE := github.com/Ixecd/component-base/pkg/version
 
 ROOT_DIR := $(shell pwd)
 VERSION ?= v0.1.0
 ARCH ?= amd64
 REGISTRY_PREFIX ?= local
+
+# ================================================================
+# Frontend options
+
+FRONTEND_DIR ?= $(ROOT_DIR)/frontend
 
 # ================================================================
 # Other mk files
@@ -35,6 +40,11 @@ include scripts/make-rules/release.mk
 include scripts/make-rules/swagger.mk
 include scripts/make-rules/dependencies.mk
 include scripts/make-rules/tools.mk
+
+# ================================================================
+# Append frontend tools to CRITICAL_TOOLS
+# (common.mk 定义了 CRITICAL_TOOLS，这里追加前端工具)
+CRITICAL_TOOLS += node pnpm tsc
 
 # ================================================================
 # Usage
@@ -56,12 +66,12 @@ Options:
   VERSION          The version information compiled into binaries.
                    The default is obtained from gsemver or git.
   V                Set to 1 enable verbose build. Default is 0.
+  FRONTEND_DIR     Frontend source directory. Default is $(ROOT_DIR)/frontend.
 endef
 export USAGE_OPTIONS
 
 # ==============================================================================
 # Build targets
-
 
 ## build: Build source code for host platform.
 .PHONY: build
@@ -109,6 +119,7 @@ deploy:
 clean:
 	@echo "===========> Cleaning all build output"
 	@-rm -vrf $(OUTPUT_DIR)
+	@$(MAKE) frontend.clean
 
 ## lint: Check syntax and styling of go sources.
 .PHONY: lint
@@ -125,26 +136,10 @@ test:
 cover:
 	@$(MAKE) go.test.cover
 
-## release: Release a new version of the project.
+## release: Release a new version of the web3-blitz.
 .PHONY: release
 release:
 	@$(MAKE) release.run
-
-## release.tag: Create and push git tag for release.
-# .PHONY: release.tag
-# release.tag:
-# 	@if [ -z "$(VERSION)" ]; then \
-# 		echo "Usage: make release.tag VERSION=vX.Y.Z"; \
-# 		exit 1; \
-# 	fi
-# 	@echo "===========> Tagging $(VERSION)"
-# 	@git tag -a "$(VERSION)" -m "release $(VERSION)"
-# 	@git push origin "$(VERSION)"
-
-## release.build: Build release binaries.
-# .PHONY: release.build
-# release.build:
-# 	@$(MAKE) push.multiarch
 
 ## format: Gofmt (reformat) package sources (exclude vendor dir if existed).
 .PHONY: format
@@ -190,12 +185,12 @@ serve-swagger:
 dependencies:
 	@$(MAKE) dependencies.run
 
-## tools: Install necessary tools.
+## tools: Install necessary tools (including frontend tools).
 .PHONY: tools
 tools:
 	@$(MAKE) tools.install
 
-## check-updates: Check outdated dependencies of the projects.
+## check-updates: Check outdated dependencies of the web3-blitzs.
 .PHONY: check-updates
 check-updates:
 	@$(MAKE) go.updates
@@ -204,10 +199,42 @@ check-updates:
 tidy:
 	@$(GO) mod tidy
 
+# ==============================================================================
+# Frontend targets (proxied from tools.mk)
+
+## frontend.build: Build frontend for production.
+.PHONY: frontend.build
+frontend.build:
+	@$(MAKE) -f $(firstword $(MAKEFILE_LIST)) _frontend.build
+
+.PHONY: _frontend.build
+_frontend.build: tools.verify.node install.frontend-deps
+	@echo "===========> Building frontend"
+	@cd $(FRONTEND_DIR) && npm run build
+
+## frontend.dev: Start frontend development server.
+.PHONY: frontend.dev
+frontend.dev: tools.verify.node install.frontend-deps
+	@echo "===========> Starting frontend dev server (http://localhost:5173)"
+	@cd $(FRONTEND_DIR) && npm run dev
+
+## frontend.typecheck: Run TypeScript type check (no emit).
+.PHONY: frontend.typecheck
+frontend.typecheck: tools.verify.node install.frontend-deps
+	@echo "===========> Type checking frontend"
+	@cd $(FRONTEND_DIR) && npx tsc --noEmit
+
+## frontend.clean: Remove frontend build output and node_modules.
+.PHONY: frontend.clean
+frontend.clean:
+	@if [ -d "$(FRONTEND_DIR)" ]; then \
+		echo "===========> Cleaning frontend"; \
+		rm -rf $(FRONTEND_DIR)/dist $(FRONTEND_DIR)/node_modules; \
+	fi
+
 ## help: Show this help info
 .PHONY: help
 help:
 	@printf "\nUsage: make <TARGETS> <OPTIONS> ...\n\nTargets:\n"
-	@sed -n 's/^##//p' $(MAKEFILE_LIST) | column -t -s ':' | sed -e 's/^/ /'
-	@echo ""
+	@sed -n 's/^##//p' $< | column -t -s ':' | sed -e 's/^/ /'
 	@echo "$$USAGE_OPTIONS"

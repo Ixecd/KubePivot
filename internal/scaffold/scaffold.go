@@ -204,21 +204,21 @@ REGISTRY_PREFIX=qingchun22
 	// 友好路径显示（~/myproject 而不是绝对路径）
 	friendly := friendlyPath(outputDir)
 
-	fmt.Fprintf(opts.Stdout, "✅ 项目已成功生成！\n")
-	fmt.Fprintf(opts.Stdout, "路径：%s\n", friendly)
-	fmt.Fprintf(opts.Stdout, "模块名：%s\n", module)
-	fmt.Fprintf(opts.Stdout, "入口服务：cmd/%s\n", name)
-	fmt.Fprintf(opts.Stdout, "\n下一步执行：\n")
+	fmt.Fprintf(opts.Stdout, "✅ 项目已成功生成！\n\n")
+	fmt.Fprintf(opts.Stdout, "  路径    %s\n", friendly)
+	fmt.Fprintf(opts.Stdout, "  模块    %s\n", module)
+	fmt.Fprintf(opts.Stdout, "  入口    cmd/%s\n\n", name)
+	fmt.Fprintf(opts.Stdout, "下一步：\n")
 	fmt.Fprintf(opts.Stdout, "  cd %s\n", friendly)
-	fmt.Fprintf(opts.Stdout, "  go mod tidy\n")
-	fmt.Fprintf(opts.Stdout, "  make help          # 查看可用命令\n")
+	fmt.Fprintf(opts.Stdout, "  make tools   # 安装所有工具\n")
+	fmt.Fprintf(opts.Stdout, "  make build   # 编译\n")
+	fmt.Fprintf(opts.Stdout, "  make test    # 测试\n")
 
 	if opts.WithFrontend {
 		if err := writeFrontendSkeleton(outputDir, name); err != nil {
 			return fmt.Errorf("gen frontend: %w", err)
 		}
-		fmt.Fprintf(opts.Stdout, "  cd %s/frontend && npm install\n", friendly)
-		fmt.Fprintf(opts.Stdout, "  npm run dev           # 前端开发服务器\n")
+		fmt.Fprintf(opts.Stdout, "  cd %s/frontend && npm install && npm run dev  # 前端\n", friendly)
 	}
 	return nil
 }
