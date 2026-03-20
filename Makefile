@@ -12,9 +12,8 @@ all: tidy gen add-copyright format lint cover build frontend.build
 # ================================================================
 # Build options
 
-# Replace with your web3-blitz's root package
-ROOT_PACKAGE := github.com/Ixecd/web3-blitz
-# Replace with your web3-blitz's version package
+ROOT_PACKAGE := github.com/Ixecd/dev-toolkit
+
 VERSION_PACKAGE := github.com/Ixecd/component-base/pkg/version
 
 ROOT_DIR := $(shell pwd)

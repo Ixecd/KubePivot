@@ -151,8 +151,6 @@ REGISTRY_PREFIX=qingchun22
 	replacements := map[string]string{
 		"github.com/Ixecd/dev-toolkit": module,
 		"dev-toolkit":                  name,
-		"demo-svc":                     name, // 🔥 ADD: fix deploy.mk PROJECT_NAME等硬码
-		"helloworld":                   name, // for docker/ if any
 	}
 
 	if err := replaceInDir(outputDir, replacements); err != nil {
