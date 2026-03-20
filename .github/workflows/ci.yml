@@ -7,28 +7,9 @@ on:
     branches: [ Master ]
 
 jobs:
-  # ============================================================
-  # Backend: build / vet / test
-  # ============================================================
   backend:
     name: Backend
     runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: blitz
-          POSTGRES_PASSWORD: blitz
-          POSTGRES_DB: blitz
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 5
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,10 +20,6 @@ jobs:
           go-version: '1.25'
           cache: true
 
-      - name: Init DB schema
-        run: |
-          PGPASSWORD=blitz psql -h localhost -U blitz -d blitz -f internal/db/schema.sql
-
       - name: Build
         run: go build ./...
 
@@ -51,29 +28,20 @@ jobs:
 
       - name: Test
         run: go test ./...
-        env:
-          DATABASE_URL: postgres://blitz:blitz@localhost:5432/blitz?sslmode=disable
 
-      - name: Docker build (backend)
+      - name: Docker build
         run: |
           docker build \
-            -f build/docker/wallet-service/Dockerfile \
-            -t wallet-service:ci \
+            -f build/docker/dtk/Dockerfile \
+            -t dtk:ci \
             .
 
-  # ============================================================
-  # Frontend: typecheck + build
-  # ============================================================
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
-
-    # 只有 frontend/ 目录有变动才触发，节省 CI 时间
-    # 注意：push to main 时全量跑，PR 时按路径过滤
     defaults:
       run:
         working-directory: frontend
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -94,18 +62,6 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Docker build (frontend)
-        # 验证 Dockerfile 能跑通，不推送
-        working-directory: .
-        run: |
-          docker build \
-            -f frontend/Dockerfile \
-            -t blitz-frontend:ci \
-            frontend/
-
-  # ============================================================
-  # 全量通过后的汇总 job（供 branch protection 引用）
-  # ============================================================
   all-checks:
     name: All Checks Passed
     runs-on: ubuntu-latest
