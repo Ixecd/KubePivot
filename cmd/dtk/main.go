@@ -199,6 +199,23 @@ func runDeploy(args []string) {
 		"REGISTRY_PREFIX="+registryPrefix,
 	)
 
+	// 从 plan 构建 IMAGES，只包含 image 非空的组件
+	// deploy.build / deploy.push 用这个变量决定构建哪些镜像
+	var imageNames []string
+	for _, item := range plan {
+		if item.Image == "" {
+			continue
+		}
+		imageNames = append(imageNames, item.Name)
+	}
+	if len(imageNames) > 0 {
+		makeEnv = append(makeEnv, "IMAGES="+strings.Join(imageNames, " "))
+	} else {
+		// 所有 image 都为空，没有需要部署的服务，直接退出
+		fmt.Println("没有需要部署的服务（所有组件 image 均为空）")
+		return
+	}
+
 	if err := runCmd(root, makeEnv, "make", makeArgs...); err != nil {
 		fmt.Fprintln(os.Stderr, "部署失败:", err)
 		os.Exit(1)

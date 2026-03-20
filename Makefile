@@ -135,7 +135,6 @@ test:
 cover:
 	@$(MAKE) go.test.cover
 
-## release: Release a new version of the web3-blitz.
 .PHONY: release
 release:
 	@$(MAKE) release.run
@@ -189,7 +188,6 @@ dependencies:
 tools:
 	@$(MAKE) tools.install
 
-## check-updates: Check outdated dependencies of the web3-blitzs.
 .PHONY: check-updates
 check-updates:
 	@$(MAKE) go.updates

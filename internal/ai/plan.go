@@ -53,7 +53,9 @@ func LoadComponents(path string) ([]Component, error) {
 			continue
 		}
 		if strings.HasPrefix(line, "image:") {
-			current.Image = strings.TrimSpace(strings.TrimPrefix(line, "image:"))
+			val := strings.TrimSpace(strings.TrimPrefix(line, "image:"))
+			val = strings.Trim(val, `"`)  // ← 去掉引号
+			current.Image = val
 			continue
 		}
 		if strings.HasPrefix(line, "port:") {

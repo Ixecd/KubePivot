@@ -795,7 +795,8 @@ func writeDockerfile(path, name string) error {
 
 WORKDIR /app
 COPY . .
-RUN go mod download
+RUN go env -w GOPROXY=https://goproxy.cn,direct
+RUN go mod tidy
 RUN CGO_ENABLED=0 GOOS=linux go build -o %s ./cmd/%s
 
 FROM alpine:3.20

@@ -81,7 +81,6 @@ func RBACMiddleware(checker PermissionChecker, permission string, next http.Hand
 ## 待实现
 
 - [ ] metrics 骨架（internal/metrics/metrics.go，Prometheus Counter/Gauge/Histogram）
-- [ ] response.go 骨架（OK/Fail/FailMsg 统一响应，参考 web3-blitz）
 - [ ] 错误码三段设计加入骨架（100xxx/101xxx/102xxx）
 - [ ] GitHub Actions workflow 加入 dtk init 生成的 .github/ 目录
 - [ ] dtk init --template 自定义模板测试

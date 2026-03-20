@@ -211,8 +211,6 @@ func RBACMiddleware(checker PermissionChecker, permission string, next http.Hand
 - [ ] `dtk init --template` 自定义模板目录完整测试
 - [ ] `dtk deploy --dry-run` 输出优化
 - [ ] 多服务支持（components.yaml 多个 name，批量 build + deploy）
-- [ ] 把 web3-blitz 的 internal/api/response.go（OK/Fail/FailMsg）加入骨架
-- [ ] 把 web3-blitz 的错误码三段设计加入骨架
 
 ---
 
