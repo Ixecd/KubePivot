@@ -1,5 +1,4 @@
 components:
   - name: dtk
-  - name: helloword
     port: 8080
-    image: helloworld
+    image: dtk
