@@ -101,6 +101,9 @@ func InitProject(opts InitOptions) error {
 	if err := writeAuthPackage(outputDir); err != nil {
 		return err
 	}
+	if err := writeMetricsSkeleton(outputDir, name); err != nil {
+		return err
+	}
 	if err := writeTestSkeleton(outputDir, name, module); err != nil {
 		return err
 	}
@@ -189,6 +192,9 @@ REGISTRY_PREFIX=qingchun22
 	}
 	if err := runInDir(outputDir, "go", "get", "golang.org/x/crypto/bcrypt"); err != nil {
 		fmt.Fprintf(opts.Stdout, "[WARN] go get bcrypt 失败，请手动执行\n")
+	}
+	if err := runInDir(outputDir, "go", "get", "github.com/prometheus/client_golang/prometheus"); err != nil {
+		fmt.Fprintf(opts.Stdout, "[WARN] go get prometheus 失败，请手动执行\n")
 	}
 
 	// 友好路径显示（~/myproject 而不是绝对路径）
@@ -934,6 +940,48 @@ paths:
 `, name, name, name)
 
 	path := filepath.Join(outputDir, "docs", "swagger.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+func writeMetricsSkeleton(outputDir, name string) error {
+	content := fmt.Sprintf(`package metrics
+
+import "github.com/prometheus/client_golang/prometheus"
+
+var (
+	// HTTP 请求总数
+	HTTPRequestTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "%s_http_request_total",
+		Help: "Total number of HTTP requests",
+	}, []string{"method", "path", "status"})
+
+	// HTTP 请求延迟
+	HTTPRequestDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "%s_http_request_duration_seconds",
+		Help:    "HTTP request duration in seconds",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"method", "path"})
+
+	// 业务错误总数
+	BusinessErrorTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "%s_business_error_total",
+		Help: "Total number of business errors",
+	}, []string{"code"})
+)
+
+func Init() {
+	prometheus.MustRegister(
+		HTTPRequestTotal,
+		HTTPRequestDuration,
+		BusinessErrorTotal,
+	)
+}
+`, name, name, name)
+
+	path := filepath.Join(outputDir, "internal", "metrics", "metrics.go")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
