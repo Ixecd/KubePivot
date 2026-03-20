@@ -61,6 +61,7 @@ func runInit(args []string) {
 	output := flags.String("output", "", "output directory (default: ./<name>)")
 	template := flags.String("template", "", "template root (default: repo root or DTK_TEMPLATE_ROOT)")
 	force := flags.Bool("force", false, "allow non-empty output directory")
+	withFrontend := flags.Bool("with-frontend", false, "...")
 
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "解析参数失败:", err)
@@ -86,6 +87,7 @@ func runInit(args []string) {
 		TemplateRoot: *template,
 		Force:        *force,
 		Stdout:       os.Stdout,
+		WithFrontend: *withFrontend,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, "初始化失败:", err)
 		os.Exit(1)
