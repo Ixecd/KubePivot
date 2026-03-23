@@ -1,7 +1,7 @@
 # dev-toolkit 快照
 
 > 用途：新会话开始时直接把这个文件扔给 Claude，5秒对齐，继续工作。
-> 最后更新：2026-03-20
+> 最后更新：2026-03-23
 
 ---
 
@@ -135,6 +135,27 @@ components:
 
 ---
 
+## 日志系统（2026-03-23 新增）
+
+```
+internal/logger/logger.go   — CLI 特化 slog 初始化
+```
+
+| 环境变量 | 默认值 | 说明 |
+|---------|-------|------|
+| `LOG_LEVEL` | `info` | 设为 `debug` 开启内部运行轨迹 |
+| `LOG_FORMAT` | `text` | 设为 `json` 切换 JSON 格式 |
+
+- 始终写 **stderr**，不干扰 stdout 用户输出
+- `runInDir` 失败时 `slog.Debug` 输出原始 stderr，方便排查 git/go 问题
+
+```bash
+# 排查 git init / go get 失败
+LOG_LEVEL=debug dtk init --name demo-svc --module github.com/you/demo-svc
+```
+
+---
+
 ## 重要设计约束
 
 ### deploy.mk
@@ -182,6 +203,8 @@ dev-toolkit/
 ├── cmd/dtk/main.go              CLI 入口，runInit/runDeploy
 │                                runDeploy 负责过滤空 image，组装 IMAGES 传给 make
 ├── internal/
+│   ├── logger/
+│   │   └── logger.go            slog 初始化（CLI 特化）
 │   ├── scaffold/
 │   │   ├── init.go              InitProject 主流程
 │   │   └── frontend.go          writeFrontendSkeleton（--with-frontend）
@@ -198,8 +221,15 @@ dev-toolkit/
 
 ```
 snapshots/
-├── SNAPSHOT-dtk-2026-03-20-monitoring.md                  # metrics + prometheus + alertmanager + grafana
-├── SNAPSHOT-dtk-2026-03-20-with-frontend.md               # --with-frontend flag
-├── SNAPSHOT-dtk-2026-03-20-frontend-skeleton-generic.md   # 骨架精简，零业务逻辑
-└── SNAPSHOT-dtk-2026-03-20-deploy-e2e.md                  # deploy 端到端打通，12个 bug 完整记录
+├── SNAPSHOT-dtk-2026-03-18-scaffold-complete.md
+├── SNAPSHOT-dtk-2026-03-18.md
+├── SNAPSHOT-dtk-2026-03-19-1.md
+├── SNAPSHOT-dtk-2026-03-19-A.md
+├── SNAPSHOT-dtk-2026-03-19-B.md
+├── SNAPSHOT-dtk-2026-03-19.md
+├── SNAPSHOT-dtk-2026-03-20-deploy-e2e(!!!).md
+├── SNAPSHOT-dtk-2026-03-20-frontend-skeleton-generic.md
+├── SNAPSHOT-dtk-2026-03-20-monitoring.md
+├── SNAPSHOT-dtk-2026-03-20-with-frontend.md
+└── SNAPSHOT-dtk-2026-03-23-slog.md
 ```

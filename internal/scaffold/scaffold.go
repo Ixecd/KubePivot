@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -222,11 +223,22 @@ REGISTRY_PREFIX=qingchun22
 }
 
 func runInDir(dir string, name string, args ...string) error {
+	slog.Debug("执行命令", "cmd", name, "args", args, "dir", dir)
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
 	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	return cmd.Run()
+	var errBuf strings.Builder
+	cmd.Stderr = &errBuf
+	err := cmd.Run()
+	if err != nil {
+		slog.Debug("命令执行失败",
+			"cmd", name,
+			"args", args,
+			"stderr", strings.TrimSpace(errBuf.String()),
+			"err", err,
+		)
+	}
+	return err
 }
 
 func writeSnapshotSkeleton(outputDir, name string) error {

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Ixecd/dev-toolkit/internal/ai"
+	"github.com/Ixecd/dev-toolkit/internal/logger"
 	"github.com/Ixecd/dev-toolkit/internal/scaffold"
 )
 
@@ -23,7 +24,6 @@ func expandHome(path string) string {
 			return home + path[1:]
 		}
 	}
-
 	if path == "~" {
 		if home, err := os.UserHomeDir(); err == nil {
 			return home
@@ -33,6 +33,9 @@ func expandHome(path string) string {
 }
 
 func main() {
+	// 最先初始化日志，后续 slog.Debug 才能正常输出
+	logger.Init()
+
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)
@@ -199,8 +202,6 @@ func runDeploy(args []string) {
 		"REGISTRY_PREFIX="+registryPrefix,
 	)
 
-	// 从 plan 构建 IMAGES，只包含 image 非空的组件
-	// deploy.build / deploy.push 用这个变量决定构建哪些镜像
 	var imageNames []string
 	for _, item := range plan {
 		if item.Image == "" {
@@ -211,7 +212,6 @@ func runDeploy(args []string) {
 	if len(imageNames) > 0 {
 		makeEnv = append(makeEnv, "IMAGES="+strings.Join(imageNames, " "))
 	} else {
-		// 所有 image 都为空，没有需要部署的服务，直接退出
 		fmt.Println("没有需要部署的服务（所有组件 image 均为空）")
 		return
 	}
@@ -222,10 +222,7 @@ func runDeploy(args []string) {
 	}
 
 	for _, item := range plan {
-		if item.Name == "" {
-			continue
-		}
-		if item.Image == "" {
+		if item.Name == "" || item.Image == "" {
 			continue
 		}
 		if err := scaleDeployment(*context, *namespace, item.Name, item.Replicas); err != nil {
@@ -313,7 +310,8 @@ func printPlan(plan []ai.Plan) {
 			fmt.Printf("- %s: skip (no image)\n", item.Name)
 			continue
 		}
-		fmt.Printf("- %s: replicas=%d cpu=%s memory=%s storage=%s\n", item.Name, item.Replicas, item.CPU, item.Memory, item.Storage)
+		fmt.Printf("- %s: replicas=%d cpu=%s memory=%s storage=%s\n",
+			item.Name, item.Replicas, item.CPU, item.Memory, item.Storage)
 	}
 }
 
@@ -344,7 +342,8 @@ func setDeploymentResources(context, namespace, name string, item ai.Plan) error
 	if namespace != "" {
 		args = append(args, "--namespace", namespace)
 	}
-	args = append(args, "set", "resources", "deployment/"+name, "--limits="+limits, "--requests="+limits)
+	args = append(args, "set", "resources", "deployment/"+name,
+		"--limits="+limits, "--requests="+limits)
 	return runCmd("", nil, "kubectl", args...)
 }
 
