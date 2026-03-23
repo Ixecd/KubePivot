@@ -1,17 +1,11 @@
 # TODO — dev-toolkit 路线图
 
 > 从"自用脚手架"走向"真正可推广的 Go 云原生工具"。
-> 按优先级排列，持续更新。当前：108 commits。
+> 按优先级排列，持续更新。当前：113 commits。
 
 ---
 
 ## 🔴 高优先级（影响基本可用性）
-
-### 错误处理与用户引导
-- [ ] `dtk deploy` 前置检查：依次检测 docker / kubectl / helm 是否可用，不可用时给出安装链接，而不是让报错信息透传给用户
-- [ ] `dtk init` 生成失败时自动清理已生成的文件，避免留下半成品目录
-- [ ] `LoadComponents` 换用 `gopkg.in/yaml.v3` 替代手写 parser，消灭 `image: ""` 引号坑
-- [ ] `deploy.mk` 所有 kubectl / helm 命令失败时打印上下文（namespace、context、image）而不是裸 exit code
 
 ### 测试覆盖
 - [ ] `internal/scaffold/` 核心逻辑单元测试：replaceInDir、fixChartYAMLs、writeGoMod
@@ -80,6 +74,11 @@
 - [x] CI（GitHub Actions）backend + frontend 分 job
 - [x] 完整文档（guide / design / reference）
 - [x] deploy e2e 12 个 bug 记录归档
+- [x] slog 结构化日志（CLI 特化：text/stderr，LOG_LEVEL=debug）
+- [x] `dtk deploy` 前置检查：检测 docker / kubectl / helm，不可用时给出安装链接
+- [x] `dtk init` 生成失败时自动清理半成品目录（--force 时跳过保护已有文件）
+- [x] `LoadComponents` 换用 `gopkg.in/yaml.v3`，消灭 `image: ""` 引号坑
+- [x] `deploy.mk` kubectl / helm 失败时打印 context / namespace / image + hint
 
 ---
 

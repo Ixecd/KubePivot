@@ -24,21 +24,21 @@ dtk deploy
 
 ## 命令总览
 
-| 命令 | 说明 |
-|------|------|
-| `dtk init` | 生成项目骨架 |
+| 命令         | 说明                                 |
+| ------------ | ------------------------------------ |
+| `dtk init`   | 生成项目骨架                         |
 | `dtk deploy` | AI plan + build + push + Helm deploy |
 
 ### `dtk init` flags
 
-| flag | 说明 |
-|------|------|
-| `--name` | 项目名（lowercase，必填）|
-| `--module` | Go module 路径 |
-| `--output` | 输出目录（默认 ./<n>）|
-| `--template` | 模板根目录（默认 DTK_TEMPLATE_ROOT 或当前目录）|
-| `--force` | 允许覆盖非空目录 |
-| `--with-frontend` | 同时生成通用 `frontend/` 骨架 |
+| flag              | 说明                                            |
+| ----------------- | ----------------------------------------------- |
+| `--name`          | 项目名（lowercase，必填）                       |
+| `--module`        | Go module 路径                                  |
+| `--output`        | 输出目录（默认 ./<n>）                          |
+| `--template`      | 模板根目录（默认 DTK_TEMPLATE_ROOT 或当前目录） |
+| `--force`         | 允许覆盖非空目录                                |
+| `--with-frontend` | 同时生成通用 `frontend/` 骨架                   |
 
 ---
 
@@ -47,16 +47,18 @@ dtk deploy
 ```
 dtk deploy
   │
-  ├── 1. 读 configs/components.yaml       # 解析组件列表
-  ├── 2. 读 configs/project.env           # VERSION / ARCH / REGISTRY_PREFIX 等
-  ├── 3. 过滤 image="" 的组件             # CLI 工具不部署
-  ├── 4. 组装 IMAGES 传给 make            # 只含有 image 的服务
+  ├── 0. 前置检查 docker / kubectl / helm    # 缺失时打印安装链接，直接退出
+  ├── 1. 读 configs/components.yaml          # 用 yaml.v3 解析，无引号坑
+  ├── 2. 读 configs/project.env              # VERSION / ARCH / REGISTRY_PREFIX 等
+  ├── 3. 过滤 image="" 的组件                # CLI 工具不部署
+  ├── 4. 组装 IMAGES 传给 make               # 只含有 image 的服务
   │
   └── make deploy.full
-        ├── deploy.build                  # VERSION 不变则跳过
-        ├── deploy.push                   # VERSION 不变则跳过
-        ├── deploy.install                # helm upgrade --install --wait
-        └── deploy.run.all                # kubectl set image + rollout status
+        ├── deploy.build                     # VERSION 不变则跳过
+        ├── deploy.push                      # VERSION 不变则跳过
+        ├── deploy.install                   # helm upgrade --install --wait
+        └── deploy.run.all                   # kubectl set image + rollout status
+                                             # 以上每步失败均打印 context/namespace/image + hint
 ```
 
 ---
@@ -100,7 +102,7 @@ components:
 ├── test/e2e/, integration/, smoke/
 ├── scripts/
 │   ├── make-rules/
-│   │   ├── deploy.mk          # 含 VERSION 跳过、--force-conflicts、--wait
+│   │   ├── deploy.mk          # 含 VERSION 跳过、--force-conflicts、--wait、失败上下文
 │   │   └── tools.mk           # 含前端工具安装
 │   └── test_api.sh
 ├── build/docker/<n>/
@@ -135,22 +137,21 @@ components:
 
 ---
 
-## 日志系统（2026-03-23 新增）
+## 日志系统
 
 ```
 internal/logger/logger.go   — CLI 特化 slog 初始化
 ```
 
-| 环境变量 | 默认值 | 说明 |
-|---------|-------|------|
-| `LOG_LEVEL` | `info` | 设为 `debug` 开启内部运行轨迹 |
-| `LOG_FORMAT` | `text` | 设为 `json` 切换 JSON 格式 |
+| 环境变量     | 默认值 | 说明                          |
+| ------------ | ------ | ----------------------------- |
+| `LOG_LEVEL`  | `info` | 设为 `debug` 开启内部运行轨迹 |
+| `LOG_FORMAT` | `text` | 设为 `json` 切换 JSON 格式    |
 
 - 始终写 **stderr**，不干扰 stdout 用户输出
 - `runInDir` 失败时 `slog.Debug` 输出原始 stderr，方便排查 git/go 问题
 
 ```bash
-# 排查 git init / go get 失败
 LOG_LEVEL=debug dtk init --name demo-svc --module github.com/you/demo-svc
 ```
 
@@ -158,30 +159,53 @@ LOG_LEVEL=debug dtk init --name demo-svc --module github.com/you/demo-svc
 
 ## 重要设计约束
 
+### deploy 前置检查
+
+- `cmd/dtk/preflight.go` — `checkDeps(deployDeps)` 在 `runDeploy` 最顶部调用
+- 检测 docker / kubectl / helm，全部缺失一次列完，附安装链接
+- 缺失时直接 `os.Exit(1)`，不透传 make 的裸报错
+
+### dtk init 失败清理
+
+- `scaffold.go` `InitProject` 具名返回 `(err error)` + `defer os.RemoveAll`
+- 只清理本次新建的目录；`--force` 时目录已存在，失败不清理
+
 ### deploy.mk
+
 - `KUBE_CONTEXT ?=` 不能写 `?= ""`，否则 `$(if $(strip))` 永远为真
 - `image.repository` 用 `$(firstword $(BINS))` 不用 `$(PROJECT_NAME)`，两者可能不同
 - `--force-conflicts` 防 SSA field manager 冲突
 - `--wait` 确保 pod ready 后再执行 `deploy.run`
 - `docker manifest inspect` 检查 VERSION 是否已推，避免重复 build/push
+- 每步失败均打印 context / namespace / image + 针对性 hint
+
+### components.yaml 解析
+
+- 用 `gopkg.in/yaml.v3` struct unmarshal，`image: ""` 引号坑不存在
+- 缺字段 → zero value，行为一致
 
 ### Dockerfile
-- 用 `go mod tidy` 不用 `go mod download`，本地包需要 tidy 才能找到
-- 加 `GOPROXY=https://goproxy.cn,direct`，国内网络拉依赖用
+
+- 用 `go mod tidy` 不用 `go mod download`
+- 加 `GOPROXY=https://goproxy.cn,direct`
 
 ### values.yaml
+
 - `service.port: 8080`（不是默认的 80）
-- `livenessProbe/readinessProbe path: /healthz`（不是默认的 /）
+- `livenessProbe/readinessProbe path: /healthz`
 - `image.repository: qingchun22/<n>-arm64`，`replaceInDir` 会替换 `<n>`
 
 ### Chart.yaml
+
 - `fixChartYAMLs` 用正则替换 `name` 和 `appVersion`，防止遗留 `project` / `1.16.0`
 
 ### frontend 骨架
+
 - **强制零业务逻辑**，nav=[]，页面仅 Login + Home
 - TS 模板字符串全部改为字符串拼接，避免 Go raw string 反引号冲突
 
 ### golang.mk
+
 - `ROOT_PACKAGE` 模板里必须写 `github.com/Ixecd/dev-toolkit`，不能写业务项目路径
 
 ---
@@ -200,19 +224,20 @@ LOG_LEVEL=debug dtk init --name demo-svc --module github.com/you/demo-svc
 
 ```
 dev-toolkit/
-├── cmd/dtk/main.go              CLI 入口，runInit/runDeploy
-│                                runDeploy 负责过滤空 image，组装 IMAGES 传给 make
+├── cmd/dtk/
+│   ├── main.go              CLI 入口，runInit/runDeploy
+│   └── preflight.go         deploy 前置检查 docker/kubectl/helm
 ├── internal/
 │   ├── logger/
-│   │   └── logger.go            slog 初始化（CLI 特化）
+│   │   └── logger.go        slog 初始化（CLI 特化，text/stderr）
 │   ├── scaffold/
-│   │   ├── init.go              InitProject 主流程
-│   │   └── frontend.go          writeFrontendSkeleton（--with-frontend）
+│   │   ├── scaffold.go      InitProject 主流程（具名返回 + defer 清理）
+│   │   └── frontend.go      writeFrontendSkeleton（--with-frontend）
 │   └── ai/
-│       └── ai.go                BuildPlan，image 解析去引号
+│       └── ai.go            BuildPlan，yaml.v3 解析 components.yaml
 └── scripts/make-rules/
-    ├── deploy.mk                完整部署流程
-    └── tools.mk                 前端工具安装
+    ├── deploy.mk             完整部署流程，失败打印上下文
+    └── tools.mk              前端工具安装
 ```
 
 ---
@@ -231,5 +256,6 @@ snapshots/
 ├── SNAPSHOT-dtk-2026-03-20-frontend-skeleton-generic.md
 ├── SNAPSHOT-dtk-2026-03-20-monitoring.md
 ├── SNAPSHOT-dtk-2026-03-20-with-frontend.md
-└── SNAPSHOT-dtk-2026-03-23-slog.md
+├── SNAPSHOT-dtk-2026-03-23-slog.md
+└── SNAPSHOT-dtk-2026-03-23-error-handling.md
 ```
