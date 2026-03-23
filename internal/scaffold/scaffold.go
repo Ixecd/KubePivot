@@ -117,6 +117,9 @@ func InitProject(opts InitOptions) (err error) {
 	if err := writeInternalSkeleton(outputDir, name, module); err != nil {
 		return err
 	}
+	if err := writeMigrationSkeleton(outputDir, name); err != nil {
+		return err
+	}
 	if err := writeAuthPackage(outputDir); err != nil {
 		return err
 	}

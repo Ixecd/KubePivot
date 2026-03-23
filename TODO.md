@@ -1,7 +1,7 @@
 # TODO — dev-toolkit 路线图
 
 > 从"自用脚手架"走向"真正可推广的 Go 云原生工具"。
-> 按优先级排列，持续更新。当前：113 commits。
+> 按优先级排列，持续更新。当前：115 commits。
 
 ---
 
@@ -39,7 +39,7 @@
 
 ### 多服务支持
 - [ ] `components.yaml` 支持多个 service，`dtk deploy` 并行构建多个镜像
-- [ ] `dtk deploy --service <name>` 只部署指定服务，不全量更新
+- [ ] `dtk deploy --service <n>` 只部署指定服务，不全量更新
 
 ---
 
@@ -79,6 +79,7 @@
 - [x] `dtk init` 生成失败时自动清理半成品目录（--force 时跳过保护已有文件）
 - [x] `LoadComponents` 换用 `gopkg.in/yaml.v3`，消灭 `image: ""` 引号坑
 - [x] `deploy.mk` kubectl / helm 失败时打印 context / namespace / image + hint
+- [x] 生成项目默认包含 golang-migrate 骨架，启动自动执行迁移
 
 ---
 
