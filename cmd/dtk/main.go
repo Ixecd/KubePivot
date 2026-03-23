@@ -124,6 +124,11 @@ func filepathBase(path string) string {
 }
 
 func runDeploy(args []string) {
+	if err := checkDeps(deployDeps); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
 	flags := flag.NewFlagSet("deploy", flag.ExitOnError)
 	components := flags.String("components", "configs/components.yaml", "components config path")
 	namespace := flags.String("namespace", "", "kubernetes namespace (default from configs/project.env)")

@@ -73,9 +73,26 @@ func InitProject(opts InitOptions) error {
 		return err
 	}
 
+	// 记录目录是否由本次 init 创建
+	// --force 时目录已存在，失败不能删（里面可能有用户文件）
+	_, statErr := os.Stat(outputDir)
+	createdByUs := os.IsNotExist(statErr) && !opts.Force
+
 	if err := ensureOutputDir(outputDir, opts.Force, name); err != nil {
 		return err
 	}
+
+	// 初始化失败时自动清理半成品目录
+	defer func() {
+		if err != nil && createdByUs {
+			slog.Debug("初始化失败，清理半成品目录", "dir", outputDir)
+			if removeErr := os.RemoveAll(outputDir); removeErr != nil {
+				slog.Debug("清理失败", "dir", outputDir, "err", removeErr)
+				return
+			}
+			fmt.Fprintf(opts.Stdout, "⚠️  初始化失败，已自动清理：%s\n", friendlyPath(outputDir))
+		}
+	}()
 
 	for _, entry := range copyEntries {
 		src := filepath.Join(templateRoot, entry)
