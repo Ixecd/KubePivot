@@ -32,10 +32,11 @@ func checkDeps(deps []dep) error {
 		return nil
 	}
 
-	fmt.Fprintln(os.Stderr, "❌ 以下工具未安装或不在 PATH 中：\n")
+	fmt.Fprintln(os.Stderr, "❌ 以下工具未安装或不在 PATH 中：")
+	fmt.Fprintln(os.Stderr)
 	for _, d := range missing {
 		fmt.Fprintf(os.Stderr, "  %-10s  %s\n", d.bin, d.installURL)
 	}
-	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr)
 	return fmt.Errorf("缺少必要工具，请安装后重试")
 }
