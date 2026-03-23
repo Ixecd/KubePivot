@@ -47,7 +47,7 @@ var (
 	}
 )
 
-func InitProject(opts InitOptions) error {
+func InitProject(opts InitOptions) (err error) {
 	name := strings.TrimSpace(opts.Name)
 	if name == "" {
 		return errors.New("missing project name: use --name")
@@ -78,7 +78,7 @@ func InitProject(opts InitOptions) error {
 	_, statErr := os.Stat(outputDir)
 	createdByUs := os.IsNotExist(statErr) && !opts.Force
 
-	if err := ensureOutputDir(outputDir, opts.Force, name); err != nil {
+	if err = ensureOutputDir(outputDir, opts.Force, name); err != nil {
 		return err
 	}
 
