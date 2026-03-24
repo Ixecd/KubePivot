@@ -50,6 +50,10 @@ func main() {
 		runInit(os.Args[2:])
 	case "deploy":
 		runDeploy(os.Args[2:])
+	case "resume":
+		runResume(os.Args[2:])
+	case "rollback":
+		runRollback(os.Args[2:])
 	default:
 		printUsage()
 		os.Exit(1)
@@ -120,132 +124,6 @@ func filepathBase(path string) string {
 		return ""
 	}
 	return base
-}
-
-func runDeploy(args []string) {
-	if err := checkDeps(deployDeps); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-
-	flags := flag.NewFlagSet("deploy", flag.ExitOnError)
-	components := flags.String("components", "configs/components.yaml", "components config path")
-	namespace := flags.String("namespace", "", "kubernetes namespace (default from configs/project.env)")
-	context := flags.String("context", "", "kubernetes context (default from configs/project.env)")
-	kubeconfig := flags.String("kubeconfig", "", "kubeconfig 文件路径，留空使用默认 ~/.kube/config")
-	dryRun := flags.Bool("dry-run", false, "print plan only, do not deploy")
-
-	if err := flags.Parse(args); err != nil {
-		fmt.Fprintln(os.Stderr, "解析参数失败:", err)
-		os.Exit(1)
-	}
-
-	*kubeconfig = expandHome(*kubeconfig)
-
-	root, err := projectRoot()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "找不到项目根目录:", err)
-		os.Exit(1)
-	}
-
-	plan, err := planner.BuildPlan(filepath.Join(root, *components))
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "解析组件失败:", err)
-		os.Exit(1)
-	}
-
-	env, _ := readEnvFile(filepath.Join(root, "configs", "project.env"))
-	projectName := env["PROJECT_NAME"]
-	if projectName == "" {
-		projectName = filepath.Base(root)
-	}
-	if *namespace == "" {
-		*namespace = env["KUBE_NAMESPACE"]
-		if *namespace == "" {
-			*namespace = projectName
-		}
-	}
-	if *context == "" {
-		*context = env["KUBE_CONTEXT"]
-	}
-	if *kubeconfig == "" {
-		*kubeconfig = expandHome(env["KUBE_CONFIG"])
-	}
-
-	printPlan(plan)
-	if *dryRun {
-		return
-	}
-
-	makeArgs := []string{"deploy.full"}
-	makeEnv := os.Environ()
-	if *namespace != "" {
-		makeEnv = append(makeEnv, "KUBE_NAMESPACE="+*namespace)
-	}
-	if *context != "" {
-		makeEnv = append(makeEnv, "KUBE_CONTEXT="+*context)
-	}
-	if *kubeconfig != "" {
-		makeEnv = append(makeEnv, "KUBE_CONFIG="+*kubeconfig)
-	}
-
-	version := env["VERSION"]
-	if version == "" {
-		version = "v0.1.0"
-	}
-	arch := env["ARCH"]
-	if arch == "" {
-		arch = "amd64"
-	}
-	registryPrefix := env["REGISTRY_PREFIX"]
-	if registryPrefix == "" {
-		registryPrefix = projectName
-	}
-
-	skipKeys := map[string]bool{"VERSION": true, "ARCH": true, "REGISTRY_PREFIX": true}
-	for k, v := range env {
-		if !skipKeys[k] {
-			makeEnv = append(makeEnv, k+"="+v)
-		}
-	}
-	makeEnv = append(makeEnv,
-		"VERSION="+version,
-		"ARCH="+arch,
-		"REGISTRY_PREFIX="+registryPrefix,
-	)
-
-	var imageNames []string
-	for _, item := range plan {
-		if item.Image == "" {
-			continue
-		}
-		imageNames = append(imageNames, item.Name)
-	}
-	if len(imageNames) > 0 {
-		makeEnv = append(makeEnv, "IMAGES="+strings.Join(imageNames, " "))
-	} else {
-		fmt.Println("没有需要部署的服务（所有组件 image 均为空）")
-		return
-	}
-
-	if err := runCmd(root, makeEnv, "make", makeArgs...); err != nil {
-		fmt.Fprintln(os.Stderr, "部署失败:", err)
-		os.Exit(1)
-	}
-
-	for _, item := range plan {
-		if item.Name == "" || item.Image == "" {
-			continue
-		}
-		if err := scaleDeployment(*kubeconfig, *context, *namespace, item.Name, item.Replicas); err != nil {
-			fmt.Fprintln(os.Stderr, "设置副本数失败:", err)
-			os.Exit(1)
-		}
-		if err := setDeploymentResources(*kubeconfig, *context, *namespace, item.Name, item); err != nil {
-			fmt.Fprintln(os.Stderr, "设置资源失败:", err)
-			os.Exit(1)
-		}
-	}
 }
 
 func projectRoot() (string, error) {
