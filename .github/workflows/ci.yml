@@ -20,6 +20,19 @@ jobs:
           go-version: '1.25'
           cache: true
 
+      - name: Configure git
+        run: |
+          git config --global user.email "ci@dtk.dev"
+          git config --global user.name "dtk-ci"
+
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+
+      - name: Install helm
+        run: curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
       - name: Build
         run: go build ./...
 

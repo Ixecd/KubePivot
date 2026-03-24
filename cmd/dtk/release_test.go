@@ -6,6 +6,16 @@ import (
 	"testing"
 )
 
+// setupGitRepo 创建带 git user 配置的临时 git 仓库
+// CI 环境没有全局 git config，需要在每个临时仓库里单独配置
+func setupGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	runCmd(dir, nil, "git", "init")
+	runCmd(dir, nil, "git", "config", "user.email", "test@dtk.dev")
+	runCmd(dir, nil, "git", "config", "user.name", "dtk-test")
+	runCmd(dir, nil, "git", "commit", "--allow-empty", "-m", "init")
+}
+
 func TestSemverPattern(t *testing.T) {
 	valid := []string{"v0.1.0", "v1.0.0", "v1.2.3", "v10.20.30"}
 	for _, v := range valid {
@@ -93,8 +103,7 @@ func TestUpdateVersion_PreservesComments(t *testing.T) {
 
 func TestTagExists_NotFound(t *testing.T) {
 	dir := t.TempDir()
-	runCmd(dir, nil, "git", "init")
-	runCmd(dir, nil, "git", "commit", "--allow-empty", "-m", "init")
+	setupGitRepo(t, dir)
 
 	if tagExists(dir, "v9.9.9") {
 		t.Error("不存在的 tag 应返回 false")
@@ -103,8 +112,7 @@ func TestTagExists_NotFound(t *testing.T) {
 
 func TestTagExists_Found(t *testing.T) {
 	dir := t.TempDir()
-	runCmd(dir, nil, "git", "init")
-	runCmd(dir, nil, "git", "commit", "--allow-empty", "-m", "init")
+	setupGitRepo(t, dir)
 	runCmd(dir, nil, "git", "tag", "-a", "v1.0.0", "-m", "test")
 
 	if !tagExists(dir, "v1.0.0") {
@@ -114,8 +122,7 @@ func TestTagExists_Found(t *testing.T) {
 
 func TestCheckCleanWorkspace_Clean(t *testing.T) {
 	dir := t.TempDir()
-	runCmd(dir, nil, "git", "init")
-	runCmd(dir, nil, "git", "commit", "--allow-empty", "-m", "init")
+	setupGitRepo(t, dir)
 
 	if err := checkCleanWorkspace(dir); err != nil {
 		t.Errorf("干净工作区应该通过，got: %v", err)
@@ -124,8 +131,7 @@ func TestCheckCleanWorkspace_Clean(t *testing.T) {
 
 func TestCheckCleanWorkspace_Dirty(t *testing.T) {
 	dir := t.TempDir()
-	runCmd(dir, nil, "git", "init")
-	runCmd(dir, nil, "git", "commit", "--allow-empty", "-m", "init")
+	setupGitRepo(t, dir)
 
 	// 创建未提交的文件
 	os.WriteFile(filepath.Join(dir, "untracked.txt"), []byte("hello"), 0o644)
