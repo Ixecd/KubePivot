@@ -2,11 +2,9 @@ package state
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os/exec"
 	"time"
 )
@@ -26,8 +24,8 @@ func runOutput(cmdArgs ...string) ([]byte, error) {
 }
 
 // ValidateDeployment 验证部署是否成功
-// 条件：所有 pod Ready + healthz 返回 200
-func ValidateDeployment(kubeconfig, kubeContext, namespace, deployment string, timeout time.Duration) error {
+// 条件：所有 pod Ready + kubectl exec healthz 返回 200
+func ValidateDeployment(kubeconfig, kubeContext, namespace, deployment string, port int, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	tick := 5 * time.Second
 
@@ -43,14 +41,13 @@ func ValidateDeployment(kubeconfig, kubeContext, namespace, deployment string, t
 
 		slog.Debug("Pod 就绪状态", "ready", ready, "total", total)
 		if ready > 0 && ready == total {
-			// 所有 pod Ready，进一步检查 healthz
-			ip, err := getPodIP(kubeconfig, kubeContext, namespace, deployment)
+			podName, err := getPodName(kubeconfig, kubeContext, namespace, deployment)
 			if err != nil {
-				slog.Debug("获取 pod IP 失败，稍后重试", "err", err)
+				slog.Debug("获取 pod 名称失败，稍后重试", "err", err)
 				time.Sleep(tick)
 				continue
 			}
-			if err := checkHealthz(ip); err != nil {
+			if err := checkHealthz(kubeconfig, kubeContext, namespace, podName, port); err != nil {
 				slog.Debug("healthz 检查失败，稍后重试", "err", err)
 				time.Sleep(tick)
 				continue
@@ -83,8 +80,8 @@ func getPodReadiness(kubeconfig, kubeContext, namespace, deployment string) (rea
 	return r, t, nil
 }
 
-// getPodIP 获取 deployment 下第一个 Running pod 的 IP
-func getPodIP(kubeconfig, kubeContext, namespace, deployment string) (string, error) {
+// getPodName 获取 deployment 下第一个 Running pod 的名称
+func getPodName(kubeconfig, kubeContext, namespace, deployment string) (string, error) {
 	args := kubectlBaseArgs(kubeconfig, kubeContext, namespace)
 	args = append(args, "get", "pods",
 		"-l", "app="+deployment,
@@ -98,9 +95,9 @@ func getPodIP(kubeconfig, kubeContext, namespace, deployment string) (string, er
 
 	var result struct {
 		Items []struct {
-			Status struct {
-				PodIP string `json:"podIP"`
-			} `json:"status"`
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(out, &result); err != nil {
@@ -109,27 +106,17 @@ func getPodIP(kubeconfig, kubeContext, namespace, deployment string) (string, er
 	if len(result.Items) == 0 {
 		return "", fmt.Errorf("没有 Running 的 pod")
 	}
-	return result.Items[0].Status.PodIP, nil
+	return result.Items[0].Metadata.Name, nil
 }
 
-// checkHealthz 通过 pod IP 直接检查 healthz
-func checkHealthz(podIP string) error {
-	url := fmt.Sprintf("http://%s:8080/healthz", podIP)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// checkHealthz 通过 kubectl exec 在 pod 内部检查 healthz
+func checkHealthz(kubeconfig, kubeContext, namespace, podName string, port int) error {
+	args := kubectlBaseArgs(kubeconfig, kubeContext, namespace)
+	args = append(args, "exec", podName, "--",
+		"wget", "-qO-", fmt.Sprintf("http://localhost:%d/healthz", port))
+	_, err := runOutput(args...)
 	if err != nil {
-		return err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("healthz 请求失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("healthz 返回非 200: %d", resp.StatusCode)
+		return fmt.Errorf("healthz 检查失败: %w", err)
 	}
 	return nil
 }

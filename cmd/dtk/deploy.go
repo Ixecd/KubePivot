@@ -248,7 +248,7 @@ func executeDeploy(sm *state.Machine, cfg *deployConfig, env map[string]string, 
 		}
 		err := state.ValidateDeployment(
 			cfg.kubeconfig, cfg.context, cfg.namespace,
-			item.Name, 120*time.Second,
+			item.Name, item.Port, 120*time.Second,
 		)
 		if err != nil {
 			sm.Transition(state.StateRollingBack, "验证失败: "+err.Error())
@@ -283,7 +283,7 @@ func resumeFromValidating(sm *state.Machine, cfg *deployConfig, env map[string]s
 		}
 		if err := state.ValidateDeployment(
 			cfg.kubeconfig, cfg.context, cfg.namespace,
-			item.Name, 120*time.Second,
+			item.Name, item.Port, 120*time.Second,
 		); err != nil {
 			fmt.Fprintln(os.Stderr, "验证失败:", err)
 			sm.Transition(state.StateRollingBack, "resume 验证失败")

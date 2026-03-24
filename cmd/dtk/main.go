@@ -104,13 +104,17 @@ func printUsage() {
 	fmt.Fprint(os.Stderr, `dtk - dev-toolkit 脚手架
 
 用法:
-  dtk init   --name <project> --module <module> [--output <dir>] [--template <dir>] [--force]
-  dtk deploy [--components <path>] [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>] [--dry-run]
+  dtk init     --name <project> --module <module> [--output <dir>] [--template <dir>] [--force]
+  dtk deploy   [--components <path>] [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>] [--dry-run]
+  dtk resume   [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
+  dtk rollback [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
 
 示例:
   dtk init --name demo-svc --module github.com/you/demo-svc
   dtk deploy
   dtk deploy --kubeconfig ~/.kube/prod.yaml --context prod-cluster
+  dtk resume
+  dtk rollback
 `)
 }
 
@@ -201,38 +205,25 @@ func printPlan(plan []planner.Plan) {
 }
 
 func scaleDeployment(kubeconfig, context, namespace, name string, replicas int) error {
-	if replicas <= 0 {
-		return nil
-	}
-	args := kubectlArgs(kubeconfig, context, namespace)
-	args = append(args, "scale", "deployment/"+name, fmt.Sprintf("--replicas=%d", replicas))
-	return runCmd("", nil, "kubectl", args...)
+    if replicas <= 0 {
+        return nil
+    }
+    args := append([]string{"kubectl"}, kubectlBaseArgs(kubeconfig, context, namespace)...)
+    args = append(args, "scale", "deployment/"+name, fmt.Sprintf("--replicas=%d", replicas))
+    _, err := runOutput(args...)
+    return err
 }
 
 func setDeploymentResources(kubeconfig, context, namespace, name string, item planner.Plan) error {
-	limits := buildResourceArgs(item.CPU, item.Memory, item.Storage)
-	if limits == "" {
-		return nil
-	}
-	args := kubectlArgs(kubeconfig, context, namespace)
-	args = append(args, "set", "resources", "deployment/"+name,
-		"--limits="+limits, "--requests="+limits)
-	return runCmd("", nil, "kubectl", args...)
-}
-
-// kubectlArgs 构建公共的 kubectl 参数（kubeconfig/context/namespace）
-func kubectlArgs(kubeconfig, context, namespace string) []string {
-	var args []string
-	if kubeconfig != "" {
-		args = append(args, "--kubeconfig", kubeconfig)
-	}
-	if context != "" {
-		args = append(args, "--context", context)
-	}
-	if namespace != "" {
-		args = append(args, "--namespace", namespace)
-	}
-	return args
+    limits := buildResourceArgs(item.CPU, item.Memory, item.Storage)
+    if limits == "" {
+        return nil
+    }
+    args := append([]string{"kubectl"}, kubectlBaseArgs(kubeconfig, context, namespace)...)
+    args = append(args, "set", "resources", "deployment/"+name,
+        "--limits="+limits, "--requests="+limits)
+    _, err := runOutput(args...)
+    return err
 }
 
 func buildResourceArgs(cpu, memory, storage string) string {
