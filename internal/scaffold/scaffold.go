@@ -187,6 +187,10 @@ REGISTRY_PREFIX=qingchun22
 	// after replaceInDir
 	fixChartYAMLs(outputDir, name)
 
+	if err := writeHelmTemplateSkeleton(outputDir, name); err != nil {
+		return err
+	}
+
 	// 🔥 ADD dir renames漏
 	if err := renameDir(filepath.Join(outputDir, "deployments", "dev-toolkit"), filepath.Join(outputDir, "deployments", name)); err != nil {
 		// ignore if not exist
@@ -389,7 +393,9 @@ func fixChartYAMLs(root, name string) {
 	if err != nil {
 		return
 	}
-	updated := regexp.MustCompile(`(?s)dependencies:.*?(?=maintainers:|annotations:|type:|\z)`).ReplaceAllString(string(data), "dependencies: []")
+	// 清理 dependencies
+	updated := regexp.MustCompile(`(?s)dependencies:.*?(?=maintainers:|annotations:|type:|\z)`).
+		ReplaceAllString(string(data), "dependencies: []\n")
 	os.WriteFile(path, []byte(updated), 0644)
 }
 
@@ -1797,6 +1803,331 @@ dist/
 		}
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			return fmt.Errorf("gen frontend file %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
+// writeHelmTemplateSkeleton 生成自包含的 Helm chart templates。
+// 所有基础设施组件（postgres、etcd）均以 yaml 文件形式存放，
+// 不依赖任何第三方 chart dependency。
+func writeHelmTemplateSkeleton(outputDir, name string) error {
+	templatesDir := filepath.Join(outputDir, "deployments", name, "templates")
+	if err := os.MkdirAll(templatesDir, 0o755); err != nil {
+		return err
+	}
+
+	files := map[string]string{
+		// ── postgres StatefulSet + Service ──────────────────────────
+		filepath.Join(templatesDir, "postgres-statefulset.yaml"): fmt.Sprintf(`apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: postgres
+    {{- include "%s.labels" . | nindent 4 }}
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: user
+            - name: POSTGRES_PASSWORD
+              value: pass
+            - name: POSTGRES_DB
+              value: %s
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "user", "-d", "%s"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "user", "-d", "%s"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: postgres
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+`, name, name, name, name),
+
+		// ── etcd Deployment + Service ────────────────────────────────
+		filepath.Join(templatesDir, "etcd-deployment.yaml"): fmt.Sprintf(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etcd
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: etcd
+    {{- include "%s.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: etcd
+  template:
+    metadata:
+      labels:
+        app: etcd
+    spec:
+      containers:
+        - name: etcd
+          image: quay.io/coreos/etcd:v3.5.14
+          command:
+            - etcd
+            - --listen-client-urls=http://0.0.0.0:2379
+            - --advertise-client-urls=http://etcd:2379
+            - --listen-peer-urls=http://0.0.0.0:2380
+            - --data-dir=/etcd-data
+          ports:
+            - name: client
+              containerPort: 2379
+            - name: peer
+              containerPort: 2380
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 2379
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 2379
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+          volumeMounts:
+            - name: etcd-data
+              mountPath: /etcd-data
+      volumes:
+        - name: etcd-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: etcd
+spec:
+  selector:
+    app: etcd
+  ports:
+    - name: client
+      port: 2379
+      targetPort: 2379
+    - name: peer
+      port: 2380
+      targetPort: 2380
+`, name),
+
+		// ── 业务服务 deployment，含 initContainers ───────────────────
+		// 注意：replaceInDir 会把 "project" 替换成项目名，
+		// 这里用 {{ include }} 而不是写死，避免被替换
+		filepath.Join(templatesDir, "deployment.yaml"): fmt.Sprintf(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "%s.fullname" . }}
+  labels:
+    {{- include "%s.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "%s.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "%s.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      initContainers:
+        - name: wait-postgres
+          image: busybox:1.35
+          command: ['sh', '-c', 'until nc -z postgres 5432; do echo waiting for postgres; sleep 2; done']
+        - name: wait-etcd
+          image: busybox:1.35
+          command: ['sh', '-c', 'until nc -z etcd 2379; do echo waiting for etcd; sleep 2; done']
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "%s.serviceAccountName" . }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          {{- with .Values.env }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+`, name, name, name, name, name),
+
+		// ── values.yaml 覆盖（含 env 和正确的 probe）────────────────
+		filepath.Join(outputDir, "deployments", name, "values.yaml"): fmt.Sprintf(`# Default values for %s.
+replicaCount: 1
+
+image:
+  repository: qingchun22/%s-arm64
+  pullPolicy: IfNotPresent
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+podSecurityContext: {}
+securityContext: {}
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+
+resources: {}
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 5
+
+volumes: []
+volumeMounts: []
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# 环境变量 — 通过 deployment template 注入到容器
+env:
+  - name: DATABASE_URL
+    value: "postgres://user:pass@postgres:5432/%s?sslmode=disable&search_path=public"
+  - name: ETCD_ENDPOINTS
+    value: "etcd:2379"
+`, name, name, name),
+	}
+
+	for path, content := range files {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			return fmt.Errorf("gen helm template %s: %w", path, err)
 		}
 	}
 	return nil
