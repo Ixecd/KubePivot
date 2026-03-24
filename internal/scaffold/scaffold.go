@@ -145,6 +145,7 @@ func InitProject(opts InitOptions) (err error) {
 PROJECT_NAME=%s
 KUBE_NAMESPACE=%s
 KUBE_CONTEXT=
+KUBE_CONFIG=
 MODULE_PATH=%s
 REGISTRY_PREFIX=qingchun22
 `, name, name, module)

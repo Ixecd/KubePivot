@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Ixecd/dev-toolkit/internal/planner"
 	"github.com/Ixecd/dev-toolkit/internal/logger"
+	"github.com/Ixecd/dev-toolkit/internal/planner"
 	"github.com/Ixecd/dev-toolkit/internal/scaffold"
 )
 
@@ -33,7 +33,6 @@ func expandHome(path string) string {
 }
 
 func main() {
-	// 最先初始化日志，后续 slog.Debug 才能正常输出
 	logger.Init()
 
 	if len(os.Args) < 2 {
@@ -64,7 +63,7 @@ func runInit(args []string) {
 	output := flags.String("output", "", "output directory (default: ./<name>)")
 	template := flags.String("template", "", "template root (default: repo root or DTK_TEMPLATE_ROOT)")
 	force := flags.Bool("force", false, "allow non-empty output directory")
-	withFrontend := flags.Bool("with-frontend", false, "...")
+	withFrontend := flags.Bool("with-frontend", false, "generate React + Vite + Tailwind frontend skeleton")
 
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "解析参数失败:", err)
@@ -101,13 +100,13 @@ func printUsage() {
 	fmt.Fprint(os.Stderr, `dtk - dev-toolkit 脚手架
 
 用法:
-  dtk init --name <project> --module <module> [--output <dir>] [--template <dir>] [--force]
-  dtk deploy [--components <path>] [--namespace <ns>] [--context <ctx>] [--dry-run]
+  dtk init   --name <project> --module <module> [--output <dir>] [--template <dir>] [--force]
+  dtk deploy [--components <path>] [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>] [--dry-run]
 
 示例:
   dtk init --name demo-svc --module github.com/you/demo-svc
-  dtk init --name demo-svc --module github.com/you/demo-svc --output ./demo-svc
   dtk deploy
+  dtk deploy --kubeconfig ~/.kube/prod.yaml --context prod-cluster
 `)
 }
 
@@ -133,12 +132,15 @@ func runDeploy(args []string) {
 	components := flags.String("components", "configs/components.yaml", "components config path")
 	namespace := flags.String("namespace", "", "kubernetes namespace (default from configs/project.env)")
 	context := flags.String("context", "", "kubernetes context (default from configs/project.env)")
+	kubeconfig := flags.String("kubeconfig", "", "kubeconfig 文件路径，留空使用默认 ~/.kube/config")
 	dryRun := flags.Bool("dry-run", false, "print plan only, do not deploy")
 
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "解析参数失败:", err)
 		os.Exit(1)
 	}
+
+	*kubeconfig = expandHome(*kubeconfig)
 
 	root, err := projectRoot()
 	if err != nil {
@@ -166,6 +168,9 @@ func runDeploy(args []string) {
 	if *context == "" {
 		*context = env["KUBE_CONTEXT"]
 	}
+	if *kubeconfig == "" {
+		*kubeconfig = expandHome(env["KUBE_CONFIG"])
+	}
 
 	printPlan(plan)
 	if *dryRun {
@@ -179,6 +184,9 @@ func runDeploy(args []string) {
 	}
 	if *context != "" {
 		makeEnv = append(makeEnv, "KUBE_CONTEXT="+*context)
+	}
+	if *kubeconfig != "" {
+		makeEnv = append(makeEnv, "KUBE_CONFIG="+*kubeconfig)
 	}
 
 	version := env["VERSION"]
@@ -200,7 +208,6 @@ func runDeploy(args []string) {
 			makeEnv = append(makeEnv, k+"="+v)
 		}
 	}
-
 	makeEnv = append(makeEnv,
 		"VERSION="+version,
 		"ARCH="+arch,
@@ -230,11 +237,11 @@ func runDeploy(args []string) {
 		if item.Name == "" || item.Image == "" {
 			continue
 		}
-		if err := scaleDeployment(*context, *namespace, item.Name, item.Replicas); err != nil {
+		if err := scaleDeployment(*kubeconfig, *context, *namespace, item.Name, item.Replicas); err != nil {
 			fmt.Fprintln(os.Stderr, "设置副本数失败:", err)
 			os.Exit(1)
 		}
-		if err := setDeploymentResources(*context, *namespace, item.Name, item); err != nil {
+		if err := setDeploymentResources(*kubeconfig, *context, *namespace, item.Name, item); err != nil {
 			fmt.Fprintln(os.Stderr, "设置资源失败:", err)
 			os.Exit(1)
 		}
@@ -286,14 +293,9 @@ func readEnvFile(path string) (map[string]string, error) {
 		if len(parts) != 2 {
 			continue
 		}
-		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-		env[key] = value
+		env[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return env, nil
+	return env, scanner.Err()
 }
 
 func runCmd(dir string, env []string, name string, args ...string) error {
@@ -320,36 +322,39 @@ func printPlan(plan []planner.Plan) {
 	}
 }
 
-func scaleDeployment(context, namespace, name string, replicas int) error {
+func scaleDeployment(kubeconfig, context, namespace, name string, replicas int) error {
 	if replicas <= 0 {
 		return nil
 	}
-	args := []string{}
-	if context != "" {
-		args = append(args, "--context", context)
-	}
-	if namespace != "" {
-		args = append(args, "--namespace", namespace)
-	}
+	args := kubectlArgs(kubeconfig, context, namespace)
 	args = append(args, "scale", "deployment/"+name, fmt.Sprintf("--replicas=%d", replicas))
 	return runCmd("", nil, "kubectl", args...)
 }
 
-func setDeploymentResources(context, namespace, name string, item planner.Plan) error {
+func setDeploymentResources(kubeconfig, context, namespace, name string, item planner.Plan) error {
 	limits := buildResourceArgs(item.CPU, item.Memory, item.Storage)
 	if limits == "" {
 		return nil
 	}
-	args := []string{}
+	args := kubectlArgs(kubeconfig, context, namespace)
+	args = append(args, "set", "resources", "deployment/"+name,
+		"--limits="+limits, "--requests="+limits)
+	return runCmd("", nil, "kubectl", args...)
+}
+
+// kubectlArgs 构建公共的 kubectl 参数（kubeconfig/context/namespace）
+func kubectlArgs(kubeconfig, context, namespace string) []string {
+	var args []string
+	if kubeconfig != "" {
+		args = append(args, "--kubeconfig", kubeconfig)
+	}
 	if context != "" {
 		args = append(args, "--context", context)
 	}
 	if namespace != "" {
 		args = append(args, "--namespace", namespace)
 	}
-	args = append(args, "set", "resources", "deployment/"+name,
-		"--limits="+limits, "--requests="+limits)
-	return runCmd("", nil, "kubectl", args...)
+	return args
 }
 
 func buildResourceArgs(cpu, memory, storage string) string {
