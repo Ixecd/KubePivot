@@ -54,6 +54,8 @@ func main() {
 		runResume(os.Args[2:])
 	case "rollback":
 		runRollback(os.Args[2:])
+	case "release":
+		runRelease(os.Args[2:])
 	default:
 		printUsage()
 		os.Exit(1)
@@ -108,6 +110,7 @@ func printUsage() {
   dtk deploy   [--components <path>] [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>] [--dry-run]
   dtk resume   [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
   dtk rollback [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
+  dtk release  --version <v1.2.3> [--deploy] [--no-push]
 
 示例:
   dtk init --name demo-svc --module github.com/you/demo-svc
@@ -205,25 +208,25 @@ func printPlan(plan []planner.Plan) {
 }
 
 func scaleDeployment(kubeconfig, context, namespace, name string, replicas int) error {
-    if replicas <= 0 {
-        return nil
-    }
-    args := append([]string{"kubectl"}, kubectlBaseArgs(kubeconfig, context, namespace)...)
-    args = append(args, "scale", "deployment/"+name, fmt.Sprintf("--replicas=%d", replicas))
-    _, err := runOutput(args...)
-    return err
+	if replicas <= 0 {
+		return nil
+	}
+	args := append([]string{"kubectl"}, kubectlBaseArgs(kubeconfig, context, namespace)...)
+	args = append(args, "scale", "deployment/"+name, fmt.Sprintf("--replicas=%d", replicas))
+	_, err := runOutput(args...)
+	return err
 }
 
 func setDeploymentResources(kubeconfig, context, namespace, name string, item planner.Plan) error {
-    limits := buildResourceArgs(item.CPU, item.Memory, item.Storage)
-    if limits == "" {
-        return nil
-    }
-    args := append([]string{"kubectl"}, kubectlBaseArgs(kubeconfig, context, namespace)...)
-    args = append(args, "set", "resources", "deployment/"+name,
-        "--limits="+limits, "--requests="+limits)
-    _, err := runOutput(args...)
-    return err
+	limits := buildResourceArgs(item.CPU, item.Memory, item.Storage)
+	if limits == "" {
+		return nil
+	}
+	args := append([]string{"kubectl"}, kubectlBaseArgs(kubeconfig, context, namespace)...)
+	args = append(args, "set", "resources", "deployment/"+name,
+		"--limits="+limits, "--requests="+limits)
+	_, err := runOutput(args...)
+	return err
 }
 
 func buildResourceArgs(cpu, memory, storage string) string {
