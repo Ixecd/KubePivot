@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Ixecd/dev-toolkit/internal/ai"
+	"github.com/Ixecd/dev-toolkit/internal/planner"
 	"github.com/Ixecd/dev-toolkit/internal/logger"
 	"github.com/Ixecd/dev-toolkit/internal/scaffold"
 )
@@ -146,7 +146,7 @@ func runDeploy(args []string) {
 		os.Exit(1)
 	}
 
-	plan, err := ai.BuildPlan(filepath.Join(root, *components))
+	plan, err := planner.BuildPlan(filepath.Join(root, *components))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "解析组件失败:", err)
 		os.Exit(1)
@@ -305,7 +305,7 @@ func runCmd(dir string, env []string, name string, args ...string) error {
 	return cmd.Run()
 }
 
-func printPlan(plan []ai.Plan) {
+func printPlan(plan []planner.Plan) {
 	fmt.Println("AI 规划结果:")
 	for _, item := range plan {
 		if item.Name == "" {
@@ -335,7 +335,7 @@ func scaleDeployment(context, namespace, name string, replicas int) error {
 	return runCmd("", nil, "kubectl", args...)
 }
 
-func setDeploymentResources(context, namespace, name string, item ai.Plan) error {
+func setDeploymentResources(context, namespace, name string, item planner.Plan) error {
 	limits := buildResourceArgs(item.CPU, item.Memory, item.Storage)
 	if limits == "" {
 		return nil
