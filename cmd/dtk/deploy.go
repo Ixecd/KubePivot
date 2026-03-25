@@ -131,22 +131,21 @@ func runResume(args []string) {
 	fmt.Printf("当前状态: %s（%s）\n", record.State, record.Reason)
 	fmt.Println("检查 K8s 实际状态...")
 
-	// ✅ 关键修复：显式传入 deployment name，提高可扩展性
-	deploymentName := "wallet-service"   // 以后如果有多服务，可以从配置读取
-	actual, err := sm.DetectActualState(cfg.kubeconfig, deploymentName)
+	plan, err := planner.BuildPlan(filepath.Join(root, cfg.components))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "检测 K8s 状态失败: %v\n", err)
+		fmt.Fprintln(os.Stderr, "解析组件失败:", err)
 		os.Exit(1)
 	}
+	actual := detectActualState(cfg, plan)
+
 	fmt.Printf("K8s 实际状态: %s\n", actual)
 
 	switch actual {
 	case state.StateRunning:
 		fmt.Println("服务已正常运行，同步状态为 RUNNING")
 		sm.Transition(state.StateRunning, "resume: K8s 检测服务正常")
-	case state.StateDeploying, state.StateValidating, state.StateIdle:
-		fmt.Println("服务不存在或状态异常，从头重新部署")
-		plan, _ := planner.BuildPlan(filepath.Join(root, cfg.components))
+	case state.StateIdle:
+		fmt.Println("服务不存在，从头重新部署")
 		executeDeploy(sm, cfg, env, plan, root)
 	default:
 		fmt.Printf("无法自动恢复状态 %s，请手动处理\n", actual)
@@ -302,11 +301,19 @@ func resumeFromValidating(sm *state.Machine, cfg *deployConfig, env map[string]s
 	fmt.Println("✅ 恢复成功，状态: RUNNING")
 }
 
-// detectActualState 通过多个核心资源判断实际状态（高扩展性）
-func detectActualState(cfg *deployConfig, record *state.DeployRecord) state.State {
-	sm := state.NewForDetect(record)
-	actual, _ := sm.DetectResourcesState(cfg.kubeconfig)
-	return actual
+// detectActualState 通过 kubectl 检查 plan 里的服务是否存在
+func detectActualState(cfg *deployConfig, plan []planner.Plan) state.State {
+	for _, item := range plan {
+		if item.Image == "" {
+			continue
+		}
+		args := kubectlBaseArgs(cfg.kubeconfig, cfg.context, cfg.namespace)
+		args = append(args, "get", "deployment", item.Name)
+		if _, err := runOutput(args...); err == nil {
+			return state.StateRunning
+		}
+	}
+	return state.StateIdle
 }
 
 // kubectlBaseArgs 构建 kubectl 基础参数（供 deploy.go 内部使用）

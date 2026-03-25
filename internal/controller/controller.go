@@ -2,7 +2,7 @@ package controller
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -12,27 +12,37 @@ import (
 )
 
 func Start() {
-	log.Println("🚀 web3-blitz-controller 已启动（Reconciliation Loop）")
+	slog.Info("🚀 controller 已启动（Reconciliation Loop）")
+
+	project   := getenv("PROJECT_NAME", "web3-blitz")
+	namespace := getenv("KUBE_NAMESPACE", project)
+	version   := getenv("VERSION", "latest")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 加载状态机
 	store := state.NewAutoStore(os.Getenv("ETCD_ENDPOINTS"))
-	sm, err := state.New(store, "web3-blitz", "web3-blitz", os.Getenv("VERSION"))
+	sm, err := state.New(store, project, namespace, version)
 	if err != nil {
-		log.Fatal("状态机初始化失败:", err)
+		slog.Error("状态机初始化失败", "err", err)
+		os.Exit(1)
 	}
 
-	// 启动 Reconciliation Loop
 	reconciler := NewReconciler(sm)
 	go reconciler.Start(ctx)
 
-	// 优雅退出
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
-	log.Println("⛔ controller 正在优雅关闭...")
+
+	slog.Info("controller 正在优雅关闭...")
 	cancel()
 	time.Sleep(2 * time.Second)
+}
+
+func getenv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }
