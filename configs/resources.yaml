@@ -1,0 +1,9 @@
+# configs/resources.yaml
+# 状态机需要持续监控的核心资源列表
+# 以后加任何资源（Ingress、PVC、CronJob...）只需在这里加一行即可
+resources:
+  - kind: StatefulSet
+    name: postgres
+    on-missing: auto-heal
+    max-retry: 2
+    fallback: rollback

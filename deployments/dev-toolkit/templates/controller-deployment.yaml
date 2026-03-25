@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web3-blitz-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web3-blitz-controller
+  template:
+    metadata:
+      labels:
+        app: web3-blitz-controller
+    spec:
+      containers:
+      - name: controller
+        image: "{{ .Values.registryPrefix }}/web3-blitz-controller:{{ .Values.version }}"
+        command: ["controller", "start"]
+        env:
+        - name: ETCD_ENDPOINTS
+          value: "{{ .Values.etcdEndpoints }}"
+        - name: VERSION
+          value: "{{ .Values.version }}"
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi

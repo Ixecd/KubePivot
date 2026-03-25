@@ -159,3 +159,7 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
+
+etcdEndpoints: "etcd:2379"
+controller:
+  enabled: true

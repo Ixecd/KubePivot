@@ -1,26 +1,34 @@
 # dtk 状态机设计文档
 
-> 版本：2026-03-24
-> 适用：dev-toolkit v0.3.3+
+> 版本：2026-03-25
+> 状态：A2 独立 Controller Pod 方案已落地
 
 ---
 
 ## 设计动机
 
-`dtk deploy` 是一个多步骤、有副作用的长流程操作：
+`dtk deploy` 是一个多步骤、有副作用的长流程操作。任意一步失败或进程被中断，都会留下不确定的中间状态。传统命令式部署难以处理以下场景：
 
-```
-build → push → helm upgrade → rollout → validate
-```
+- 首次部署失败后 namespace 残留
+- 更新失败后没有自动回滚
+- 资源被手动删除、scale、patch 后状态不一致
+- 并发部署产生竞争
 
-任意一步失败，或者进程中途被 Ctrl+C 杀掉，都会留下不确定的中间状态。没有状态机的情况下：
+状态机从**命令式**升级为**声明式 + Reconciliation Loop**，核心目标是：
+- 真正实现**自动自愈**
+- 高可扩展性（新增任何资源只需改配置）
+- 业务逻辑与状态对账完全解耦
 
-- 首次部署失败后 namespace 残留，下次部署会误判为"更新"而非"首次"
-- 更新失败后没有自动回滚，服务处于损坏状态
-- 进程中断后不知道从哪里继续，只能重头跑
-- 并发 `dtk deploy` 可能产生竞争
+---
 
-状态机解决了这些问题。
+## 架构升级（A2 方案）
+
+**核心变化**：
+- 新增独立 `*-controller` Deployment，专门运行 Reconciliation Loop
+- Loop 运行在集群内部，不依赖 dtk CLI（dtk CLI 执行完即退出）
+- 配置驱动：`configs/resources.yaml`
+- 通信方式：纯 etcd（Watch + 定期 Reconcile）
+- 纠正策略：优先自动自愈 → 多次失败后自动 rollback
 
 ---
 
@@ -55,6 +63,58 @@ TERMINATED     → （终态，不可转换）
 ```
 
 ---
+
+## Reconciliation Loop（核心新增）
+
+**运行位置**：`web3-blitz-controller` Deployment（独立 pod）
+
+**工作机制**：
+- **etcd Watch**：实时监听 `dtk/<project>/<namespace>/state` 变化
+- **定期 Reconcile**：每 8 秒全面对账一次
+- **资源检查**：根据 `configs/resources.yaml` 配置检查所有核心资源
+- **自动自愈**：资源缺失 → 尝试 `helm upgrade --install --force-conflicts`
+- **失败兜底**：自愈失败 N 次 → 自动 `helm rollback` 到上一个版本
+
+---
+
+## configs/resources.yaml（配置化扩展）
+
+```yaml
+resources:
+  - kind: Deployment
+    name: wallet-service
+    on-missing: auto-heal
+    max-retry: 2
+    fallback: rollback
+  - kind: StatefulSet
+    name: postgres
+    on-missing: auto-heal
+    max-retry: 2
+    fallback: rollback
+  # ... 可随意扩展任何 K8s 资源
+```
+
+## Controller与业务解耦
+
+- wallet-service：只负责业务逻辑
+- web3-blitz-controller：只负责状态对账和自愈
+- 两者通过 etcd 通信
+
+## 文件结构（新增部分）
+
+```text
+internal/controller/          # 新增
+├── controller.go
+├── reconciler.go
+├── resources.go
+├── etcd_watcher.go
+└── heal.go
+
+configs/resources.yaml        # 新增配置化资源列表
+
+deployments/web3-blitz/templates/
+└── controller-deployment.yaml   # 新增 controller Deployment
+```
 
 ## 完整流程图
 
@@ -235,12 +295,9 @@ dtk rollback [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
 
 ---
 
-## 文件结构
+## 下一步
 
-```
-internal/state/
-├── state.go      # State 类型、转换表、DeployRecord、Machine
-├── store.go      # Store 接口、etcdStore、localStore、NewAutoStore
-├── validator.go  # ValidateDeployment、getPodReadiness、checkHealthz
-└── state_test.go # 15 个单元测试
-```
+- controller pod 集成到同一个 Helm Chart
+- 完整 e2e 测试（手动删除 deployment → 自动自愈）
+- SSA 冲突自动清理
+- 多资源类型全面支持

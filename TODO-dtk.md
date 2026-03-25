@@ -1,29 +1,34 @@
 # TODO — dev-toolkit 路线图
 
 > 从"自用脚手架"走向"真正可推广的 Go 云原生工具"。
-> 按优先级排列，持续更新。当前：v0.4.0
+> 按优先级排列，持续更新。当前：v0.4.1
 
 ---
 
 ## 🔴 P0 — 核心，推广前必须完成
 
-### 状态机 Bug
-- [ ] resumeFromValidating 不检查转换合法性，从 CLEANING 强转 VALIDATING 失败无报错
-- [ ] detectActualState deployment 被删后仍返回 DEPLOYING
-- [ ] SSA 冲突没有自动清除 managedFields 重试
-- [ ] helm rollback 同样受 SSA 冲突影响，导致状态卡死
+### 状态机 & Reconciliation Controller（已完成 A2 方案）
+
+- [x] 状态机升级为 A2 独立 Controller Pod 方案
+- [x] 新增 `configs/resources.yaml` 配置化资源监控
+- [x] Reconciliation Loop（etcd Watch + 定期 Reconcile）
+- [x] 自动自愈机制（helm upgrade → 失败后自动 rollback）
+- [ ] controller pod 集成到同一个 Helm Chart
+- [ ] `DetectResourceExists` 支持更多资源类型（Service/PVC/Ingress）
+- [ ] SSA 冲突自动清除 managedFields 重试
+- [ ] helm rollback 同样受 SSA 冲突影响的处理
 
 ### 集成测试（剩余）
+
 - [ ] 首次部署失败 → 验证 ns 被清理，状态回 IDLE（端到端）
 - [ ] 更新失败 → 验证自动回滚，状态回 RUNNING（端到端）
-- [ ] 网络断开 → 验证不破坏现有资源
-- [ ] resume → 验证从中断点继续（端到端）
-- [ ] 用 web3-blitz 作为真实 demo 跑通完整流程
+- [ ] 手动删除 deployment → controller 自动自愈（核心验证）
+- [ ] controller pod 挂掉后重启仍能继续对账
+- [ ] 用 web3-blitz 作为真实 demo 完整跑通 A2 流程
 
 ### dry-run 模式（剩余）
-- [ ] `dtk init --dry-run` 预览生成的文件结构
 
----
+- [ ] `dtk init --dry-run` 预览生成的文件结构
 
 ## 🟡 P1 — 健壮性
 
@@ -111,9 +116,14 @@
 - [x] 15 个状态机单元测试 + 18 个集成测试
 - [x] CI 修复（git user config、kubectl/helm 安装）
 - [x] 完整文档（state-machine / release / helm / kubeconfig）
+- [x] A2 方案决策：独立 controller pod + etcd 通信
+- [x] `internal/controller/` 包完整实现（reconciler、etcd_watcher、heal）
+- [x] `DetectResourceExists` 方法实现
+- [x] 状态机设计文档更新
+- [x] 所有之前的状态机 Bug 已解决（resumeFromValidating 合法性检查、detectActualState 资源缺失判断等）
 
 ---
 
-> 两个项目的交汇点：web3-blitz 是 dtk 的活体验证，部署过程中发现的问题直接反哺 DTK P0/P1。web3-blitz 跑通之后就是 dtk 最好的推广 demo。
+> 两个项目的交汇点：web3-blitz 是 dtk 的活体验证，部署过程中发现的问题直接反哺 DTK P0/P1。
 
 > 每完成一项，移到 ✅ 已完成，并更新 SNAPSHOT。

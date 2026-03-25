@@ -20,22 +20,6 @@ type Store interface {
 	Delete(project, namespace string) error
 }
 
-// etcdKey 生成 etcd key
-// 格式：dtk/<project>/<namespace>/state
-func etcdKey(project, namespace string) string {
-	return fmt.Sprintf("dtk/%s/%s/state", project, namespace)
-}
-
-// localPath 生成本地文件路径
-// 格式：~/.dtk/state/<project>/<namespace>.json
-func localPath(project, namespace string) (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("获取 home 目录失败: %w", err)
-	}
-	return filepath.Join(home, ".dtk", "state", project, namespace+".json"), nil
-}
-
 // ── etcd Store ────────────────────────────────────────────────────────────────
 
 type etcdStore struct {
@@ -54,9 +38,9 @@ func NewEtcdStore(endpoints []string) (Store, error) {
 }
 
 func (s *etcdStore) Save(record *DeployRecord) error {
-	data, err := json.Marshal(record)
+	data, err := marshalRecord(record)
 	if err != nil {
-		return fmt.Errorf("序列化状态失败: %w", err)
+		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -83,11 +67,7 @@ func (s *etcdStore) Load(project, namespace string) (*DeployRecord, error) {
 		return nil, fmt.Errorf("记录不存在: %s", key)
 	}
 
-	var record DeployRecord
-	if err := json.Unmarshal(resp.Kvs[0].Value, &record); err != nil {
-		return nil, fmt.Errorf("反序列化状态失败: %w", err)
-	}
-	return &record, nil
+	return unmarshalRecord(resp.Kvs[0].Value)
 }
 
 func (s *etcdStore) Delete(project, namespace string) error {
@@ -115,10 +95,12 @@ func (s *localStore) Save(record *DeployRecord) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("创建状态目录失败: %w", err)
 	}
-	data, err := json.MarshalIndent(record, "", "  ")
+
+	data, err := marshalRecord(record)
 	if err != nil {
-		return fmt.Errorf("序列化状态失败: %w", err)
+		return err
 	}
+
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return fmt.Errorf("写入状态文件失败: %w", err)
 	}
@@ -138,11 +120,7 @@ func (s *localStore) Load(project, namespace string) (*DeployRecord, error) {
 		}
 		return nil, fmt.Errorf("读取状态文件失败: %w", err)
 	}
-	var record DeployRecord
-	if err := json.Unmarshal(data, &record); err != nil {
-		return nil, fmt.Errorf("反序列化状态失败: %w", err)
-	}
-	return &record, nil
+	return unmarshalRecord(data)
 }
 
 func (s *localStore) Delete(project, namespace string) error {
@@ -156,9 +134,22 @@ func (s *localStore) Delete(project, namespace string) error {
 	return nil
 }
 
+// ── 辅助序列化函数（解决 undefined） ────────────────────────────────────────
+
+func marshalRecord(record *DeployRecord) ([]byte, error) {
+	return json.MarshalIndent(record, "", "  ")
+}
+
+func unmarshalRecord(data []byte) (*DeployRecord, error) {
+	var r DeployRecord
+	if err := json.Unmarshal(data, &r); err != nil {
+		return nil, fmt.Errorf("反序列化状态失败: %w", err)
+	}
+	return &r, nil
+}
+
 // ── 自动选择 Store ────────────────────────────────────────────────────────────
 
-// NewAutoStore 优先 etcd，失败则降级到本地文件
 func NewAutoStore(etcdEndpoints string) Store {
 	if etcdEndpoints == "" {
 		slog.Debug("未配置 etcd，使用本地文件存储状态")
@@ -176,16 +167,16 @@ func NewAutoStore(etcdEndpoints string) Store {
 	return store
 }
 
-// marshalRecord 序列化记录
-func marshalRecord(record *DeployRecord) ([]byte, error) {
-	return json.MarshalIndent(record, "", "  ")
+// ── 工具函数 ────────────────────────────────────────────────────────────────
+
+func etcdKey(project, namespace string) string {
+	return fmt.Sprintf("dtk/%s/%s/state", project, namespace)
 }
 
-// unmarshalRecord 反序列化记录
-func unmarshalRecord(data []byte) (*DeployRecord, error) {
-	var r DeployRecord
-	if err := json.Unmarshal(data, &r); err != nil {
-		return nil, fmt.Errorf("反序列化状态失败: %w", err)
+func localPath(project, namespace string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("获取 home 目录失败: %w", err)
 	}
-	return &r, nil
+	return filepath.Join(home, ".dtk", "state", project, namespace+".json"), nil
 }

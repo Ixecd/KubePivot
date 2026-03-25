@@ -131,20 +131,21 @@ func runResume(args []string) {
 	fmt.Printf("当前状态: %s（%s）\n", record.State, record.Reason)
 	fmt.Println("检查 K8s 实际状态...")
 
-	// 根据 K8s 实际情况决定从哪个状态恢复
-	actual := detectActualState(cfg, record)
+	// ✅ 关键修复：显式传入 deployment name，提高可扩展性
+	deploymentName := "wallet-service"   // 以后如果有多服务，可以从配置读取
+	actual, err := sm.DetectActualState(cfg.kubeconfig, deploymentName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "检测 K8s 状态失败: %v\n", err)
+		os.Exit(1)
+	}
 	fmt.Printf("K8s 实际状态: %s\n", actual)
 
 	switch actual {
 	case state.StateRunning:
 		fmt.Println("服务已正常运行，同步状态为 RUNNING")
 		sm.Transition(state.StateRunning, "resume: K8s 检测服务正常")
-	case state.StateDeploying:
-		fmt.Println("部署尚未完成，重新进入 VALIDATING 阶段")
-		plan, _ := planner.BuildPlan(filepath.Join(root, cfg.components))
-		resumeFromValidating(sm, cfg, env, plan, root)
-	case state.StateIdle:
-		fmt.Println("服务不存在，从头部署")
+	case state.StateDeploying, state.StateValidating, state.StateIdle:
+		fmt.Println("服务不存在或状态异常，从头重新部署")
 		plan, _ := planner.BuildPlan(filepath.Join(root, cfg.components))
 		executeDeploy(sm, cfg, env, plan, root)
 	default:
@@ -241,7 +242,7 @@ func executeDeploy(sm *state.Machine, cfg *deployConfig, env map[string]string, 
 		return err
 	}
 
-	// 找第一个有 image 的服务做 healthz 验证
+	// 验证
 	for _, item := range plan {
 		if item.Image == "" {
 			continue
@@ -274,9 +275,13 @@ func executeDeploy(sm *state.Machine, cfg *deployConfig, env map[string]string, 
 	return nil
 }
 
-// resumeFromValidating 从 VALIDATING 阶段恢复
+// resumeFromValidating 从 VALIDATING 阶段恢复（使用状态机方法）
 func resumeFromValidating(sm *state.Machine, cfg *deployConfig, env map[string]string, plan []planner.Plan, root string) {
-	sm.Transition(state.StateValidating, "resume: 重新验证")
+	if err := sm.ResumeFromValidating("resume: 重新验证"); err != nil {
+		fmt.Fprintln(os.Stderr, "ResumeFromValidating 失败:", err)
+		return
+	}
+
 	for _, item := range plan {
 		if item.Image == "" {
 			continue
@@ -297,19 +302,11 @@ func resumeFromValidating(sm *state.Machine, cfg *deployConfig, env map[string]s
 	fmt.Println("✅ 恢复成功，状态: RUNNING")
 }
 
-// detectActualState 通过 K8s 实际情况推断状态
+// detectActualState 通过多个核心资源判断实际状态（高扩展性）
 func detectActualState(cfg *deployConfig, record *state.DeployRecord) state.State {
-	if !namespaceExists(cfg.kubeconfig, cfg.context, record.Namespace) {
-		return state.StateIdle
-	}
-
-	// 用 kubectl rollout status 快速判断
-	args := kubectlBaseArgs(cfg.kubeconfig, cfg.context, record.Namespace)
-	args = append(args, "rollout", "status", "deployment/"+record.Project, "--timeout=5s")
-	if _, err := runOutput(args...); err == nil {
-		return state.StateRunning
-	}
-	return state.StateDeploying
+	sm := state.NewForDetect(record)
+	actual, _ := sm.DetectResourcesState(cfg.kubeconfig)
+	return actual
 }
 
 // kubectlBaseArgs 构建 kubectl 基础参数（供 deploy.go 内部使用）

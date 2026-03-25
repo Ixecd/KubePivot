@@ -1,13 +1,22 @@
 # dev-toolkit 当前状态快照
 
-> 最后更新：2026-03-24
-> 版本：v0.4.0
+> 最后更新：2026-03-25
+> 版本：v0.4.1
 
 ---
 
 ## 项目定位
 
-Go 云原生项目脚手架：`dtk init` 生成完整项目骨架，`dtk deploy` 一键 AI 规划 + K8s 部署 + 状态追踪。
+Go 云原生项目脚手架：`dtk init` 生成完整项目骨架，`dtk deploy` 一键 AI 规划 + K8s 部署 + **A2 Reconciliation Controller** 持续自愈。
+
+---
+
+## 核心升级（本轮）
+
+- **A2 独立 Controller Pod**：`web3-blitz-controller` 专门运行 Reconciliation Loop
+- **configs/resources.yaml**：配置化资源监控，高可扩展性
+- **etcd Watch + 定期 Reconcile**：实时 + 定时双保险
+- **自动自愈 + rollback 兜底**：资源缺失自动恢复
 
 ---
 
