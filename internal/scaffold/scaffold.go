@@ -148,6 +148,9 @@ KUBE_CONTEXT=
 KUBE_CONFIG=
 MODULE_PATH=%s
 REGISTRY_PREFIX=qingchun22
+ARCH=arm64
+VERSION=v0.1.0
+ETCD_ENDPOINTS=
 `, name, name, module)
 	if err := os.WriteFile(configsPath, []byte(envContent), 0644); err != nil {
 		return fmt.Errorf("gen project.env: %w", err)

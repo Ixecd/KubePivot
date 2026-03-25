@@ -1,12 +1,11 @@
 package controller
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"os/exec"
 	"strings"
-	"time"
 )
 
 // checkAndHeal 检查资源是否存在，缺失时按配置执行自愈
@@ -49,52 +48,44 @@ func resourceExists(kind, name, namespace string) (bool, error) {
 	return true, nil
 }
 
-// healRecreate 通过 helm upgrade 重建资源，失败后 rollback
+// healRecreate 改为用 --reuse-values 重新安装
 func (r *Reconciler) healRecreate(res Resource) error {
-	chartDir := os.Getenv("CHART_DIR")
 	releaseName := getenv("PROJECT_NAME", res.Name)
 
-	for attempt := 1; attempt <= res.MaxRetry; attempt++ {
-		slog.Info("自愈尝试", "attempt", attempt, "max", res.MaxRetry, "release", releaseName)
-
-		if chartDir == "" {
-			// pod 内没有 chart 目录，直接跳到 rollback
-			slog.Warn("CHART_DIR 未配置，跳过 upgrade，直接 rollback")
-			break
-		}
-
-		err := runHelm("upgrade", "--install", "--wait", "--force-conflicts",
-			releaseName, chartDir,
-			"--namespace", res.Namespace,
-			"--set", "image.tag="+os.Getenv("VERSION"),
-		)
-		if err == nil {
-			slog.Info("自愈成功", "release", releaseName)
-			return nil
-		}
-
-		slog.Warn("自愈失败，稍后重试", "attempt", attempt, "err", err)
-		time.Sleep(3 * time.Second)
+	// 查最新 revision 号
+	revision := getLatestRevision(releaseName, res.Namespace)
+	if revision == 0 {
+		slog.Warn("查不到 helm release，无法自愈", "release", releaseName)
+		return nil
 	}
 
-	if res.Fallback == "rollback" {
-		return r.fallbackRollback(res)
+	slog.Info("执行 helm rollback 恢复资源", "release", releaseName, "revision", revision)
+	if err := runHelm("rollback", releaseName, fmt.Sprintf("%d", revision),
+		"--namespace", res.Namespace, "--wait",
+	); err != nil {
+		return fmt.Errorf("自愈失败: %w", err)
 	}
-	return fmt.Errorf("自愈失败，已达最大重试次数 %d", res.MaxRetry)
+	slog.Info("自愈成功", "release", releaseName)
+	return nil
 }
 
-// fallbackRollback 执行 helm rollback 回退到上一个稳定版本
-func (r *Reconciler) fallbackRollback(res Resource) error {
-	releaseName := getenv("PROJECT_NAME", res.Name)
-	slog.Warn("执行 fallback rollback", "release", releaseName)
-
-	if err := runHelm("rollback", releaseName, "--namespace", res.Namespace, "--wait"); err != nil {
-		slog.Error("rollback 失败", "release", releaseName, "err", err)
-		return fmt.Errorf("rollback 失败: %w", err)
+func getLatestRevision(releaseName, namespace string) int {
+	out, err := runHelmOutput("history", releaseName,
+		"--namespace", namespace, "--max", "1", "--output", "json")
+	if err != nil || len(out) == 0 {
+		return 0
 	}
+	var history []struct {
+		Revision int `json:"revision"`
+	}
+	if err := json.Unmarshal(out, &history); err != nil || len(history) == 0 {
+		return 0
+	}
+	return history[0].Revision
+}
 
-	slog.Info("已回滚到上一个版本", "release", releaseName)
-	return nil
+func runHelmOutput(args ...string) ([]byte, error) {
+	return exec.Command("helm", args...).Output()
 }
 
 // runHelm 执行 helm 命令，返回错误（含 stderr 输出）

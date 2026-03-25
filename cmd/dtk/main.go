@@ -12,6 +12,7 @@ import (
 	"github.com/Ixecd/dev-toolkit/internal/logger"
 	"github.com/Ixecd/dev-toolkit/internal/planner"
 	"github.com/Ixecd/dev-toolkit/internal/scaffold"
+	"github.com/Ixecd/dev-toolkit/internal/controller"
 )
 
 func expandHome(path string) string {
@@ -56,6 +57,13 @@ func main() {
 		runRollback(os.Args[2:])
 	case "release":
 		runRelease(os.Args[2:])
+	case "controller":
+		if len(os.Args) > 2 && os.Args[2] == "start" {
+			controller.Start()
+		} else {
+			fmt.Fprintln(os.Stderr, "用法: dtk controller start")
+			os.Exit(1)
+		}
 	default:
 		printUsage()
 		os.Exit(1)
@@ -111,6 +119,7 @@ func printUsage() {
   dtk resume   [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
   dtk rollback [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
   dtk release  --version <v1.2.3> [--deploy] [--no-push]
+  dtk controller start   （在 controller pod 内部运行，启动 Reconciliation Loop）
 
 示例:
   dtk init --name demo-svc --module github.com/you/demo-svc
