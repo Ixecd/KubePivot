@@ -7,6 +7,12 @@
 
 ## 🔴 P0 — 核心，推广前必须完成
 
+### 状态机 Bug
+- [ ] resumeFromValidating 不检查转换合法性，从 CLEANING 强转 VALIDATING 失败无报错
+- [ ] detectActualState deployment 被删后仍返回 DEPLOYING
+- [ ] SSA 冲突没有自动清除 managedFields 重试
+- [ ] helm rollback 同样受 SSA 冲突影响，导致状态卡死
+
 ### 集成测试（剩余）
 - [ ] 首次部署失败 → 验证 ns 被清理，状态回 IDLE（端到端）
 - [ ] 更新失败 → 验证自动回滚，状态回 RUNNING（端到端）
