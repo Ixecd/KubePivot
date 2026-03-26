@@ -734,6 +734,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "%s.serviceAccountName" . }}
+      {{- if or .Values.postgres.enabled .Values.etcd.enabled }}
       initContainers:
         {{- if .Values.postgres.enabled }}
         - name: wait-postgres
@@ -745,6 +746,7 @@ spec:
           image: busybox:1.35
           command: ['sh', '-c', 'until nc -z etcd 2379; do echo waiting for etcd; sleep 2; done']
         {{- end }}
+      {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -882,6 +884,23 @@ spec:
           configMap:
             name: {{ include "` + name + `.fullname" . }}-resources
 {{- end }}
+`,
+		filepath.Join(templatesDir, "..", "NOTES.txt"): `✅ {{ .Release.Name }} 部署成功！
+
+命名空间: {{ .Release.Namespace }}
+版本:     {{ .Values.image.tag | default .Chart.AppVersion }}
+时间:     {{ now | date "2006-01-02 15:04:05" }}
+
+组件状态:
+  业务服务   ✓ running
+  postgres  {{ if .Values.postgres.enabled }}✓ enabled{{ else }}✗ disabled{{ end }}
+  etcd      {{ if .Values.etcd.enabled }}✓ enabled{{ else }}✗ disabled{{ end }}
+  controller {{ if .Values.controller.enabled }}✓ enabled{{ else }}✗ disabled{{ end }}
+
+快速访问:
+  kubectl get pods -n {{ .Release.Namespace }}
+  kubectl logs -n {{ .Release.Namespace }} deployment/{{ include "` + name + `.fullname" . }}
+  kubectl port-forward -n {{ .Release.Namespace }} deployment/{{ include "` + name + `.fullname" . }} 8080:8080
 `}
 
 	// values.yaml 单独用 Builder 生成，避免 fmt.Sprintf raw string 嵌套问题
