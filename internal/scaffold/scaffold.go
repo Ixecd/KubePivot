@@ -111,6 +111,9 @@ func InitProject(opts InitOptions) (err error) {
 	if err := writeComponentsConfig(filepath.Join(outputDir, "configs", "components.yaml"), name); err != nil {
 		return err
 	}
+	if err := writeResourcesConfig(outputDir, name); err != nil {
+		return err
+	}
 	if err := writeTestScript(filepath.Join(outputDir, "scripts", "test_api.sh"), name); err != nil {
 		return err
 	}
@@ -854,6 +857,45 @@ env:
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			return fmt.Errorf("gen helm template %s: %w", path, err)
 		}
+	}
+	return nil
+}
+
+// writeResourcesConfig 生成 configs/resources.yaml
+// controller 依赖此文件决定监控哪些 K8s 资源
+func writeResourcesConfig(outputDir, name string) error {
+	var b strings.Builder
+	b.WriteString("# configs/resources.yaml\n")
+	b.WriteString("# A2 Reconciliation Controller 监控的 K8s 资源列表\n")
+	b.WriteString("# 新增监控资源只需在此加一行，不需要改代码\n")
+	b.WriteString("#\n")
+	b.WriteString("# 支持的 kind：Deployment / StatefulSet / Service / PVC / Ingress / CronJob\n")
+	b.WriteString("# on-missing 策略：\n")
+	b.WriteString("#   auto-heal  — 自动执行 helm rollback 恢复\n")
+	b.WriteString("#   alert      — 只告警，不自动处理\n")
+	b.WriteString("#\n\n")
+	b.WriteString("resources:\n")
+	b.WriteString("  - kind: Deployment\n")
+	b.WriteString("    name: " + name + "\n")
+	b.WriteString("    on-missing: auto-heal\n")
+	b.WriteString("    max-retry: 3\n")
+	b.WriteString("    fallback: rollback\n")
+	b.WriteString("\n")
+	b.WriteString("  # 示例：监控 StatefulSet\n")
+	b.WriteString("  # - kind: StatefulSet\n")
+	b.WriteString("  #   name: postgres\n")
+	b.WriteString("  #   on-missing: auto-heal\n")
+	b.WriteString("  #   max-retry: 2\n")
+	b.WriteString("  #   fallback: rollback\n")
+	b.WriteString("\n")
+	b.WriteString("  # 示例：只告警不自动处理\n")
+	b.WriteString("  # - kind: PersistentVolumeClaim\n")
+	b.WriteString("  #   name: postgres-data\n")
+	b.WriteString("  #   on-missing: alert\n")
+
+	path := filepath.Join(outputDir, "configs", "resources.yaml")
+	if err := os.WriteFile(path, []byte(b.String()), 0644); err != nil {
+		return fmt.Errorf("写入 resources.yaml 失败: %w", err)
 	}
 	return nil
 }
