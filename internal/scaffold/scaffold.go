@@ -711,18 +711,6 @@ metadata:
   labels:
     {{- include "%s.labels" . | nindent 4 }}
 spec:
-  initContainers:
-    {{- if .Values.postgres.enabled }}
-    - name: wait-postgres
-      image: busybox:1.35
-      command: ['sh', '-c', 'until nc -z postgres 5432; do echo waiting for postgres; sleep 2; done']
-    {{- end }}
-    {{- if .Values.etcd.enabled }}
-    - name: wait-etcd
-      image: busybox:1.35
-      command: ['sh', '-c', 'until nc -z etcd 2379; do echo waiting for etcd; sleep 2; done']
-    {{- end }}
-  {{- with .Values.imagePullSecrets }}
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
@@ -741,18 +729,22 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
-      initContainers:
-        - name: wait-postgres
-          image: busybox:1.35
-          command: ['sh', '-c', 'until nc -z postgres 5432; do echo waiting for postgres; sleep 2; done']
-        - name: wait-etcd
-          image: busybox:1.35
-          command: ['sh', '-c', 'until nc -z etcd 2379; do echo waiting for etcd; sleep 2; done']
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "%s.serviceAccountName" . }}
+      initContainers:
+        {{- if .Values.postgres.enabled }}
+        - name: wait-postgres
+          image: busybox:1.35
+          command: ['sh', '-c', 'until nc -z postgres 5432; do echo waiting for postgres; sleep 2; done']
+        {{- end }}
+        {{- if .Values.etcd.enabled }}
+        - name: wait-etcd
+          image: busybox:1.35
+          command: ['sh', '-c', 'until nc -z etcd 2379; do echo waiting for etcd; sleep 2; done']
+        {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
