@@ -75,6 +75,7 @@ deploy.install:
 		--namespace $(NAMESPACE) \
 		--create-namespace \
 		--set image.repository=$(REGISTRY_PREFIX)/$(firstword $(BINS))-$(ARCH) \
+		--set-file controller.resourcesConfig=configs/resources.yaml \
 		--set image.tag=$(VERSION) \
 		--force-conflicts \
 		--wait \

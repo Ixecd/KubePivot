@@ -246,6 +246,11 @@ ETCD_ENDPOINTS=
 	fmt.Fprintf(opts.Stdout, "  make tools   # 安装所有工具\n")
 	fmt.Fprintf(opts.Stdout, "  make build   # 编译\n")
 	fmt.Fprintf(opts.Stdout, "  make test    # 测试\n")
+	fmt.Fprintf(opts.Stdout, "\n⚠️  上线前请检查：\n")
+	fmt.Fprintf(opts.Stdout, "  deployments/%s/templates/controller-rbac.yaml\n", name)
+	fmt.Fprintf(opts.Stdout, "  → 当前为全量权限，请按实际需要收紧 ClusterRole rules\n")
+	fmt.Fprintf(opts.Stdout, "  deployments/%s/templates/controller-deployment.yaml\n", name)
+	fmt.Fprintf(opts.Stdout, "  → 替换 controller.image.repository 为你构建的镜像\n")
 
 	if opts.WithFrontend {
 		if err := writeFrontendSkeleton(outputDir, name); err != nil {
@@ -782,72 +787,157 @@ spec:
       {{- end }}
 `, name, name, name, name, name),
 
-		// ── values.yaml 覆盖（含 env 和正确的 probe）────────────────
-		filepath.Join(outputDir, "deployments", name, "values.yaml"): fmt.Sprintf(`# Default values for %s.
-replicaCount: 1
+		filepath.Join(templatesDir, "controller-rbac.yaml"): `apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "` + name + `.fullname" . }}-controller
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "` + name + `.fullname" . }}-controller
+rules:
+  # 当前为全量权限，上线前请按实际需要收紧
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "` + name + `.fullname" . }}-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "` + name + `.fullname" . }}-controller
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "` + name + `.fullname" . }}-controller
+    namespace: {{ .Release.Namespace }}
+`,
 
-image:
-  repository: qingchun22/%s-arm64
-  pullPolicy: IfNotPresent
-  tag: ""
+		filepath.Join(templatesDir, "resources-configmap.yaml"): `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "` + name + `.fullname" . }}-resources
+  namespace: {{ .Release.Namespace }}
+data:
+  resources.yaml: |
+{{ .Values.controller.resourcesConfig | indent 4 }}
+`,
 
-imagePullSecrets: []
-nameOverride: ""
-fullnameOverride: ""
+		filepath.Join(templatesDir, "controller-deployment.yaml"): `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "` + name + `.fullname" . }}-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "` + name + `.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ include "` + name + `.fullname" . }}-controller
+  template:
+    metadata:
+      labels:
+        app: {{ include "` + name + `.fullname" . }}-controller
+    spec:
+      serviceAccountName: {{ include "` + name + `.fullname" . }}-controller
+      containers:
+        - name: controller
+          image: "{{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag }}"
+          imagePullPolicy: IfNotPresent
+          command: ["dtk", "controller", "start"]
+          env:
+            - name: PROJECT_NAME
+              value: "` + name + `"
+            - name: KUBE_NAMESPACE
+              value: {{ .Release.Namespace }}
+            - name: ETCD_ENDPOINTS
+              value: "etcd:2379"
+            - name: RESOURCES_CONFIG
+              value: "/etc/controller/resources.yaml"
+            - name: VERSION
+              value: "{{ .Values.image.tag }}"
+          volumeMounts:
+            - name: resources-config
+              mountPath: /etc/controller
+      volumes:
+        - name: resources-config
+          configMap:
+            name: {{ include "` + name + `.fullname" . }}-resources
+`,
+	}
 
-serviceAccount:
-  create: true
-  automount: true
-  annotations: {}
-  name: ""
+	// values.yaml 单独用 Builder 生成，避免 fmt.Sprintf raw string 嵌套问题
+	var vb strings.Builder
+	vb.WriteString("# Default values for " + name + ".\n")
+	vb.WriteString("replicaCount: 1\n\n")
+	vb.WriteString("image:\n")
+	vb.WriteString("  repository: qingchun22/" + name + "-arm64\n")
+	vb.WriteString("  pullPolicy: IfNotPresent\n")
+	vb.WriteString("  tag: \"\"\n\n")
+	vb.WriteString("imagePullSecrets: []\n")
+	vb.WriteString("nameOverride: \"\"\n")
+	vb.WriteString("fullnameOverride: \"\"\n\n")
+	vb.WriteString("serviceAccount:\n")
+	vb.WriteString("  create: true\n")
+	vb.WriteString("  automount: true\n")
+	vb.WriteString("  annotations: {}\n")
+	vb.WriteString("  name: \"\"\n\n")
+	vb.WriteString("podAnnotations: {}\n")
+	vb.WriteString("podLabels: {}\n")
+	vb.WriteString("podSecurityContext: {}\n")
+	vb.WriteString("securityContext: {}\n\n")
+	vb.WriteString("service:\n")
+	vb.WriteString("  type: ClusterIP\n")
+	vb.WriteString("  port: 8080\n\n")
+	vb.WriteString("ingress:\n")
+	vb.WriteString("  enabled: false\n\n")
+	vb.WriteString("resources: {}\n\n")
+	vb.WriteString("autoscaling:\n")
+	vb.WriteString("  enabled: false\n")
+	vb.WriteString("  minReplicas: 1\n")
+	vb.WriteString("  maxReplicas: 100\n")
+	vb.WriteString("  targetCPUUtilizationPercentage: 80\n\n")
+	vb.WriteString("livenessProbe:\n")
+	vb.WriteString("  httpGet:\n")
+	vb.WriteString("    path: /healthz\n")
+	vb.WriteString("    port: 8080\n")
+	vb.WriteString("  initialDelaySeconds: 10\n")
+	vb.WriteString("  periodSeconds: 10\n\n")
+	vb.WriteString("readinessProbe:\n")
+	vb.WriteString("  httpGet:\n")
+	vb.WriteString("    path: /healthz\n")
+	vb.WriteString("    port: 8080\n")
+	vb.WriteString("  initialDelaySeconds: 5\n")
+	vb.WriteString("  periodSeconds: 5\n\n")
+	vb.WriteString("volumes: []\n")
+	vb.WriteString("volumeMounts: []\n")
+	vb.WriteString("nodeSelector: {}\n")
+	vb.WriteString("tolerations: []\n")
+	vb.WriteString("affinity: {}\n\n")
+	vb.WriteString("# 环境变量 — 通过 deployment template 注入到容器\n")
+	vb.WriteString("env:\n")
+	vb.WriteString("  - name: DATABASE_URL\n")
+	vb.WriteString("    value: \"postgres://user:pass@postgres:5432/" + name + "?sslmode=disable&search_path=public\"\n")
+	vb.WriteString("  - name: ETCD_ENDPOINTS\n")
+	vb.WriteString("    value: \"etcd:2379\"\n\n")
+	vb.WriteString("controller:\n")
+	vb.WriteString("  # TODO: 替换为你构建的 controller 镜像\n")
+	vb.WriteString("  # 镜像需包含 dtk 二进制 + kubectl + helm\n")
+	vb.WriteString("  # 构建方式参考 build/docker/controller/Dockerfile\n")
+	vb.WriteString("  image:\n")
+	vb.WriteString("    repository: your-registry/" + name + "-controller\n")
+	vb.WriteString("    tag: latest\n")
+	vb.WriteString("  # 由 dtk deploy 通过 --set-file 自动注入 configs/resources.yaml\n")
+	vb.WriteString("  resourcesConfig: \"\"\n")
 
-podAnnotations: {}
-podLabels: {}
-podSecurityContext: {}
-securityContext: {}
-
-service:
-  type: ClusterIP
-  port: 8080
-
-ingress:
-  enabled: false
-
-resources: {}
-
-autoscaling:
-  enabled: false
-  minReplicas: 1
-  maxReplicas: 100
-  targetCPUUtilizationPercentage: 80
-
-livenessProbe:
-  httpGet:
-    path: /healthz
-    port: 8080
-  initialDelaySeconds: 10
-  periodSeconds: 10
-
-readinessProbe:
-  httpGet:
-    path: /healthz
-    port: 8080
-  initialDelaySeconds: 5
-  periodSeconds: 5
-
-volumes: []
-volumeMounts: []
-nodeSelector: {}
-tolerations: []
-affinity: {}
-
-# 环境变量 — 通过 deployment template 注入到容器
-env:
-  - name: DATABASE_URL
-    value: "postgres://user:pass@postgres:5432/%s?sslmode=disable&search_path=public"
-  - name: ETCD_ENDPOINTS
-    value: "etcd:2379"
-`, name, name, name),
+	valuesPath := filepath.Join(outputDir, "deployments", name, "values.yaml")
+	if err := os.WriteFile(valuesPath, []byte(vb.String()), 0o644); err != nil {
+		return fmt.Errorf("gen values.yaml: %w", err)
 	}
 
 	for path, content := range files {

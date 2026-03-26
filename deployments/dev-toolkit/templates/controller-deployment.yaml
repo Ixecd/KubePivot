@@ -20,7 +20,7 @@ spec:
         - name: ETCD_ENDPOINTS
           value: "{{ .Values.etcdEndpoints }}"
         - name: VERSION
-          value: "{{ .Values.version }}"
+          value: "{{ .Values.image.tag }}"
         resources:
           requests:
             cpu: 50m
