@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Ixecd/dev-toolkit/internal/controller"
 	"github.com/Ixecd/dev-toolkit/internal/planner"
 	"github.com/Ixecd/dev-toolkit/internal/state"
 )
@@ -137,9 +138,13 @@ func runResume(args []string) {
 	}
 
 	// 使用状态机统一检查（基于 resources.yaml）
-	actual, err := sm.DetectActualStateFromResources(cfg.kubeconfig)
+	actual, err := controller.DetectActualState(
+		cfg.kubeconfig,
+		cfg.namespace,
+		filepath.Join(root, "configs", "resources.yaml"),
+	)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "检测 K8s 状态失败: %v\n", err)
+		fmt.Fprintln(os.Stderr, "检测 K8s 状态失败:", err)
 		os.Exit(1)
 	}
 	fmt.Printf("K8s 实际状态: %s\n", actual)

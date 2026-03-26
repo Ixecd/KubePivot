@@ -7,16 +7,24 @@
 
 ## 🔴 P0 — 核心，推广前必须完成
 
-### 状态机 & Reconciliation Controller（已完成 A2 方案）
+### 状态机 & Reconciliation Controller
 
 - [x] 状态机升级为 A2 独立 Controller Pod 方案
 - [x] 新增 `configs/resources.yaml` 配置化资源监控
 - [x] Reconciliation Loop（etcd Watch + 定期 Reconcile）
-- [x] 自动自愈机制（helm upgrade → 失败后自动 rollback）
+- [x] 自动自愈机制（helm rollback 恢复缺失资源）
+- [x] `DetectResourceExists` / `DetectActualState` 移入 controller 包，state 包彻底解耦（零 K8s 依赖）
+- [x] `LoadResources` 签名修复，路径优先级：参数 > 环境变量 > 默认路径
+- [x] `getLatestRevision` 修复（去掉 `--max 1`，正确取最新 revision）
+- [x] controller rollback 后同步状态机（`sm.Transition` 错误处理）
+- [x] controller graceful shutdown（`sync.WaitGroup` 替换 `time.Sleep`）
+- [x] 环境变量统一：`KUBE_CONFIG`（原 controller.go 误用 `KUBECONFIG`）
+- [ ] `startEtcdWatcher` goroutine 纳入 WaitGroup 管控（当前退出不受控，已知限制）
 - [ ] controller pod 集成到同一个 Helm Chart
-- [ ] `DetectResourceExists` 支持更多资源类型（Service/PVC/Ingress）
+- [ ] `DetectResourceExists` 支持更多资源类型（Service / PVC / Ingress）
 - [ ] SSA 冲突自动清除 managedFields 重试
-- [ ] helm rollback 同样受 SSA 冲突影响的处理
+- [ ] helm rollback 受 SSA 冲突影响的处理
+- [ ] helm pending-rollback 死锁自动处理（当前需手动清理）
 
 ### 集成测试（剩余）
 
@@ -25,10 +33,13 @@
 - [ ] 手动删除 deployment → controller 自动自愈（核心验证）
 - [ ] controller pod 挂掉后重启仍能继续对账
 - [ ] 用 web3-blitz 作为真实 demo 完整跑通 A2 流程
+- [ ] `internal/controller/` 单元测试（heal / reconciler）
 
 ### dry-run 模式（剩余）
 
 - [ ] `dtk init --dry-run` 预览生成的文件结构
+
+---
 
 ## 🟡 P1 — 健壮性
 
@@ -48,6 +59,7 @@
 - [ ] KUBE_CONTEXT 为空或无效的处理
 - [ ] helm release 状态异常时的处理（pending-install / failed 等）
 - [ ] etcd 连接断开时的降级处理
+- [ ] `resources.yaml` 为空时 `DetectActualState` 的处理策略（当前直接报错，是否降级为 RUNNING？）
 
 ### 测试覆盖
 - [ ] `internal/scaffold/` 核心逻辑单元测试：replaceInDir、fixChartYAMLs、writeGoMod
@@ -96,6 +108,7 @@
 - [x] 首次部署失败 → CLEANING → 删除 ns → IDLE
 - [x] 更新失败 → ROLLING_BACK → helm rollback → RUNNING
 - [x] VALIDATING 超时 → 自动回滚
+- [x] `ResumeFromValidating` 加转换合法性检查（只允许从 VALIDATING 状态调用）
 - [x] `is_first` 判断：改用 `helmReleaseExists`（修复 helm --create-namespace 导致的误判）
 - [x] `dtk deploy --dry-run` 打印完整 make 命令和环境变量
 - [x] VERSION 不变自动跳过 build/push
@@ -117,10 +130,13 @@
 - [x] CI 修复（git user config、kubectl/helm 安装）
 - [x] 完整文档（state-machine / release / helm / kubeconfig）
 - [x] A2 方案决策：独立 controller pod + etcd 通信
-- [x] `internal/controller/` 包完整实现（reconciler、etcd_watcher、heal）
-- [x] `DetectResourceExists` 方法实现
-- [x] 状态机设计文档更新
-- [x] 所有之前的状态机 Bug 已解决（resumeFromValidating 合法性检查、detectActualState 资源缺失判断等）
+- [x] `internal/controller/` 包完整实现（controller / reconciler / etcd_watcher / resources / heal）
+- [x] state 包彻底解耦：删除 DetectResourceExists、NewForDetect，零 k8s.io 依赖
+- [x] K8s 资源检测逻辑统一归入 controller 包（DetectResourceExists / DetectActualState）
+- [x] getLatestRevision 修复（去掉 --max 1，正确取最新 revision）
+- [x] controller rollback 后 sm.Transition 错误处理（不再静默丢弃）
+- [x] controller graceful shutdown（sync.WaitGroup，等当前 reconcile 跑完再退出）
+- [x] 环境变量统一为 KUBE_CONFIG（修复 controller.go 误用 KUBECONFIG）
 
 ---
 
