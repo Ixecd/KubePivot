@@ -32,13 +32,14 @@ func NewReconciler(sm *state.Machine, kubeconfig string) *Reconciler {
 
 func (r *Reconciler) Start(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
+
 	slog.Info("Reconciliation Loop 已启动", "resources", len(r.resources.Resources))
 
 	ticker := time.NewTicker(8 * time.Second)
 	defer ticker.Stop()
 
-	// etcd Watch 事件驱动（实时触发）
-	go r.startEtcdWatcher(ctx)
+	wg.Add(1)
+	go r.startEtcdWatcher(ctx, wg)
 
 	for {
 		select {

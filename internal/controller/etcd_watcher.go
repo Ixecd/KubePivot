@@ -5,13 +5,16 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Ixecd/dev-toolkit/internal/state"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
-func (r *Reconciler) startEtcdWatcher(ctx context.Context) {
+func (r *Reconciler) startEtcdWatcher(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	endpoints := os.Getenv("ETCD_ENDPOINTS")
 	if endpoints == "" {
 		slog.Warn("ETCD_ENDPOINTS 未配置，跳过 etcd Watch，只依赖定时对账")
