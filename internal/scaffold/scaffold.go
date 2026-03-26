@@ -901,6 +901,8 @@ spec:
 	vb.WriteString("  port: 8080\n\n")
 	vb.WriteString("ingress:\n")
 	vb.WriteString("  enabled: false\n\n")
+	vb.WriteString("httpRoute:\n")
+	vb.WriteString("  enabled: false\n\n")
 	vb.WriteString("resources: {}\n\n")
 	vb.WriteString("autoscaling:\n")
 	vb.WriteString("  enabled: false\n")
