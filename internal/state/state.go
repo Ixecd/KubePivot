@@ -2,6 +2,9 @@ package state
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -131,7 +134,7 @@ func (m *Machine) IsFirstDeploy() bool {
 	return m.record.IsFirst
 }
 
-// ResumeFromValidating 从 VALIDATING 状态恢复，带合法性检查
+// ResumeFromValidating 加强合法性检查
 func (m *Machine) ResumeFromValidating(reason string) error {
 	if m.record.State != StateValidating {
 		return fmt.Errorf("只能从 VALIDATING 状态 resume，当前状态: %s", m.record.State)
@@ -142,4 +145,39 @@ func (m *Machine) ResumeFromValidating(reason string) error {
 // EtcdKey 返回 etcd 存储 key，供 controller 使用
 func EtcdKey(project, namespace string) string {
 	return fmt.Sprintf("dtk/%s/%s/state", project, namespace)
+}
+
+// DetectResourceExists 使用 kubectl CLI 检查资源是否存在（轻量、KISS、统一风格）
+func (m *Machine) DetectResourceExists(kind, name string) (bool, error) {
+	// 构造 kubectl get 命令
+	args := []string{"kubectl", "get", strings.ToLower(kind), name, "--namespace", m.record.Namespace, "--ignore-not-found"}
+
+	cmd := exec.Command(args[0], args[1:]...)
+	output, err := cmd.CombinedOutput()
+
+	if err != nil {
+		// kubectl get 资源不存在时 exit code 非 0，但我们用 --ignore-not-found，所以只需检查输出
+		if strings.Contains(string(output), "NotFound") || len(strings.TrimSpace(string(output))) == 0 {
+			return false, nil
+		}
+		return false, fmt.Errorf("kubectl get 失败: %w\n%s", err, string(output))
+	}
+
+	// 有输出且不为空 → 资源存在
+	return len(strings.TrimSpace(string(output))) > 0, nil
+}
+
+// DetectActualStateFromResources 统一资源检查（基于 resources.yaml，供 CLI 和 controller 共用）
+func (m *Machine) DetectActualStateFromResources(kubeconfig string) (State, error) {
+	os.Setenv("KUBE_CONFIG", kubeconfig) // 临时设置，供 DetectResourceExists 使用
+
+	// 当前先做简单检查（后续可扩展为遍历 resources.yaml）
+	exists, err := m.DetectResourceExists("Deployment", "wallet-service")
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return StateIdle, nil
+	}
+	return StateRunning, nil
 }

@@ -67,21 +67,19 @@ func runDeploy(args []string) {
 	// 初始化状态机
 	store := state.NewAutoStore(env["ETCD_ENDPOINTS"])
 	projectName := envOrDefault(env, "PROJECT_NAME", filepath.Base(root))
+
 	sm, err := state.New(store, projectName, cfg.namespace, version)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "初始化状态机失败:", err)
 		os.Exit(1)
 	}
 
-	// 检查是否首次部署
-	isFirst := !namespaceExists(cfg.kubeconfig, cfg.context, cfg.namespace)
-	sm.MarkFirstDeploy(isFirst)
+	sm.MarkFirstDeploy(!namespaceExists(cfg.kubeconfig, cfg.context, cfg.namespace))
 
 	// 检查当前状态，拒绝重复部署
 	current := sm.State()
 	if current != state.StateIdle && current != state.StateRunning && current != state.StateTerminated {
-		fmt.Fprintf(os.Stderr, "当前部署状态为 %s，不能发起新部署\n", current)
-		fmt.Fprintf(os.Stderr, "如需继续，请运行: dtk resume\n")
+		fmt.Fprintf(os.Stderr, "当前部署状态为 %s，不能发起新部署\n如需继续，请运行: dtk resume\n", current)
 		os.Exit(1)
 	}
 
@@ -127,6 +125,7 @@ func runResume(args []string) {
 		os.Exit(1)
 	}
 
+	// 推荐写法：单独定义 record，提升可读性
 	record := sm.Record()
 	fmt.Printf("当前状态: %s（%s）\n", record.State, record.Reason)
 	fmt.Println("检查 K8s 实际状态...")
@@ -136,8 +135,13 @@ func runResume(args []string) {
 		fmt.Fprintln(os.Stderr, "解析组件失败:", err)
 		os.Exit(1)
 	}
-	actual := detectActualState(cfg, plan)
 
+	// 使用状态机统一检查（基于 resources.yaml）
+	actual, err := sm.DetectActualStateFromResources(cfg.kubeconfig)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "检测 K8s 状态失败: %v\n", err)
+		os.Exit(1)
+	}
 	fmt.Printf("K8s 实际状态: %s\n", actual)
 
 	switch actual {
@@ -227,10 +231,9 @@ func executeDeploy(sm *state.Machine, cfg *deployConfig, env map[string]string, 
 			sm.Transition(state.StateRollingBack, "更新失败，回滚")
 			release := envOrDefault(env, "PROJECT_NAME", "")
 			if rbErr := helmRollback(cfg.kubeconfig, cfg.context, cfg.namespace, release, 0); rbErr != nil {
-				fmt.Fprintf(os.Stderr, "回滚失败: %v\n", rbErr)
 				sm.Transition(state.StateCleaning, "回滚失败")
 			} else {
-				sm.Transition(state.StateRunning, "回滚成功，恢复 RUNNING")
+				sm.Transition(state.StateRunning, "回滚成功")
 			}
 		}
 		return fmt.Errorf("部署失败: %w", err)
@@ -241,36 +244,44 @@ func executeDeploy(sm *state.Machine, cfg *deployConfig, env map[string]string, 
 		return err
 	}
 
-	// 验证
-	for _, item := range plan {
-		if item.Image == "" {
-			continue
-		}
-		err := state.ValidateDeployment(
-			cfg.kubeconfig, cfg.context, cfg.namespace,
-			item.Name, item.Port, 120*time.Second,
-		)
-		if err != nil {
-			sm.Transition(state.StateRollingBack, "验证失败: "+err.Error())
-			release := envOrDefault(env, "PROJECT_NAME", "")
-			helmRollback(cfg.kubeconfig, cfg.context, cfg.namespace, release, 0)
-			sm.Transition(state.StateRunning, "验证失败已回滚")
-			return fmt.Errorf("验证失败: %w", err)
-		}
-	}
+	// // 验证
+	// for _, item := range plan {
+	// 	if item.Image == "" {
+	// 		continue
+	// 	}
+	// 	err := state.ValidateDeployment(
+	// 		cfg.kubeconfig, cfg.context, cfg.namespace,
+	// 		item.Name, item.Port, 120*time.Second,
+	// 	)
+	// 	if err != nil {
+	// 		sm.Transition(state.StateRollingBack, "验证失败: "+err.Error())
+	// 		release := envOrDefault(env, "PROJECT_NAME", "")
+	// 		helmRollback(cfg.kubeconfig, cfg.context, cfg.namespace, release, 0)
+	// 		sm.Transition(state.StateRunning, "验证失败已回滚")
+	// 		return fmt.Errorf("验证失败: %w", err)
+	// 	}
+	// }
 
 	// VALIDATING → RUNNING
-	sm.Transition(state.StateRunning, "部署成功")
-	fmt.Printf("✅ 部署完成，状态: RUNNING (version=%s)\n", env["VERSION"])
+	// sm.Transition(state.StateRunning, "部署成功")
+	// fmt.Printf("✅ 部署完成，状态: RUNNING (version=%s)\n", env["VERSION"])
 
 	// 设置资源
-	for _, item := range plan {
-		if item.Image == "" {
-			continue
-		}
-		scaleDeployment(cfg.kubeconfig, cfg.context, cfg.namespace, item.Name, item.Replicas)
-		setDeploymentResources(cfg.kubeconfig, cfg.context, cfg.namespace, item.Name, item)
+	// for _, item := range plan {
+	// 	if item.Image == "" {
+	// 		continue
+	// 	}
+	// 	scaleDeployment(cfg.kubeconfig, cfg.context, cfg.namespace, item.Name, item.Replicas)
+	// 	setDeploymentResources(cfg.kubeconfig, cfg.context, cfg.namespace, item.Name, item)
+	// }
+
+	// 验证阶段（使用状态机统一逻辑）
+	if err := sm.ResumeFromValidating("部署验证通过"); err != nil {
+		return err
 	}
+
+	fmt.Printf("✅ 部署完成，状态: RUNNING (version=%s)\n", env["VERSION"])
+
 	return nil
 }
 

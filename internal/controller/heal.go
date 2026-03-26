@@ -6,16 +6,19 @@ import (
 	"log/slog"
 	"os/exec"
 	"strings"
+
+	"github.com/Ixecd/dev-toolkit/internal/state"
 )
 
-// checkAndHeal 检查资源是否存在，缺失时按配置执行自愈
+// checkAndHeal 检查资源是否存在，缺失时执行自愈并同步状态机
+// 这是 controller 和 CLI 共用的核心自愈逻辑
 func (r *Reconciler) checkAndHeal(res Resource) error {
-	exists, err := resourceExists(res.Kind, res.Name, res.Namespace)
+	exists, err := r.sm.DetectResourceExists(res.Kind, res.Name)
 	if err != nil {
 		return fmt.Errorf("检查资源状态失败: %w", err)
 	}
 	if exists {
-		return nil
+		return nil // 资源正常，无需处理
 	}
 
 	slog.Warn("资源缺失，启动自愈", "kind", res.Kind, "name", res.Name, "namespace", res.Namespace)
@@ -24,10 +27,10 @@ func (r *Reconciler) checkAndHeal(res Resource) error {
 	case "recreate":
 		return r.healRecreate(res)
 	case "alert":
-		slog.Error("资源缺失告警（不自动处理）", "kind", res.Kind, "name", res.Name)
+		slog.Error("资源缺失告警（不自动处理）", "kind", res.Kind, "name", res.Name, "namespace", res.Namespace)
 		return nil
 	default:
-		slog.Warn("未知 on_missing 策略，跳过", "strategy", res.OnMissing)
+		slog.Warn("未知 on_missing 策略，跳过", "strategy", res.OnMissing, "kind", res.Kind, "name", res.Name)
 		return nil
 	}
 }
@@ -63,9 +66,11 @@ func (r *Reconciler) healRecreate(res Resource) error {
 	if err := runHelm("rollback", releaseName, fmt.Sprintf("%d", revision),
 		"--namespace", res.Namespace, "--wait",
 	); err != nil {
+		slog.Error("rollback 执行失败", "release", releaseName, "err", err)
 		return fmt.Errorf("自愈失败: %w", err)
 	}
 	slog.Info("自愈成功", "release", releaseName)
+	r.sm.Transition(state.StateRunning, "controller: rollback 自愈成功") // 必须同步状态机
 	return nil
 }
 
