@@ -550,7 +550,8 @@ func writeHelmTemplateSkeleton(outputDir, name string) error {
 
 	files := map[string]string{
 		// ── postgres StatefulSet + Service ──────────────────────────
-		filepath.Join(templatesDir, "postgres-statefulset.yaml"): fmt.Sprintf(`apiVersion: apps/v1
+		filepath.Join(templatesDir, "postgres-statefulset.yaml"): fmt.Sprintf(`{{- if .Values.postgres.enabled }}
+apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: postgres
@@ -620,10 +621,12 @@ spec:
   ports:
     - port: 5432
       targetPort: 5432
+{{- end }}
 `, name, name, name, name),
 
 		// ── etcd Deployment + Service ────────────────────────────────
-		filepath.Join(templatesDir, "etcd-deployment.yaml"): fmt.Sprintf(`apiVersion: apps/v1
+		filepath.Join(templatesDir, "etcd-deployment.yaml"): fmt.Sprintf(`{{- if .Values.etcd.enabled }}
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: etcd
@@ -695,6 +698,7 @@ spec:
     - name: peer
       port: 2380
       targetPort: 2380
+{{- end }}
 `, name),
 
 		// ── 业务服务 deployment，含 initContainers ───────────────────
@@ -707,6 +711,18 @@ metadata:
   labels:
     {{- include "%s.labels" . | nindent 4 }}
 spec:
+  initContainers:
+    {{- if .Values.postgres.enabled }}
+    - name: wait-postgres
+      image: busybox:1.35
+      command: ['sh', '-c', 'until nc -z postgres 5432; do echo waiting for postgres; sleep 2; done']
+    {{- end }}
+    {{- if .Values.etcd.enabled }}
+    - name: wait-etcd
+      image: busybox:1.35
+      command: ['sh', '-c', 'until nc -z etcd 2379; do echo waiting for etcd; sleep 2; done']
+    {{- end }}
+  {{- with .Values.imagePullSecrets }}
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
@@ -903,6 +919,12 @@ spec:
 	vb.WriteString("  enabled: false\n\n")
 	vb.WriteString("httpRoute:\n")
 	vb.WriteString("  enabled: false\n\n")
+	vb.WriteString("# 基础设施组件开关\n")
+	vb.WriteString("# 不需要 postgres 或 etcd 时改为 false，并删除 deployment.yaml 里对应的 initContainers\n")
+	vb.WriteString("postgres:\n")
+	vb.WriteString("  enabled: true\n\n")
+	vb.WriteString("etcd:\n")
+	vb.WriteString("  enabled: true\n\n")
 	vb.WriteString("resources: {}\n\n")
 	vb.WriteString("autoscaling:\n")
 	vb.WriteString("  enabled: false\n")
