@@ -197,15 +197,15 @@ ETCD_ENDPOINTS=
 	// after replaceInDir
 	fixChartYAMLs(outputDir, name)
 
-	if err := writeHelmTemplateSkeleton(outputDir, name); err != nil {
-		return err
-	}
-
 	// 🔥 ADD dir renames漏
 	if err := renameDir(filepath.Join(outputDir, "deployments", "dev-toolkit"), filepath.Join(outputDir, "deployments", name)); err != nil {
 		// ignore if not exist
 	}
 	if err := renameDir(filepath.Join(outputDir, "build", "docker", "dev-toolkit"), filepath.Join(outputDir, "build", "docker", name)); err != nil {
+	}
+
+	if err := writeHelmTemplateSkeleton(outputDir, name); err != nil {
+		return err
 	}
 
 	// 自动安装依赖
@@ -787,7 +787,8 @@ spec:
       {{- end }}
 `, name, name, name, name, name),
 
-		filepath.Join(templatesDir, "controller-rbac.yaml"): `apiVersion: v1
+		filepath.Join(templatesDir, "controller-rbac.yaml"): `{{- if .Values.controller.enabled }}
+apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: {{ include "` + name + `.fullname" . }}-controller
@@ -815,9 +816,11 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "` + name + `.fullname" . }}-controller
     namespace: {{ .Release.Namespace }}
+{{- end }}
 `,
 
-		filepath.Join(templatesDir, "resources-configmap.yaml"): `apiVersion: v1
+		filepath.Join(templatesDir, "resources-configmap.yaml"): `{{- if .Values.controller.enabled }}
+apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ include "` + name + `.fullname" . }}-resources
@@ -825,9 +828,11 @@ metadata:
 data:
   resources.yaml: |
 {{ .Values.controller.resourcesConfig | indent 4 }}
+{{ end }}
 `,
 
-		filepath.Join(templatesDir, "controller-deployment.yaml"): `apiVersion: apps/v1
+		filepath.Join(templatesDir, "controller-deployment.yaml"): `{{- if .Values.controller.enabled }}
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "` + name + `.fullname" . }}-controller
@@ -868,8 +873,8 @@ spec:
         - name: resources-config
           configMap:
             name: {{ include "` + name + `.fullname" . }}-resources
-`,
-	}
+{{- end }}
+`}
 
 	// values.yaml 单独用 Builder 生成，避免 fmt.Sprintf raw string 嵌套问题
 	var vb strings.Builder
@@ -926,6 +931,8 @@ spec:
 	vb.WriteString("  - name: ETCD_ENDPOINTS\n")
 	vb.WriteString("    value: \"etcd:2379\"\n\n")
 	vb.WriteString("controller:\n")
+	vb.WriteString("  # 配置好镜像后将 enabled 改为 true，再重新 dtk deploy\n")
+	vb.WriteString("  enabled: false\n")
 	vb.WriteString("  # TODO: 替换为你构建的 controller 镜像\n")
 	vb.WriteString("  # 镜像需包含 dtk 二进制 + kubectl + helm\n")
 	vb.WriteString("  # 构建方式参考 build/docker/controller/Dockerfile\n")
