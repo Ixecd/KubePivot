@@ -53,6 +53,8 @@ func main() {
 		runDeploy(os.Args[2:])
 	case "down":
 		runDown(os.Args[2:])
+	case "doctor":
+		runDoctor(os.Args[2:])
 	case "resume":
 		runResume(os.Args[2:])
 	case "rollback":
@@ -117,6 +119,7 @@ func printUsage() {
 
 用法:
   dtk init     --name <project> --module <module> [--output <dir>] [--template <dir>] [--force]
+  dtk doctor   检查环境依赖
   dtk deploy   [--components <path>] [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>] [--dry-run]
   dtk down     [--namespace] [--context] [--kubeconfig]   彻底下线服务
   dtk resume   [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
