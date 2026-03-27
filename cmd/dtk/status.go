@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -125,7 +126,7 @@ func printPodStatus(cfg *deployConfig) {
 		if status != "Running" {
 			icon = "✗"
 		}
-		fmt.Fprintf(w, "  %s\t%s\t%s\n", icon, podName, status)
+		fmt.Fprintf(w, "  %s %s\t%s\n", icon, podName, status)
 	}
 	w.Flush()
 }
@@ -134,7 +135,7 @@ func printPodStatus(cfg *deployConfig) {
 func printHelmStatus(cfg *deployConfig, releaseName string) {
 	helmArgs := []string{"helm", "status", releaseName,
 		"--namespace", cfg.namespace,
-		"--output", "yaml",
+		"--output", "json",
 	}
 	if cfg.kubeconfig != "" {
 		helmArgs = append(helmArgs, "--kubeconfig", cfg.kubeconfig)
@@ -149,17 +150,29 @@ func printHelmStatus(cfg *deployConfig, releaseName string) {
 		return
 	}
 
-	revision := extractYAMLField(string(out), "version")
-	status := extractYAMLField(string(out), "status")
-	updated := extractYAMLField(string(out), "last_deployed")
+	var result struct {
+		Info struct {
+			Status       string `json:"status"`
+			LastDeployed string `json:"last_deployed"`
+		} `json:"info"`
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		fmt.Println("  （解析 helm status 失败）")
+		return
+	}
+
+	// 时间格式化
+	updated := result.Info.LastDeployed
+	if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
+		updated = t.Format("2006-01-02 15:04:05")
+	}
 
 	w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
 	fmt.Fprintf(w, "  Release:\t%s\n", releaseName)
-	fmt.Fprintf(w, "  Revision:\t%s\n", revision)
-	fmt.Fprintf(w, "  Status:\t%s\n", status)
-	if updated != "" {
-		fmt.Fprintf(w, "  Updated:\t%s\n", updated)
-	}
+	fmt.Fprintf(w, "  Revision:\t%d\n", result.Version)
+	fmt.Fprintf(w, "  Status:\t%s\n", result.Info.Status)
+	fmt.Fprintf(w, "  Updated:\t%s\n", updated)
 	w.Flush()
 }
 
