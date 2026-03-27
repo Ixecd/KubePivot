@@ -59,6 +59,8 @@ func main() {
 		runDoctor(os.Args[2:])
 	case "history":
 		runHistory(os.Args[2:])
+	case "diff":
+		runDiff(os.Args[2:])
 	case "resume":
 		runResume(os.Args[2:])
 	case "status":
@@ -127,8 +129,9 @@ func printUsage() {
   dtk init     --name <project> --module <module> [--output <dir>] [--template <dir>] [--force]
   dtk doctor   检查环境依赖
   dtk deploy   [--components <path>] [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>] [--dry-run]
-  dtk status   [--namespace] [--context] [--kubeconfig] [--history]  查看部署状态 
-  dtk history  [-n 20] [--namespace] [--context]   查看部署历史 
+  dtk status   [--namespace] [--context] [--kubeconfig] [--history]  查看部署状态
+  dtk history  [-n 20] [--namespace] [--context]   查看部署历史
+  dtk diff     [--from N] [--to M] [--namespace] [--context]   对比两个版本的配置差异
   dtk down     [--namespace] [--context] [--kubeconfig]   彻底下线服务
   dtk resume   [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
   dtk rollback [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
