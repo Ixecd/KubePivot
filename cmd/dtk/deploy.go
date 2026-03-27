@@ -236,58 +236,38 @@ func executeDeploy(sm *state.Machine, cfg *deployConfig, env map[string]string, 
 	}
 
 	makeEnv := buildMakeEnv(env, cfg, plan)
+	deployOK := false
 	if err := runCmd(root, makeEnv, "make", "deploy.full"); err != nil {
-		if sm.IsFirstDeploy() {
-			sm.Transition(state.StateCleaning, "首次部署失败，清理 namespace")
-			deleteNamespace(cfg.kubeconfig, cfg.context, cfg.namespace)
-			sm.Transition(state.StateIdle, "清理完成")
-		} else {
-			sm.Transition(state.StateRollingBack, "更新失败，回滚")
-			release := envOrDefault(env, "PROJECT_NAME", "")
-			if rbErr := helmRollback(cfg.kubeconfig, cfg.context, cfg.namespace, release); rbErr != nil {
-				sm.Transition(state.StateCleaning, "回滚失败")
+		// 检查是否是 SSA 冲突，是的话自动清除 managedFields 重试一次
+		if isSSAConflict(err.Error()) {
+			if retryErr := retryDeployWithSSAFix(cfg, makeEnv, root); retryErr == nil {
+				deployOK = true
 			} else {
-				sm.Transition(state.StateRunning, "回滚成功")
+				err = retryErr
 			}
 		}
-		return fmt.Errorf("部署失败: %w", err)
+		if !deployOK {
+			if sm.IsFirstDeploy() {
+				sm.Transition(state.StateCleaning, "首次部署失败，清理 namespace")
+				deleteNamespace(cfg.kubeconfig, cfg.context, cfg.namespace)
+				sm.Transition(state.StateIdle, "清理完成")
+			} else {
+				sm.Transition(state.StateRollingBack, "更新失败，回滚")
+				release := envOrDefault(env, "PROJECT_NAME", "")
+				if rbErr := helmRollback(cfg.kubeconfig, cfg.context, cfg.namespace, release); rbErr != nil {
+					sm.Transition(state.StateCleaning, "回滚失败")
+				} else {
+					sm.Transition(state.StateRunning, "回滚成功")
+				}
+			}
+			return fmt.Errorf("部署失败: %w", err)
+		}
 	}
 
 	// DEPLOYING → VALIDATING
 	if err := sm.Transition(state.StateValidating, "验证部署结果"); err != nil {
 		return err
 	}
-
-	// // 验证
-	// for _, item := range plan {
-	// 	if item.Image == "" {
-	// 		continue
-	// 	}
-	// 	err := state.ValidateDeployment(
-	// 		cfg.kubeconfig, cfg.context, cfg.namespace,
-	// 		item.Name, item.Port, 120*time.Second,
-	// 	)
-	// 	if err != nil {
-	// 		sm.Transition(state.StateRollingBack, "验证失败: "+err.Error())
-	// 		release := envOrDefault(env, "PROJECT_NAME", "")
-	// 		helmRollback(cfg.kubeconfig, cfg.context, cfg.namespace, release, 0)
-	// 		sm.Transition(state.StateRunning, "验证失败已回滚")
-	// 		return fmt.Errorf("验证失败: %w", err)
-	// 	}
-	// }
-
-	// VALIDATING → RUNNING
-	// sm.Transition(state.StateRunning, "部署成功")
-	// fmt.Printf("✅ 部署完成，状态: RUNNING (version=%s)\n", env["VERSION"])
-
-	// 设置资源
-	// for _, item := range plan {
-	// 	if item.Image == "" {
-	// 		continue
-	// 	}
-	// 	scaleDeployment(cfg.kubeconfig, cfg.context, cfg.namespace, item.Name, item.Replicas)
-	// 	setDeploymentResources(cfg.kubeconfig, cfg.context, cfg.namespace, item.Name, item)
-	// }
 
 	// 验证阶段（使用状态机统一逻辑）
 	if err := sm.ResumeFromValidating("部署验证通过"); err != nil {

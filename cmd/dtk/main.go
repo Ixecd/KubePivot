@@ -2,17 +2,19 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"github.com/Ixecd/dev-toolkit/internal/controller"
 	"github.com/Ixecd/dev-toolkit/internal/logger"
 	"github.com/Ixecd/dev-toolkit/internal/planner"
 	"github.com/Ixecd/dev-toolkit/internal/scaffold"
-	"github.com/Ixecd/dev-toolkit/internal/controller"
 )
 
 func expandHome(path string) string {
@@ -206,8 +208,16 @@ func runCmd(dir string, env []string, name string, args ...string) error {
 	cmd.Dir = dir
 	cmd.Env = env
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+
+	// 用 TeeWriter 同时输出到终端和捕获 stderr 内容
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
+
+	if err := cmd.Run(); err != nil {
+		// 把 stderr 内容带进 error，供上层检测 SSA 冲突等关键词
+		return fmt.Errorf("%w\n%s", err, stderrBuf.String())
+	}
+	return nil
 }
 
 func printPlan(plan []planner.Plan) {
