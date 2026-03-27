@@ -567,3 +567,181 @@ func (s *testLocalStore) Delete(project, namespace string) error {
 func (s *testLocalStore) path(project, namespace string) string {
 	return filepath.Join(s.baseDir, project, namespace+".json")
 }
+
+// ── ForceState 测试 ───────────────────────────────────────────────────────────
+
+func TestForceState_FromAnyState(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(*Machine)
+		from  State
+	}{
+		{"from IDLE", func(m *Machine) {}, StateIdle},
+		{"from DEPLOYING", func(m *Machine) {
+			m.Transition(StateInitializing, "")
+			m.Transition(StateDeploying, "")
+		}, StateDeploying},
+		{"from TERMINATED", func(m *Machine) {
+			m.Transition(StateInitializing, "")
+			m.Transition(StateDeploying, "")
+			m.Transition(StateValidating, "")
+			m.Transition(StateRunning, "")
+			m.Transition(StateTerminated, "")
+		}, StateTerminated},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sm := newTestMachine(t)
+			tc.setup(sm)
+			assert.Equal(t, tc.from, sm.State())
+
+			err := sm.ForceState(StateRunning, "强制恢复")
+			require.NoError(t, err)
+			assert.Equal(t, StateRunning, sm.State())
+			assert.Equal(t, "强制恢复", sm.Record().Reason)
+		})
+	}
+}
+
+func TestForceState_HistoryMarkedForce(t *testing.T) {
+	sm := newTestMachine(t)
+	sm.Transition(StateInitializing, "")
+
+	err := sm.ForceState(StateRunning, "emergency recovery")
+	require.NoError(t, err)
+
+	history := sm.Record().History
+	last := history[len(history)-1]
+	assert.Contains(t, last.Reason, "[force]")
+	assert.Equal(t, StateRunning, last.To)
+}
+
+func TestForceState_PersistsAcrossRestart(t *testing.T) {
+	store := newTestLocalStore(t)
+	sm, _ := New(store, "myapp", "myapp", "v0.1.0")
+	sm.Transition(StateInitializing, "")
+	sm.ForceState(StateRunning, "强制恢复")
+
+	sm2, _ := New(store, "myapp", "myapp", "v0.1.0")
+	assert.Equal(t, StateRunning, sm2.State())
+}
+
+// ── localStore 直接测试 ───────────────────────────────────────────────────────
+
+func TestLocalStore_DirectSaveLoad(t *testing.T) {
+	// 用真实 localStore，覆盖 store.go 里的实际实现
+	// 通过 NewAutoStore 空 endpoints 触发
+	store := NewAutoStore("")
+	record := &DeployRecord{
+		Project:   "test",
+		Namespace: "test",
+		State:     StateRunning,
+		Version:   "v1.0.0",
+		Reason:    "测试",
+	}
+
+	err := store.Save(record)
+	require.NoError(t, err)
+
+	loaded, err := store.Load("test", "test")
+	require.NoError(t, err)
+	assert.Equal(t, StateRunning, loaded.State)
+	assert.Equal(t, "v1.0.0", loaded.Version)
+
+	// 清理
+	store.Delete("test", "test")
+}
+
+func TestLocalStore_LoadNotExist(t *testing.T) {
+	store := NewAutoStore("")
+	_, err := store.Load("nonexistent", "nonexistent")
+	assert.Error(t, err)
+}
+
+func TestLocalStore_DeleteNotExist(t *testing.T) {
+	store := NewAutoStore("")
+	err := store.Delete("nonexistent", "nonexistent")
+	assert.NoError(t, err)
+}
+
+func TestNewAutoStore_EmptyEndpoints_ReturnsLocalStore(t *testing.T) {
+	store := NewAutoStore("")
+	assert.NotNil(t, store)
+	// 验证是本地文件 store：能正常 Save/Load
+	record := &DeployRecord{
+		Project: "autostore-test", Namespace: "ns",
+		State: StateIdle,
+	}
+	require.NoError(t, store.Save(record))
+	loaded, err := store.Load("autostore-test", "ns")
+	require.NoError(t, err)
+	assert.Equal(t, StateIdle, loaded.State)
+	store.Delete("autostore-test", "ns")
+}
+
+// ── localPath / etcdKey 测试 ──────────────────────────────────────────────────
+
+func TestLocalPath_Format(t *testing.T) {
+	path, err := localPath("myapp", "production")
+	require.NoError(t, err)
+	assert.Contains(t, path, ".dtk")
+	assert.Contains(t, path, "myapp")
+	assert.Contains(t, path, "production.json")
+}
+
+func TestLocalPath_DifferentProjects(t *testing.T) {
+	p1, _ := localPath("app1", "ns1")
+	p2, _ := localPath("app2", "ns1")
+	p3, _ := localPath("app1", "ns2")
+	assert.NotEqual(t, p1, p2)
+	assert.NotEqual(t, p1, p3)
+}
+
+func TestEtcdKeyFunc_Format(t *testing.T) {
+	key := etcdKey("myapp", "production")
+	assert.Equal(t, "dtk/myapp/production/state", key)
+}
+
+// ── marshalRecord / unmarshalRecord ───────────────────────────────────────────
+
+func TestMarshalUnmarshal_RoundTrip(t *testing.T) {
+	original := &DeployRecord{
+		Project:   "myapp",
+		Namespace: "production",
+		State:     StateRunning,
+		Version:   "v1.2.3",
+		IsFirst:   false,
+		Reason:    "部署成功",
+	}
+
+	data, err := marshalRecord(original)
+	require.NoError(t, err)
+	assert.NotEmpty(t, data)
+
+	loaded, err := unmarshalRecord(data)
+	require.NoError(t, err)
+	assert.Equal(t, original.Project, loaded.Project)
+	assert.Equal(t, original.State, loaded.State)
+	assert.Equal(t, original.Version, loaded.Version)
+	assert.Equal(t, original.Reason, loaded.Reason)
+}
+
+func TestUnmarshalRecord_InvalidJSON(t *testing.T) {
+	_, err := unmarshalRecord([]byte("not json"))
+	assert.Error(t, err)
+}
+
+// ── autoMigrateToEtcd 测试 ────────────────────────────────────────────────────
+
+func TestAutoMigrateToEtcd_LocalStoreNoMigration(t *testing.T) {
+	// store 是 localStore，不应该触发迁移
+	store := newTestLocalStore(t)
+	record := &DeployRecord{
+		Project: "myapp", Namespace: "ns",
+		State: StateRunning,
+	}
+	// 不应该报错，直接跳过
+	err := autoMigrateToEtcd(store, "myapp", "ns", record)
+	assert.NoError(t, err)
+}
