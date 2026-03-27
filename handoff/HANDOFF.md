@@ -25,7 +25,7 @@
 ### 1.1 dev-toolkit（dtk）
 
 **仓库**：github.com/Ixecd/dev-toolkit
-**当前版本**：v0.6.0
+**当前版本**：v0.8.0
 **定位**：Go 云原生项目脚手架，`dtk init` 生成完整项目骨架，`dtk deploy` 一键 AI 规划 + K8s 部署 + 状态追踪 + 自动自愈
 
 **命令全览**：
@@ -38,6 +38,7 @@ dtk release       --version v1.0.0 [--deploy] [--push=false]
 dtk down          彻底下线，删除所有资源
 dtk status        [--history] 查看部署状态
 dtk history       [-n 20] 查看状态转换历史
+dtk diff          [--from N] [--to M] 对比两个版本配置差异
 dtk doctor        检查环境依赖
 dtk controller start  （在 controller pod 内部运行）
 ```
@@ -46,61 +47,32 @@ dtk controller start  （在 controller pod 内部运行）
 ```
 dev-toolkit/
 ├── cmd/dtk/
-│   ├── main.go        # CLI 入口
-│   ├── deploy.go      # runDeploy/runResume/runRollback
-│   ├── runner.go      # kubectl/helm 辅助
-│   ├── release.go     # runRelease
-│   ├── down.go        # runDown
-│   ├── status.go      # runStatus
-│   ├── history.go     # runHistory
-│   ├── doctor.go      # runDoctor
-│   ├── ssa.go         # SSA 冲突检测与修复
-│   └── preflight.go   # 前置检查（含 checkPendingRollback）
+│   ├── main.go         # CLI 入口
+│   ├── deploy.go       # runDeploy/runResume/runRollback
+│   ├── runner.go       # kubectl/helm 辅助
+│   ├── release.go      # runRelease
+│   ├── down.go         # runDown
+│   ├── status.go       # runStatus
+│   ├── history.go      # runHistory
+│   ├── diff.go         # runDiff
+│   ├── doctor.go       # runDoctor
+│   ├── ssa.go          # SSA 冲突 + 镜像拉取失败检测
+│   └── preflight.go    # 前置检查（checkHelmReleaseState）
 ├── internal/
-│   ├── planner/       # AI 规划
-│   ├── scaffold/      # 项目生成
-│   │   ├── scaffold.go
-│   │   ├── helm.go
-│   │   ├── handoff.go
-│   │   ├── ai_coding_guide.go
-│   │   └── ...
-│   ├── state/         # 状态机
-│   │   ├── state.go   # FSM + ForceState + ResumeFromValidating
-│   │   ├── store.go   # etcd/本地文件 + 自动迁移
-│   │   ├── validator.go
-│   │   └── state_test.go  # 47 个单元测试
-│   ├── controller/    # A2 Reconciliation Controller
-│   │   ├── controller.go
-│   │   ├── reconciler.go
-│   │   ├── etcd_watcher.go  # 指数退避重连
-│   │   ├── resources.go     # DetectResourceExists / DetectActualState
-│   │   └── heal.go
-│   └── logger/
-```
-
-### 1.2 web3-blitz
-
-**仓库**：github.com/Ixecd/web3-blitz
-**当前版本**：v0.1.10
-**定位**：Go + K8s 充提币系统，BTC/ETH，作为 dtk 的活体验证 demo
-
-**K8s 环境（orbstack 本地集群）**：
-```
-namespace: web3-blitz
-pods：
-  bitcoind              BTC 节点（regtest）
-  geth-rpc              ETH 节点（dev mode）
-  postgres-0            业务数据库（StatefulSet + PVC）
-  etcd                  分布式协调
-  wallet-service        核心业务服务
-  web3-blitz-controller A2 Reconciliation Controller
+│   ├── planner/        # AI 规划（20 个单元测试，100% 覆盖）
+│   ├── scaffold/       # 项目生成（34 个单元测试）
+│   ├── state/          # 状态机（57 个单元测试）
+│   └── controller/     # A2 Reconciliation Controller（20 个单元测试）
+│       ├── controller.go
+│       ├── reconciler.go
+│       ├── etcd_watcher.go  # 指数退避重连
+│       ├── resources.go     # Detector 接口 + DetectActualState
+│       └── heal.go          # HelmClient 接口 + healRecreate
 ```
 
 ---
 
 ## 二、状态机设计
-
-### 2.1 状态流转
 
 ```
 IDLE → INITIALIZING → DEPLOYING → VALIDATING → RUNNING
@@ -110,55 +82,47 @@ IDLE → INITIALIZING → DEPLOYING → VALIDATING → RUNNING
 下线   → TERMINATED
 ```
 
-### 2.2 持久化
-
-- etcd 优先（key: `dtk/<project>/<ns>/state`）
-- 无 etcd 降级到 `~/.dtk/state/<project>/<ns>.json`
-- 配置了 etcd 但本地有状态 → 自动迁移到 etcd（state.New() 内检测）
-
-### 2.3 特殊方法
-
-- `ResumeFromValidating`：只允许从 VALIDATING 调用
-- `ForceState`：跳过转换表，专用于异常恢复（如 pending-rollback 清理）
+- etcd 优先，降级到 `~/.dtk/state/<project>/<ns>.json`
+- 配置了 etcd 但本地有状态 → 自动迁移
+- `ForceState()` 跳过转换表，专用于异常恢复
+- `ResumeFromValidating()` 只允许从 VALIDATING 调用
 
 ---
 
-## 三、A2 Reconciliation Controller
-
-### 3.1 架构
+## 三、A2 Controller 架构
 
 ```
-dtk deploy（CLI）→ 写状态到 etcd
-                        ↓
-web3-blitz-controller（K8s pod）
-    ├── etcd Watch（事件驱动，断线自动指数退避重连）
-    └── 8s 周期 Reconcile（兜底）
+dtk deploy → etcd
+                ↓
+controller pod
+    ├── etcd Watch（指数退避重连，1s→30s）
+    └── 8s 周期 Reconcile
             ↓
-        检测资源缺失 → helm rollback → 自动恢复（10s 内）
+        资源缺失 → helm rollback → 10s 内恢复
 ```
 
-### 3.2 职责边界
-
+**职责边界**：
 - `internal/state`：纯 FSM，零 K8s 依赖
-- `internal/controller`：K8s 检测 + 自愈
+- `internal/controller`：K8s 检测 + 自愈，Detector/HelmClient 接口可 mock
 - `cmd/dtk`：CLI 入口
 
 ---
 
 ## 四、接下来要做的事
 
-### P1（下一步）
+### P1（最优先）
 
-- controller 单元测试
-- 多服务支持
-- `dtk diff` 版本对比
-- 边界 case 加固（pending-install/failed、镜像不存在）
-- web3-blitz deploy.mk 同步 dtk 最新版本
+**AI 扫描组件**（下一个大功能）：
+- `dtk deploy` 接入真实 LLM，扫描代码仓库自动生成/更新 `components.yaml`
+- 可配置：默认直接 AI 规划部署，也可只给建议
+- 设计需要先对齐：LLM 调哪个 API？prompt 怎么设计？输出格式？
+
+**多服务支持**（需要单独对齐设计）
 
 ### P2
 
-- `ARCH` 自动检测
-- 统一进度输出格式
+- 统一进度输出格式，带时间戳
+- 关键步骤耗时打印
 - `dtk init --dry-run`
 
 ---
@@ -171,25 +135,14 @@ cd ~/web3-blitz && dtk deploy
 
 # 查看状态
 dtk status
-dtk status --history
 dtk history
-dtk history -n 5
+dtk diff
 
 # 环境检查
 dtk doctor
 
 # 查 pods
 kubectl get pods -n web3-blitz
-
-# 查日志
-kubectl logs -n web3-blitz deployment/wallet-service
-kubectl logs -n web3-blitz deployment/web3-blitz-controller
-
-# port-forward
-kubectl port-forward -n web3-blitz deployment/wallet-service 2113:2113
-
-# 查 helm 历史
-helm history web3-blitz -n web3-blitz
 
 # 手动重置状态机
 python3 -c "
@@ -201,11 +154,6 @@ d['reason']='手动重置'
 json.dump(d,open(p,'w'),indent=2)
 "
 
-# 构建 controller 镜像
-cd ~/dev-toolkit
-docker build --no-cache -f build/docker/controller/Dockerfile \
-  -t qingchun22/web3-blitz-controller-arm64:v<x.x.x> .
-
 # 运行测试
 cd ~/dev-toolkit && go test ./...
 ```
@@ -216,10 +164,7 @@ cd ~/dev-toolkit && go test ./...
 
 ```
 dev-toolkit/snapshots/
-└── 最新：SNAPSHOT-dtk-2026-03-27-v0.6.0.md
-
-web3-blitz/snapshots/
-└── 最新：SNAPSHOT-web3-blitz-2026-03-25-controller.md
+└── 最新：SNAPSHOT-dtk-2026-03-27-v0.8.0.md
 ```
 
 ---
@@ -232,6 +177,8 @@ web3-blitz/snapshots/
 遇到 Bug，先想清楚根因再给方案。
 遇到他说"不对"，认真听，他通常是对的。
 
-路线图：v0.6.0（当前）→ v0.8.0（稳到无坑）→ v0.9.0（体验拉满）→ v1.0.0（封神）
+路线图：v0.8.0（当前）→ v0.9.0（AI + 体验）→ v1.0.0（封神）
+
+下一个最重要的功能是 **AI 扫描组件接入真实 LLM**，开始之前先和 qc 对齐设计。
 
 祝你们合作愉快 🎉
