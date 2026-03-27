@@ -9,9 +9,22 @@ import (
 	"github.com/Ixecd/dev-toolkit/internal/state"
 )
 
+// HelmClient helm 操作接口
+type HelmClient interface {
+	History(release, namespace string) ([]HelmRelease, error)
+	Rollback(release, namespace string, revision int) error
+}
+
+type HelmRelease struct {
+	Revision int `json:"revision"`
+}
+
+// RealHelmClient 真实实现
+type RealHelmClient struct{}
+
 // checkAndHeal 检查资源是否存在，缺失时执行自愈并同步状态机
 func (r *Reconciler) checkAndHeal(res Resource) error {
-	exists, err := DetectResourceExists(r.kubeconfig, res.Namespace, res.Kind, res.Name)
+	exists, err := r.detector.ResourceExists(res.Kind, res.Name, res.Namespace)
 	if err != nil {
 		return fmt.Errorf("检查资源状态失败: %w", err)
 	}
@@ -22,7 +35,7 @@ func (r *Reconciler) checkAndHeal(res Resource) error {
 	slog.Warn("资源缺失，启动自愈", "kind", res.Kind, "name", res.Name, "namespace", res.Namespace)
 
 	switch res.OnMissing {
-	case "recreate":
+	case "auto-heal":
 		return r.healRecreate(res)
 	case "alert":
 		slog.Error("资源缺失告警（不自动处理）", "kind", res.Kind, "name", res.Name, "namespace", res.Namespace)
@@ -37,27 +50,26 @@ func (r *Reconciler) checkAndHeal(res Resource) error {
 func (r *Reconciler) healRecreate(res Resource) error {
 	releaseName := getenv("PROJECT_NAME", res.Name)
 
-	// 查最新 revision 号
-	revision, err := getLatestRevision(releaseName, res.Namespace)
-	if err != nil || revision == 0 {
-		slog.Warn("查不到 helm release，无法自愈", "release", releaseName, "err", err)
+	history, err := r.helm.History(releaseName, res.Namespace)
+	if err != nil || len(history) == 0 {
+		slog.Warn("查不到 helm release，无法自愈", "release", releaseName)
 		return nil
 	}
 
-	// revision=1 时 target=0，helm rollback to 0 等价于重装，可接受
-	target := revision - 1
-	slog.Info("执行 helm rollback 恢复资源", "release", releaseName, "from", revision, "to", target)
-	if err := runHelm("rollback", releaseName, fmt.Sprintf("%d", target),
-		"--namespace", res.Namespace, "--wait",
-	); err != nil {
-		slog.Error("rollback 执行失败", "release", releaseName, "err", err)
+	latest := history[len(history)-1].Revision
+	target := latest - 1
+
+	slog.Info("执行 helm rollback", "release", releaseName, "from", latest, "to", target)
+	if err := r.helm.Rollback(releaseName, res.Namespace, target); err != nil {
+		slog.Error("rollback 执行失败", "err", err)
 		return fmt.Errorf("自愈失败: %w", err)
 	}
 
-	slog.Info("自愈成功，同步状态机", "release", releaseName)
-	if err := r.sm.Transition(state.StateRunning, "controller: rollback 自愈成功"); err != nil {
-		// 状态机同步失败不阻塞自愈结果，但必须记录
-		slog.Error("状态机同步失败", "err", err)
+	// 只有不在 RUNNING 时才需要同步
+	if r.sm.State() != state.StateRunning {
+		if err := r.sm.Transition(state.StateRunning, "controller: rollback 自愈成功"); err != nil {
+			slog.Error("状态机同步失败", "err", err)
+		}
 	}
 	return nil
 }
@@ -90,4 +102,22 @@ func runHelm(args ...string) error {
 		return fmt.Errorf("%w\n%s", err, string(out))
 	}
 	return nil
+}
+
+func (h *RealHelmClient) History(release, namespace string) ([]HelmRelease, error) {
+	out, err := runHelmOutput("history", release, "--namespace", namespace, "--output", "json")
+	if err != nil {
+		return nil, fmt.Errorf("helm history 失败: %w", err)
+	}
+	var history []HelmRelease
+	if err := json.Unmarshal(out, &history); err != nil {
+		return nil, fmt.Errorf("解析 helm history 失败: %w", err)
+	}
+	return history, nil
+}
+
+func (h *RealHelmClient) Rollback(release, namespace string, revision int) error {
+	return runHelm("rollback", release, fmt.Sprintf("%d", revision),
+		"--namespace", namespace, "--wait",
+	)
 }

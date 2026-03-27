@@ -15,13 +15,31 @@ type Resource struct {
 	Kind      string `yaml:"kind"`
 	Name      string `yaml:"name"`
 	Namespace string `yaml:"namespace"`
-	OnMissing string `yaml:"on_missing"`
-	MaxRetry  int    `yaml:"max_retry"`
+	OnMissing string `yaml:"on-missing"`
+	MaxRetry  int    `yaml:"max-retry"`
 	Fallback  string `yaml:"fallback"`
 }
 
 type ResourcesConfig struct {
 	Resources []Resource `yaml:"resources"`
+}
+
+// Detector K8s 资源检测接口，测试时可注入 mock
+type Detector interface {
+	ResourceExists(kind, name, namespace string) (bool, error)
+}
+
+// KubectlDetector 真实实现，用 kubectl CLI
+type KubectlDetector struct {
+	kubeconfig string
+}
+
+func NewKubectlDetector(kubeconfig string) Detector {
+	return &KubectlDetector{kubeconfig: kubeconfig}
+}
+
+func (d *KubectlDetector) ResourceExists(kind, name, namespace string) (bool, error) {
+	return DetectResourceExists(d.kubeconfig, namespace, kind, name)
 }
 
 // LoadResources 加载资源配置文件

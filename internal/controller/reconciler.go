@@ -14,6 +14,8 @@ type Reconciler struct {
 	sm         *state.Machine
 	kubeconfig string
 	resources  *ResourcesConfig
+	detector   Detector
+	helm       HelmClient
 }
 
 func NewReconciler(sm *state.Machine, kubeconfig string) *Reconciler {
@@ -27,6 +29,7 @@ func NewReconciler(sm *state.Machine, kubeconfig string) *Reconciler {
 		sm:         sm,
 		kubeconfig: kubeconfig,
 		resources:  resources,
+		detector: NewKubectlDetector(kubeconfig),
 	}
 }
 
