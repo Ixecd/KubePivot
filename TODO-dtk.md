@@ -1,7 +1,7 @@
 # TODO — dev-toolkit 路线图
 
 > 从"自用脚手架"走向"真正可推广的 Go 云原生工具"。
-> 按优先级排列，持续更新。当前：v0.5.0
+> 按优先级排列，持续更新。当前：v0.5.1
 
 ---
 
@@ -13,149 +13,106 @@
 - [x] 新增 `configs/resources.yaml` 配置化资源监控
 - [x] Reconciliation Loop（etcd Watch + 定期 Reconcile）
 - [x] 自动自愈机制（helm rollback 恢复缺失资源）
-- [x] `DetectResourceExists` / `DetectActualState` 移入 controller 包，state 包彻底解耦（零 K8s 依赖）
-- [x] `LoadResources` 签名修复，路径优先级：参数 > 环境变量 > 默认路径
-- [x] `getLatestRevision` 修复（去掉 `--max 1`，正确取最新 revision）
-- [x] controller rollback 后同步状态机（`sm.Transition` 错误处理）
-- [x] controller graceful shutdown（`sync.WaitGroup` 替换 `time.Sleep`）
-- [x] 环境变量统一：`KUBE_CONFIG`（原 controller.go 误用 `KUBECONFIG`）
-- [x] `startEtcdWatcher` goroutine 纳入 WaitGroup 管控
+- [x] state 包彻底解耦（零 K8s 依赖），K8s 检测逻辑归入 controller 包
+- [x] controller graceful shutdown（sync.WaitGroup，etcdWatcher 纳入管控）
 - [x] 状态机单元测试扩充至 47 个（全转换表覆盖 + 副作用验证 + 场景测试）
-- [ ] `startEtcdWatcher` 重连机制（当前断线后不恢复，只依赖定时对账）
+- [x] `RUNNING → ROLLING_BACK` 补入转换表（e2e 测试发现）
+- [ ] `startEtcdWatcher` 重连机制（断线后不恢复，只依赖定时对账）
 - [ ] SSA 冲突自动清除 managedFields 重试
-- [ ] helm rollback 受 SSA 冲突影响的处理
 - [ ] helm pending-rollback 死锁自动处理（dtk deploy 前置检查）
+- [ ] controller 自愈流程端到端验证（需构建 controller 镜像）
 
 ### scaffold（dtk init）
 
-- [x] 生成 `handoff/HANDOFF.md`，自动填充日期、仓库、命令速查、目录结构
-- [x] 生成 `configs/resources.yaml`，含支持的 kind 列表和注释示例
-- [x] 生成 controller yaml 骨架（rbac / deployment / configmap），全部带 `enabled` 开关
-- [x] `NOTES.txt` 放入 `templates/` 目录，部署后显示组件状态和快速访问命令
-- [x] postgres / etcd 加 `enabled` 开关，默认 true，关闭时 initContainers 自动跳过
-- [x] 基础设施组件命名加项目名前缀（`{name}-postgres`、`{name}-etcd`），避免 namespace 冲突
-- [x] values.yaml 用 `strings.Builder` 生成，修复 `fmt.Sprintf` raw string 嵌套 bug
-- [x] `--set-file controller.resourcesConfig=configs/resources.yaml` 注入 deploy.mk
-- [x] `controller.enabled: false` 默认关闭，避免首次 deploy 因镜像不存在卡住
-- [x] `httpRoute.enabled` 补入 values.yaml，修复 helm render nil pointer
-- [x] 抽出独立 `internal/scaffold/helm.go`
-- [x] post-init 提示：上线前收紧 RBAC、替换 controller 镜像
+- [x] 生成 `handoff/HANDOFF.md` + `handoff/AI-CODING-GUIDE.md`
+- [x] 生成 `configs/resources.yaml`
+- [x] 生成 controller yaml 骨架，带 enabled 开关
+- [x] NOTES.txt 显示组件状态
+- [x] postgres / etcd 加 enabled 开关
+- [x] 基础设施组件命名加项目名前缀
+- [x] `controller.enabled: false` 默认关闭
 - [ ] `dtk init --dry-run` 预览生成的文件结构
 
-### dtk down
+### CLI 命令
 
-- [x] 新增 `dtk down` 命令：删除 ClusterRole/ClusterRoleBinding、namespace、本地状态文件
-- [x] 二次确认提示，列出即将删除的所有资源
-- [x] 部分失败继续执行，最后汇报所有错误
+- [x] `dtk deploy` 完整状态机流程
+- [x] `dtk resume` 从中断点恢复
+- [x] `dtk rollback` 手动回滚（修复 revision/CLEANING bug）
+- [x] `dtk release` 打版本 tag，可选触发部署
+- [x] `dtk down` 彻底下线，二次确认
+- [x] `dtk doctor` 环境依赖检查
+- [x] `dtk status` 三层状态信息，`--history` 查历史
+- [ ] `dtk status` Helm Status 字段解析修复（yaml 嵌套层级问题）
 
-### 集成测试（剩余）
+### 集成测试
 
-- [ ] 首次部署失败 → 验证 ns 被清理，状态回 IDLE（端到端）
-- [ ] 更新失败 → 验证自动回滚，状态回 RUNNING（端到端）
-- [ ] 手动删除 deployment → controller 自动自愈（核心验证）
-- [ ] controller pod 挂掉后重启仍能继续对账
-- [ ] 用 web3-blitz 作为真实 demo 完整跑通 A2 流程
-- [ ] `internal/controller/` 单元测试（heal / reconciler）
+- [x] 端到端全流程验证（init/deploy/status/doctor/rollback/release/down）
+- [ ] controller 自愈端到端验证
+- [ ] 首次部署失败 → ns 被清理，状态回 IDLE
+- [ ] 更新失败 → 自动回滚，状态回 RUNNING
+- [ ] `internal/controller/` 单元测试
 
 ---
 
-## 🟡 P1 — 健壮性
+## 🟡 P1 — 健壮性（v0.6.0 → v0.8.0）
+
+### 稳定性
+- [ ] helm pending-rollback 死锁自动处理
+- [ ] SSA 冲突自动清除
+- [ ] `startEtcdWatcher` 断线重连
+- [ ] `dtk status` Helm Status 字段修复
+- [ ] `dtk status` pod 名字前空格修复（tabwriter 对齐）
 
 ### 多服务支持
-- [ ] 支持一个项目多个服务（前端、后端、worker）
+- [ ] 支持一个项目多个服务
 - [ ] 定义服务依赖顺序
-- [ ] 一条命令部署整组服务，按依赖顺序执行
 - [ ] 任意一个服务失败，整组回滚
 
-### 版本管理（剩余）
+### 版本管理
 - [ ] `dtk history` 查看版本历史
-- [ ] `dtk diff` 对比两个版本的配置差异
-- [ ] VERSION 变更校验：`dtk deploy` 时如果本地代码有未提交改动，警告用户
+- [ ] `dtk diff` 对比两个版本配置差异
 
 ### 边界 case 加固
 - [ ] deploy 时镜像不存在的处理
-- [ ] KUBE_CONTEXT 为空或无效的处理
-- [ ] helm release 状态异常时的处理（pending-install / failed 等）
+- [ ] helm release 状态异常处理（pending-install / failed）
 - [ ] etcd 连接断开时的降级处理
-- [ ] `resources.yaml` 为空时 `DetectActualState` 策略（当前报错，是否降级为 RUNNING？）
 
 ### 测试覆盖
-- [ ] `internal/scaffold/` 核心逻辑单元测试：replaceInDir、fixChartYAMLs、writeGoMod
-- [ ] `internal/planner/` LoadComponents 解析测试：覆盖空 image、带引号、缺字段等边界情况
-- [ ] `dtk init` e2e 测试：生成项目后执行 `go build ./...`，验证生成物可编译
-- [ ] CI 加 `go test -race -cover`，覆盖率不低于 60%
+- [ ] `internal/scaffold/` 核心逻辑单元测试
+- [ ] `internal/planner/` 解析测试
+- [ ] `dtk init` e2e 测试：生成物可编译验证
+- [ ] CI 加 `go test -race -cover`，覆盖率 ≥ 60%
 
 ---
 
-## 🟢 P2 — 体验与推广
+## 🟢 P2 — 体验与推广（v0.9.0）
 
-### CLI 体验
-- [ ] 统一的进度输出格式，带状态机当前状态
+- [ ] `ARCH` 自动检测（`go env GOARCH`）
+- [ ] 统一进度输出格式，带时间戳
 - [ ] 关键步骤耗时打印
-- [ ] `dtk doctor` 检查环境依赖（go / docker / kubectl / helm 版本）
-- [ ] `dtk status` 查看当前部署状态
-- [ ] `ARCH` 自动检测（`go env GOARCH`），不再需要用户手动填
-- [ ] `REGISTRY_PREFIX` 支持阿里云 ACR 格式，`dtk init` 时交互式询问仓库类型
-
-### 文档重写
-- [ ] 从用户视角重写，回答「为什么这么设计」
-- [ ] 每个命令的 error 和解决方案
-- [ ] 外部用户能独立跑通的 quickstart
-
-### 前端骨架增强
-- [ ] `--with-frontend` 根据 `docs/swagger.yaml` 自动生成对应的 API client
-- [ ] 支持多套前端风格切换（theme 系统）
-- [ ] `dtk init --with-frontend` 后自动运行 `npm install`
-
-### AI-native
-- [ ] `EstimateResources` 接入 LLM API，根据代码仓库内容推断资源配置
-- [ ] `dtk plan`：独立命令，只做 AI 规划，输出建议的 `components.yaml` 和 `values.yaml`
-- [ ] AI 分析 `cmd/` 下的服务依赖关系，自动生成 `components.yaml`
+- [ ] `REGISTRY_PREFIX` 支持阿里云 ACR 格式
+- [ ] 外部用户能独立跑通的 quickstart 验证
 
 ---
 
 ## ✅ 已完成
 
 - [x] `dtk init` 端到端生成可编译项目
-- [x] `dtk deploy` 端到端 build → push → helm install → rollout（`1/1 Running`）
-- [x] `dtk resume` 命令，检查 K8s 实际状态后从中断点恢复
-- [x] `dtk rollback` 命令，手动触发 helm rollback
-- [x] `dtk release` 命令：semver 校验、工作区检查、更新 VERSION、git commit + tag + push、--deploy 可选触发部署
-- [x] `dtk down` 命令：彻底下线，删除集群资源 + 本地状态文件，二次确认
-- [x] 部署状态机（IDLE → INITIALIZING → DEPLOYING → VALIDATING → RUNNING → ROLLING_BACK → CLEANING → TERMINATED）
-- [x] 状态持久化到 etcd，降级到 `~/.dtk/state/<project>/<ns>.json`
-- [x] 首次部署失败 → CLEANING → 删除 ns → IDLE
-- [x] 更新失败 → ROLLING_BACK → helm rollback → RUNNING
-- [x] VALIDATING 超时 → 自动回滚
-- [x] `ResumeFromValidating` 加转换合法性检查
-- [x] `is_first` 判断：改用 `helmReleaseExists`
-- [x] `dtk deploy --dry-run` 打印完整 make 命令和环境变量
-- [x] VERSION 不变自动跳过 build/push
-- [x] Helm `--force-conflicts` + `--wait` 防冲突
-- [x] `--kubeconfig` flag + `KUBE_CONFIG` 支持多集群部署
-- [x] `--with-frontend` 生成通用 React + Vite + Tailwind 骨架
-- [x] 自包含 Helm chart（postgres + etcd + 业务服务，零外部依赖）
-- [x] initContainers 启动顺序（wait-postgres + wait-etcd），带 enabled 联动
-- [x] golang-migrate 骨架，启动自动执行迁移
-- [x] monitoring 骨架（prometheus + alertmanager + grafana）默认生成
-- [x] `dtk deploy` 前置检查：检测 docker / kubectl / helm
-- [x] `dtk init` 生成失败时自动清理半成品目录
-- [x] slog 结构化日志
-- [x] scaffold.go 拆分（2136 行 → 6 个文件 + helm.go）
-- [x] internal/ 目录清理（ai → planner，删空目录）
-- [x] 47 个状态机单元测试 + 18 个 CLI 集成测试
-- [x] CI 修复（git user config、kubectl/helm 安装）
-- [x] 完整文档（state-machine / release / helm / kubeconfig）
-- [x] A2 方案：独立 controller pod + etcd 通信
-- [x] `internal/controller/` 包完整实现
-- [x] state 包彻底解耦：零 k8s.io 依赖
-- [x] controller graceful shutdown（sync.WaitGroup，etcdWatcher 纳入管控）
-- [x] HANDOFF.md 模板生成（写给下一个 Claude，B 方案）
-- [x] helm chart 骨架完整生成（controller + postgres + etcd + NOTES.txt）
-- [x] 基础设施组件命名加项目名前缀
+- [x] `dtk deploy` build → push → helm → rollout → 状态追踪
+- [x] `dtk resume` / `dtk rollback` / `dtk release` / `dtk down`
+- [x] `dtk doctor` 环境检查
+- [x] `dtk status` + `--history`
+- [x] 部署状态机完整实现，47 个单元测试全绿
+- [x] A2 Reconciliation Controller 完整实现
+- [x] state 包零 K8s 依赖
+- [x] scaffold 完整生成（helm chart + controller 骨架 + handoff + AI 指南）
+- [x] README 重写 + quickstart 新增
+- [x] 端到端全流程验证通过（v0.5.1，除 controller 自愈）
+- [x] helmRollback 修复（revision/重复namespace/CLEANING误转）
+- [x] `RUNNING → ROLLING_BACK` 转换表修复
 
 ---
 
-> 两个项目的交汇点：web3-blitz 是 dtk 的活体验证，部署过程中发现的问题直接反哺 DTK P0/P1。
-
+> 路线：v0.5.1（当前）→ v0.8.0（稳到无坑）→ v0.9.0（体验拉满）→ v1.0.0（封神）
+>
 > 每完成一项，移到 ✅ 已完成，并更新 SNAPSHOT。
