@@ -19,7 +19,8 @@ type checkResult struct {
 }
 
 func runDoctor(_ []string) {
-	fmt.Println("检查环境依赖...\n")
+	fmt.Println("检查环境依赖...")
+	fmt.Println()
 
 	var results []checkResult
 
