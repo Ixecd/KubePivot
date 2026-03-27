@@ -165,7 +165,7 @@ func printHelmStatus(cfg *deployConfig, releaseName string) {
 	// 时间格式化
 	updated := result.Info.LastDeployed
 	if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
-		updated = t.Format("2006-01-02 15:04:05")
+		updated = t.Local().Format("2006-01-02 15:04:05")
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
