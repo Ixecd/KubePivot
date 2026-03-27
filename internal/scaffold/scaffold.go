@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode/utf8"
 )
@@ -547,10 +548,21 @@ func replaceInDir(root string, replacements map[string]string) error {
 		if !isText(data) {
 			return nil
 		}
-		updated := string(data)
-		for oldValue, newValue := range replacements {
-			updated = strings.ReplaceAll(updated, oldValue, newValue)
+
+		// 按 key 长度降序排序，长的先替换，避免短 key 破坏长 key
+		keys := make([]string, 0, len(replacements))
+		for k := range replacements {
+			keys = append(keys, k)
 		}
+		sort.Slice(keys, func(i, j int) bool {
+			return len(keys[i]) > len(keys[j])
+		})
+
+		updated := string(data)
+		for _, k := range keys {
+			updated = strings.ReplaceAll(updated, k, replacements[k])
+		}
+
 		if updated == string(data) {
 			return nil
 		}
