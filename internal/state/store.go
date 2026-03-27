@@ -180,3 +180,40 @@ func localPath(project, namespace string) (string, error) {
 	}
 	return filepath.Join(home, ".dtk", "state", project, namespace+".json"), nil
 }
+
+// autoMigrateToEtcd 检测到 etcd 可用且本地有状态时，自动迁移
+func autoMigrateToEtcd(store Store, project, namespace string, current *DeployRecord) error {
+	// 只有当前 store 是 etcd 时才需要迁移
+	etcdSt, ok := store.(*etcdStore)
+	if !ok {
+		return nil
+	}
+
+	// etcd 里已经有状态，不需要迁移
+	if _, err := etcdSt.Load(project, namespace); err == nil {
+		return nil
+	}
+
+	// 检查本地文件是否有状态
+	localSt := &localStore{}
+	localRecord, err := localSt.Load(project, namespace)
+	if err != nil {
+		// 本地也没有，新项目，不需要迁移
+		return nil
+	}
+
+	// 迁移：把本地状态写入 etcd
+	if err := etcdSt.Save(localRecord); err != nil {
+		return fmt.Errorf("写入 etcd 失败: %w", err)
+	}
+
+	backupPath, _ := localPath(project, namespace)
+	slog.Info("状态已从本地文件迁移到 etcd",
+		"project", project,
+		"namespace", namespace,
+		"state", localRecord.State,
+		"backup", backupPath,
+	)
+	fmt.Printf("✓ 状态已迁移到 etcd（本地备份保留：%s）\n", backupPath)
+	return nil
+}

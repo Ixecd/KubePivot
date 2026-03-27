@@ -2,6 +2,7 @@ package state
 
 import (
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -73,6 +74,12 @@ func New(store Store, project, namespace, version string) (*Machine, error) {
 	} else {
 		record.Version = version
 	}
+
+	// 自动迁移：etcd 可用但没有状态，本地文件有状态 → 迁移到 etcd
+	if err := autoMigrateToEtcd(store, project, namespace, record); err != nil {
+		slog.Warn("状态迁移到 etcd 失败，继续使用当前存储", "err", err)
+	}
+
 	return &Machine{record: record, store: store}, nil
 }
 
