@@ -143,3 +143,20 @@ func (m *Machine) ResumeFromValidating(reason string) error {
 func EtcdKey(project, namespace string) string {
 	return fmt.Sprintf("dtk/%s/%s/state", project, namespace)
 }
+
+// ForceState 强制设置状态，跳过转换表检查
+// 仅用于异常恢复场景（如 pending-rollback 清理），不要在正常流程中使用
+func (m *Machine) ForceState(to State, reason string) error {
+	from := m.record.State
+	m.record.History = append(m.record.History, Transition{
+		From:      from,
+		To:        to,
+		Reason:    "[force] " + reason,
+		Version:   m.record.Version,
+		Timestamp: time.Now(),
+	})
+	m.record.State = to
+	m.record.Reason = reason
+	m.record.UpdatedAt = time.Now()
+	return m.store.Save(m.record)
+}

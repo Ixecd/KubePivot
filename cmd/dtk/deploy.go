@@ -77,6 +77,11 @@ func runDeploy(args []string) {
 
 	sm.MarkFirstDeploy(!namespaceExists(cfg.kubeconfig, cfg.context, cfg.namespace))
 
+	if err := checkPendingRollback(cfg, env, sm); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
 	// 检查当前状态，拒绝重复部署
 	current := sm.State()
 	if current != state.StateIdle && current != state.StateRunning && current != state.StateTerminated {
@@ -154,6 +159,10 @@ func runResume(args []string) {
 		fmt.Println("服务已正常运行，同步状态为 RUNNING")
 		sm.Transition(state.StateRunning, "resume: K8s 检测服务正常")
 	case state.StateIdle:
+		if err := checkPendingRollback(cfg, env, sm); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 		fmt.Println("服务不存在，从头重新部署")
 		executeDeploy(sm, cfg, env, plan, root)
 	default:
