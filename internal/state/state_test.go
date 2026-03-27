@@ -198,7 +198,7 @@ func TestInvalidTransitions_FromValidating(t *testing.T) {
 
 func TestInvalidTransitions_FromRunning(t *testing.T) {
 	illegal := []State{
-		StateDeploying, StateValidating, StateRollingBack,
+		StateDeploying, StateValidating,
 	}
 	for _, to := range illegal {
 		sm := runningMachine(t)

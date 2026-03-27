@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 )
@@ -39,10 +40,36 @@ func deleteNamespace(kubeconfig, kubeContext, namespace string) error {
 }
 
 // helmRollback 执行 helm rollback，revision=0 表示回滚到上一个版本
-func helmRollback(kubeconfig, kubeContext, namespace, release string, revision int) error {
-	args := []string{"helm", "rollback", release}
-	if revision > 0 {
-		args = append(args, fmt.Sprintf("%d", revision))
+func helmRollback(kubeconfig, kubeContext, namespace, release string) error {
+	// 先查当前 revision
+	histArgs := []string{"helm", "history", release, "--namespace", namespace, "--output", "json"}
+	if kubeconfig != "" {
+		histArgs = append(histArgs, "--kubeconfig", kubeconfig)
+	}
+	if kubeContext != "" {
+		histArgs = append(histArgs, "--kube-context", kubeContext)
+	}
+	out, err := runOutput(histArgs...)
+	if err != nil {
+		return fmt.Errorf("查询 helm history 失败: %w", err)
+	}
+
+	var history []struct {
+		Revision int `json:"revision"`
+	}
+	if err := json.Unmarshal(out, &history); err != nil || len(history) == 0 {
+		return fmt.Errorf("解析 helm history 失败")
+	}
+
+	latest := history[len(history)-1].Revision
+	if latest <= 1 {
+		return fmt.Errorf("当前是第一个版本（revision=%d），无法回滚", latest)
+	}
+	target := latest - 1
+
+	args := []string{"helm", "rollback", release, fmt.Sprintf("%d", target)}
+	if namespace != "" {
+		args = append(args, "--namespace", namespace)
 	}
 	if kubeconfig != "" {
 		args = append(args, "--kubeconfig", kubeconfig)
@@ -50,8 +77,8 @@ func helmRollback(kubeconfig, kubeContext, namespace, release string, revision i
 	if kubeContext != "" {
 		args = append(args, "--kube-context", kubeContext)
 	}
-	args = append(args, "--namespace", namespace, "--wait")
-	_, err := runOutput(args...)
+	args = append(args, "--wait")
+	_, err = runOutput(args...)
 	return err
 }
 

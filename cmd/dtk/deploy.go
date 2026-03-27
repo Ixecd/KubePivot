@@ -204,9 +204,9 @@ func runRollback(args []string) {
 	}
 
 	release := envOrDefault(env, "PROJECT_NAME", filepath.Base(root))
-	if err := helmRollback(cfg.kubeconfig, cfg.context, cfg.namespace, release, 0); err != nil {
+	if err := helmRollback(cfg.kubeconfig, cfg.context, cfg.namespace, release); err != nil {
 		fmt.Fprintln(os.Stderr, "helm rollback 失败:", err)
-		sm.Transition(state.StateCleaning, "回滚失败")
+		sm.Transition(state.StateRunning, "回滚失败，保持 RUNNING")
 		os.Exit(1)
 	}
 
@@ -235,7 +235,7 @@ func executeDeploy(sm *state.Machine, cfg *deployConfig, env map[string]string, 
 		} else {
 			sm.Transition(state.StateRollingBack, "更新失败，回滚")
 			release := envOrDefault(env, "PROJECT_NAME", "")
-			if rbErr := helmRollback(cfg.kubeconfig, cfg.context, cfg.namespace, release, 0); rbErr != nil {
+			if rbErr := helmRollback(cfg.kubeconfig, cfg.context, cfg.namespace, release); rbErr != nil {
 				sm.Transition(state.StateCleaning, "回滚失败")
 			} else {
 				sm.Transition(state.StateRunning, "回滚成功")
@@ -308,7 +308,7 @@ func resumeFromValidating(sm *state.Machine, cfg *deployConfig, env map[string]s
 			fmt.Fprintln(os.Stderr, "验证失败:", err)
 			sm.Transition(state.StateRollingBack, "resume 验证失败")
 			release := envOrDefault(env, "PROJECT_NAME", "")
-			helmRollback(cfg.kubeconfig, cfg.context, cfg.namespace, release, 0)
+			helmRollback(cfg.kubeconfig, cfg.context, cfg.namespace, release)
 			sm.Transition(state.StateRunning, "回滚完成")
 			return
 		}

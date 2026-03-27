@@ -25,7 +25,7 @@ var validTransitions = map[State][]State{
 	StateInitializing: {StateDeploying, StateCleaning},
 	StateDeploying:    {StateValidating, StateRollingBack, StateCleaning},
 	StateValidating:   {StateRunning, StateRollingBack, StateCleaning},
-	StateRunning:      {StateInitializing, StateTerminated, StateCleaning},
+	StateRunning:      {StateInitializing, StateTerminated, StateCleaning, StateRollingBack},
 	StateRollingBack:  {StateRunning, StateCleaning},
 	StateCleaning:     {StateIdle, StateTerminated},
 	StateTerminated:   {},
