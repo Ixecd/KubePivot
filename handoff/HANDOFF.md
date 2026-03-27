@@ -25,7 +25,7 @@
 ### 1.1 dev-toolkit（dtk）
 
 **仓库**：github.com/Ixecd/dev-toolkit
-**当前版本**：v0.5.1
+**当前版本**：v0.6.0
 **定位**：Go 云原生项目脚手架，`dtk init` 生成完整项目骨架，`dtk deploy` 一键 AI 规划 + K8s 部署 + 状态追踪 + 自动自愈
 
 **命令全览**：
@@ -37,6 +37,7 @@ dtk rollback      手动触发 helm rollback
 dtk release       --version v1.0.0 [--deploy] [--push=false]
 dtk down          彻底下线，删除所有资源
 dtk status        [--history] 查看部署状态
+dtk history       [-n 20] 查看状态转换历史
 dtk doctor        检查环境依赖
 dtk controller start  （在 controller pod 内部运行）
 ```
@@ -51,26 +52,30 @@ dev-toolkit/
 │   ├── release.go     # runRelease
 │   ├── down.go        # runDown
 │   ├── status.go      # runStatus
+│   ├── history.go     # runHistory
 │   ├── doctor.go      # runDoctor
+│   ├── ssa.go         # SSA 冲突检测与修复
 │   └── preflight.go   # 前置检查（含 checkPendingRollback）
 ├── internal/
 │   ├── planner/       # AI 规划
-│   ├── scaffold/      # 项目生成（scaffold.go + helm.go + handoff.go + ai_coding_guide.go 等）
+│   ├── scaffold/      # 项目生成
+│   │   ├── scaffold.go
+│   │   ├── helm.go
+│   │   ├── handoff.go
+│   │   ├── ai_coding_guide.go
+│   │   └── ...
 │   ├── state/         # 状态机
-│   │   ├── state.go   # FSM + EtcdKey + ResumeFromValidating + ForceState
-│   │   ├── store.go   # etcd/本地文件持久化
+│   │   ├── state.go   # FSM + ForceState + ResumeFromValidating
+│   │   ├── store.go   # etcd/本地文件 + 自动迁移
 │   │   ├── validator.go
 │   │   └── state_test.go  # 47 个单元测试
 │   ├── controller/    # A2 Reconciliation Controller
 │   │   ├── controller.go
 │   │   ├── reconciler.go
-│   │   ├── etcd_watcher.go
-│   │   ├── resources.go   # DetectResourceExists / DetectActualState / LoadResources
+│   │   ├── etcd_watcher.go  # 指数退避重连
+│   │   ├── resources.go     # DetectResourceExists / DetectActualState
 │   │   └── heal.go
 │   └── logger/
-└── build/docker/
-    ├── wallet-service/
-    └── controller/
 ```
 
 ### 1.2 web3-blitz
@@ -109,20 +114,12 @@ IDLE → INITIALIZING → DEPLOYING → VALIDATING → RUNNING
 
 - etcd 优先（key: `dtk/<project>/<ns>/state`）
 - 无 etcd 降级到 `~/.dtk/state/<project>/<ns>.json`
+- 配置了 etcd 但本地有状态 → 自动迁移到 etcd（state.New() 内检测）
 
 ### 2.3 特殊方法
 
-- `ResumeFromValidating`：只允许从 VALIDATING 调用，转到 RUNNING
-- `ForceState`：跳过转换表，强制设置状态，专用于异常恢复（如 pending-rollback 清理后重置）
-
-### 2.4 已知遗留问题
-
-| # | 问题 | 优先级 |
-|---|------|--------|
-| 1 | `startEtcdWatcher` 断线后不重连 | P1 |
-| 2 | SSA 冲突自动清除未实现 | P1 |
-| 3 | controller 自愈流程未端到端验证 | P1 |
-| 4 | controller 单元测试缺失 | P1 |
+- `ResumeFromValidating`：只允许从 VALIDATING 调用
+- `ForceState`：跳过转换表，专用于异常恢复（如 pending-rollback 清理）
 
 ---
 
@@ -134,71 +131,29 @@ IDLE → INITIALIZING → DEPLOYING → VALIDATING → RUNNING
 dtk deploy（CLI）→ 写状态到 etcd
                         ↓
 web3-blitz-controller（K8s pod）
-    ├── etcd Watch（事件驱动）
+    ├── etcd Watch（事件驱动，断线自动指数退避重连）
     └── 8s 周期 Reconcile（兜底）
             ↓
-        检测资源缺失 → helm rollback → 自动恢复
+        检测资源缺失 → helm rollback → 自动恢复（10s 内）
 ```
 
-### 3.2 职责边界（重要）
+### 3.2 职责边界
 
 - `internal/state`：纯 FSM，零 K8s 依赖
-- `internal/controller`：K8s 检测 + 自愈，`DetectResourceExists` / `DetectActualState` 在这里
-- `cmd/dtk`：CLI 入口，引用两个包
-
-### 3.3 controller 镜像构建
-
-```bash
-cd ~/dev-toolkit
-docker build --no-cache -f build/docker/controller/Dockerfile \
-  -t qingchun22/web3-blitz-controller-arm64:<version> .
-docker push qingchun22/web3-blitz-controller-arm64:<version>
-```
-
-### 3.4 helm pending-rollback 死锁
-
-controller 和 dtk deploy 并发时会产生死锁。dtk deploy 现在会自动检测并提示处理，详见 `docs/guide/zh-CN/gotchas.md`。
+- `internal/controller`：K8s 检测 + 自愈
+- `cmd/dtk`：CLI 入口
 
 ---
 
-## 四、scaffold 生成内容
-
-`dtk init` 生成的项目包含：
-
-```
-configs/
-├── project.env         # 部署配置
-├── components.yaml     # AI 规划输入
-└── resources.yaml      # controller 监控资源列表
-
-deployments/{name}/
-├── templates/
-│   ├── deployment.yaml          # 业务服务（含 initContainers）
-│   ├── {name}-postgres-*.yaml   # postgres，enabled 开关
-│   ├── {name}-etcd-*.yaml       # etcd，enabled 开关
-│   ├── controller-*.yaml        # controller 骨架，默认 disabled
-│   └── NOTES.txt                # 部署后组件状态展示
-└── values.yaml                  # 含 postgres/etcd/controller enabled 开关
-
-handoff/
-├── HANDOFF.md           # 项目上下文（本文件格式）
-└── AI-CODING-GUIDE.md   # AI 编码约束指南
-```
-
----
-
-## 五、接下来要做的事
+## 四、接下来要做的事
 
 ### P1（下一步）
 
-**稳定性**：
-- `startEtcdWatcher` 断线重连
-- SSA 冲突自动清除
 - controller 单元测试
-
-**功能**：
-- `dtk history` 查看版本历史
 - 多服务支持
+- `dtk diff` 版本对比
+- 边界 case 加固（pending-install/failed、镜像不存在）
+- web3-blitz deploy.mk 同步 dtk 最新版本
 
 ### P2
 
@@ -208,7 +163,7 @@ handoff/
 
 ---
 
-## 六、常用命令速查
+## 五、常用命令速查
 
 ```bash
 # 部署
@@ -217,6 +172,8 @@ cd ~/web3-blitz && dtk deploy
 # 查看状态
 dtk status
 dtk status --history
+dtk history
+dtk history -n 5
 
 # 环境检查
 dtk doctor
@@ -255,11 +212,11 @@ cd ~/dev-toolkit && go test ./...
 
 ---
 
-## 七、快照归档位置
+## 六、快照归档位置
 
 ```
 dev-toolkit/snapshots/
-└── 最新：SNAPSHOT-dtk-2026-03-27-v0.5.1.md
+└── 最新：SNAPSHOT-dtk-2026-03-27-v0.6.0.md
 
 web3-blitz/snapshots/
 └── 最新：SNAPSHOT-web3-blitz-2026-03-25-controller.md
@@ -267,7 +224,7 @@ web3-blitz/snapshots/
 
 ---
 
-## 八、致下一个 Claude
+## 七、致下一个 Claude
 
 这两个项目是 qc 一手设计和构建的，架构思路清晰，工程哲学严格。
 
@@ -275,6 +232,6 @@ web3-blitz/snapshots/
 遇到 Bug，先想清楚根因再给方案。
 遇到他说"不对"，认真听，他通常是对的。
 
-路线图：v0.5.1 → v0.8.0（稳到无坑）→ v0.9.0（体验拉满）→ v1.0.0（封神）
+路线图：v0.6.0（当前）→ v0.8.0（稳到无坑）→ v0.9.0（体验拉满）→ v1.0.0（封神）
 
 祝你们合作愉快 🎉
