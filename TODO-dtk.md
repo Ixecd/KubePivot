@@ -1,7 +1,7 @@
 # TODO — dev-toolkit 路线图
 
 > 从"自用脚手架"走向"真正可推广的 Go 云原生工具"。
-> 按优先级排列，持续更新。当前：v0.4.1
+> 按优先级排列，持续更新。当前：v0.5.0
 
 ---
 
@@ -19,12 +19,34 @@
 - [x] controller rollback 后同步状态机（`sm.Transition` 错误处理）
 - [x] controller graceful shutdown（`sync.WaitGroup` 替换 `time.Sleep`）
 - [x] 环境变量统一：`KUBE_CONFIG`（原 controller.go 误用 `KUBECONFIG`）
-- [ ] `startEtcdWatcher` goroutine 纳入 WaitGroup 管控（当前退出不受控，已知限制）
-- [ ] controller pod 集成到同一个 Helm Chart
-- [ ] `DetectResourceExists` 支持更多资源类型（Service / PVC / Ingress）
+- [x] `startEtcdWatcher` goroutine 纳入 WaitGroup 管控
+- [x] 状态机单元测试扩充至 47 个（全转换表覆盖 + 副作用验证 + 场景测试）
+- [ ] `startEtcdWatcher` 重连机制（当前断线后不恢复，只依赖定时对账）
 - [ ] SSA 冲突自动清除 managedFields 重试
 - [ ] helm rollback 受 SSA 冲突影响的处理
-- [ ] helm pending-rollback 死锁自动处理（当前需手动清理）
+- [ ] helm pending-rollback 死锁自动处理（dtk deploy 前置检查）
+
+### scaffold（dtk init）
+
+- [x] 生成 `handoff/HANDOFF.md`，自动填充日期、仓库、命令速查、目录结构
+- [x] 生成 `configs/resources.yaml`，含支持的 kind 列表和注释示例
+- [x] 生成 controller yaml 骨架（rbac / deployment / configmap），全部带 `enabled` 开关
+- [x] `NOTES.txt` 放入 `templates/` 目录，部署后显示组件状态和快速访问命令
+- [x] postgres / etcd 加 `enabled` 开关，默认 true，关闭时 initContainers 自动跳过
+- [x] 基础设施组件命名加项目名前缀（`{name}-postgres`、`{name}-etcd`），避免 namespace 冲突
+- [x] values.yaml 用 `strings.Builder` 生成，修复 `fmt.Sprintf` raw string 嵌套 bug
+- [x] `--set-file controller.resourcesConfig=configs/resources.yaml` 注入 deploy.mk
+- [x] `controller.enabled: false` 默认关闭，避免首次 deploy 因镜像不存在卡住
+- [x] `httpRoute.enabled` 补入 values.yaml，修复 helm render nil pointer
+- [x] 抽出独立 `internal/scaffold/helm.go`
+- [x] post-init 提示：上线前收紧 RBAC、替换 controller 镜像
+- [ ] `dtk init --dry-run` 预览生成的文件结构
+
+### dtk down
+
+- [x] 新增 `dtk down` 命令：删除 ClusterRole/ClusterRoleBinding、namespace、本地状态文件
+- [x] 二次确认提示，列出即将删除的所有资源
+- [x] 部分失败继续执行，最后汇报所有错误
 
 ### 集成测试（剩余）
 
@@ -34,10 +56,6 @@
 - [ ] controller pod 挂掉后重启仍能继续对账
 - [ ] 用 web3-blitz 作为真实 demo 完整跑通 A2 流程
 - [ ] `internal/controller/` 单元测试（heal / reconciler）
-
-### dry-run 模式（剩余）
-
-- [ ] `dtk init --dry-run` 预览生成的文件结构
 
 ---
 
@@ -59,7 +77,7 @@
 - [ ] KUBE_CONTEXT 为空或无效的处理
 - [ ] helm release 状态异常时的处理（pending-install / failed 等）
 - [ ] etcd 连接断开时的降级处理
-- [ ] `resources.yaml` 为空时 `DetectActualState` 的处理策略（当前直接报错，是否降级为 RUNNING？）
+- [ ] `resources.yaml` 为空时 `DetectActualState` 策略（当前报错，是否降级为 RUNNING？）
 
 ### 测试覆盖
 - [ ] `internal/scaffold/` 核心逻辑单元测试：replaceInDir、fixChartYAMLs、writeGoMod
@@ -103,40 +121,38 @@
 - [x] `dtk resume` 命令，检查 K8s 实际状态后从中断点恢复
 - [x] `dtk rollback` 命令，手动触发 helm rollback
 - [x] `dtk release` 命令：semver 校验、工作区检查、更新 VERSION、git commit + tag + push、--deploy 可选触发部署
+- [x] `dtk down` 命令：彻底下线，删除集群资源 + 本地状态文件，二次确认
 - [x] 部署状态机（IDLE → INITIALIZING → DEPLOYING → VALIDATING → RUNNING → ROLLING_BACK → CLEANING → TERMINATED）
 - [x] 状态持久化到 etcd，降级到 `~/.dtk/state/<project>/<ns>.json`
 - [x] 首次部署失败 → CLEANING → 删除 ns → IDLE
 - [x] 更新失败 → ROLLING_BACK → helm rollback → RUNNING
 - [x] VALIDATING 超时 → 自动回滚
-- [x] `ResumeFromValidating` 加转换合法性检查（只允许从 VALIDATING 状态调用）
-- [x] `is_first` 判断：改用 `helmReleaseExists`（修复 helm --create-namespace 导致的误判）
+- [x] `ResumeFromValidating` 加转换合法性检查
+- [x] `is_first` 判断：改用 `helmReleaseExists`
 - [x] `dtk deploy --dry-run` 打印完整 make 命令和环境变量
 - [x] VERSION 不变自动跳过 build/push
 - [x] Helm `--force-conflicts` + `--wait` 防冲突
 - [x] `--kubeconfig` flag + `KUBE_CONFIG` 支持多集群部署
 - [x] `--with-frontend` 生成通用 React + Vite + Tailwind 骨架
 - [x] 自包含 Helm chart（postgres + etcd + 业务服务，零外部依赖）
-- [x] initContainers 启动顺序（wait-postgres + wait-etcd）
+- [x] initContainers 启动顺序（wait-postgres + wait-etcd），带 enabled 联动
 - [x] golang-migrate 骨架，启动自动执行迁移
 - [x] monitoring 骨架（prometheus + alertmanager + grafana）默认生成
 - [x] `dtk deploy` 前置检查：检测 docker / kubectl / helm
 - [x] `dtk init` 生成失败时自动清理半成品目录
-- [x] slog 结构化日志（CLI 特化：text/stderr，LOG_LEVEL=debug）
-- [x] `LoadComponents` 换用 `gopkg.in/yaml.v3`
-- [x] `deploy.mk` 失败时打印 context / namespace / image + hint
-- [x] scaffold.go 拆分（2136 行 → 6 个文件）
+- [x] slog 结构化日志
+- [x] scaffold.go 拆分（2136 行 → 6 个文件 + helm.go）
 - [x] internal/ 目录清理（ai → planner，删空目录）
-- [x] 15 个状态机单元测试 + 18 个集成测试
+- [x] 47 个状态机单元测试 + 18 个 CLI 集成测试
 - [x] CI 修复（git user config、kubectl/helm 安装）
 - [x] 完整文档（state-machine / release / helm / kubeconfig）
-- [x] A2 方案决策：独立 controller pod + etcd 通信
-- [x] `internal/controller/` 包完整实现（controller / reconciler / etcd_watcher / resources / heal）
-- [x] state 包彻底解耦：删除 DetectResourceExists、NewForDetect，零 k8s.io 依赖
-- [x] K8s 资源检测逻辑统一归入 controller 包（DetectResourceExists / DetectActualState）
-- [x] getLatestRevision 修复（去掉 --max 1，正确取最新 revision）
-- [x] controller rollback 后 sm.Transition 错误处理（不再静默丢弃）
-- [x] controller graceful shutdown（sync.WaitGroup，等当前 reconcile 跑完再退出）
-- [x] 环境变量统一为 KUBE_CONFIG（修复 controller.go 误用 KUBECONFIG）
+- [x] A2 方案：独立 controller pod + etcd 通信
+- [x] `internal/controller/` 包完整实现
+- [x] state 包彻底解耦：零 k8s.io 依赖
+- [x] controller graceful shutdown（sync.WaitGroup，etcdWatcher 纳入管控）
+- [x] HANDOFF.md 模板生成（写给下一个 Claude，B 方案）
+- [x] helm chart 骨架完整生成（controller + postgres + etcd + NOTES.txt）
+- [x] 基础设施组件命名加项目名前缀
 
 ---
 
