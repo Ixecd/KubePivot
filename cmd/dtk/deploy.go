@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -77,7 +78,7 @@ func runDeploy(args []string) {
 
 	sm.MarkFirstDeploy(!namespaceExists(cfg.kubeconfig, cfg.context, cfg.namespace))
 
-	if err := checkPendingRollback(cfg, env, sm); err != nil {
+	if err := checkHelmReleaseState(cfg, env, sm); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -159,7 +160,7 @@ func runResume(args []string) {
 		fmt.Println("服务已正常运行，同步状态为 RUNNING")
 		sm.Transition(state.StateRunning, "resume: K8s 检测服务正常")
 	case state.StateIdle:
-		if err := checkPendingRollback(cfg, env, sm); err != nil {
+		if err := checkHelmReleaseState(cfg, env, sm); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -246,6 +247,19 @@ func executeDeploy(sm *state.Machine, cfg *deployConfig, env map[string]string, 
 				err = retryErr
 			}
 		}
+
+		// 镜像拉取失败检查（和 SSA 并列，不是嵌套）
+		if !deployOK && isImagePullError(err.Error()) {
+			projectName := envOrDefault(env, "PROJECT_NAME", "")
+			fmt.Fprintln(os.Stderr, "")
+			fmt.Fprintln(os.Stderr, "检测到镜像拉取失败，请检查：")
+			fmt.Fprintf(os.Stderr, "  1. 镜像是否已推送：docker manifest inspect %s/%s-%s:%s\n",
+				env["REGISTRY_PREFIX"], projectName, env["ARCH"], env["VERSION"])
+			fmt.Fprintln(os.Stderr, "  2. registry 是否需要登录：docker login")
+			fmt.Fprintf(os.Stderr, "  3. ARCH 是否正确：当前 %s，集群节点架构是否匹配\n", env["ARCH"])
+			fmt.Fprintln(os.Stderr, "")
+		}
+
 		if !deployOK {
 			if sm.IsFirstDeploy() {
 				sm.Transition(state.StateCleaning, "首次部署失败，清理 namespace")
@@ -370,6 +384,16 @@ func buildMakeEnv(env map[string]string, cfg *deployConfig, plan []planner.Plan)
 	if len(imageNames) > 0 {
 		makeEnv = append(makeEnv, "IMAGES="+strings.Join(imageNames, " "))
 	}
+	arch := envOrDefault(env, "ARCH", "")
+	if arch == "" {
+		if out, err := exec.Command("go", "env", "GOARCH").Output(); err == nil {
+			arch = strings.TrimSpace(string(out))
+		}
+	}
+	if arch == "" {
+		arch = "amd64"
+	}
+	makeEnv = append(makeEnv, "ARCH="+arch)
 	return makeEnv
 }
 

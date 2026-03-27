@@ -107,3 +107,20 @@ func retryDeployWithSSAFix(cfg *deployConfig, makeEnv []string, root string) err
 	}
 	return nil
 }
+
+// isImagePullError 检测是否是镜像拉取失败
+func isImagePullError(errMsg string) bool {
+	keywords := []string{
+		"ImagePullBackOff",
+		"ErrImagePull",
+		"image pull",
+		"does not exist",
+		"manifest unknown",
+	}
+	for _, kw := range keywords {
+		if strings.Contains(errMsg, kw) {
+			return true
+		}
+	}
+	return false
+}
