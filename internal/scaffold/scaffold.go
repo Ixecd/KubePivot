@@ -144,6 +144,9 @@ func InitProject(opts InitOptions) (err error) {
 	if err := writeHandoffSkeleton(outputDir, name, module, opts.WithFrontend); err != nil {
 		return err
 	}
+	if err := writeAICodingGuide(outputDir, name, module); err != nil {
+		return err
+	}
 
 	// 🔥 FIXED: gen project.env for deploy (raw string)
 	configsPath := filepath.Join(outputDir, "configs", "project.env")
