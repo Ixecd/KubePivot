@@ -289,10 +289,32 @@ func fixChartYAMLs(root, name string) {
 	if err != nil {
 		return
 	}
-	// 清理 dependencies
-	updated := regexp.MustCompile(`(?s)dependencies:.*?(?=maintainers:|annotations:|type:|\z)`).
-		ReplaceAllString(string(data), "dependencies: []\n")
-	os.WriteFile(path, []byte(updated), 0644)
+
+	lines := strings.Split(string(data), "\n")
+	var result []string
+	inDeps := false
+	depsReplaced := false
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "dependencies:") && !depsReplaced {
+			inDeps = true
+			result = append(result, "dependencies: []")
+			depsReplaced = true
+			continue
+		}
+		if inDeps {
+			// 依赖块以非缩进行结束
+			if len(line) > 0 && line[0] != ' ' && line[0] != '\t' && line[0] != '-' {
+				inDeps = false
+				result = append(result, line)
+			}
+			// 跳过依赖块内容
+			continue
+		}
+		result = append(result, line)
+	}
+
+	os.WriteFile(path, []byte(strings.Join(result, "\n")), 0644)
 }
 
 func resolveTemplateRoot(explicit string) (string, error) {
@@ -491,6 +513,12 @@ func replaceInDir(root string, replacements map[string]string) error {
 	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if shouldSkip(filepath.Base(path)) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if d.IsDir() {
 			return nil
