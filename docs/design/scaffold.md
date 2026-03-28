@@ -1,6 +1,6 @@
 # 脚手架设计
 
-`dtk init` 的核心是 `internal/scaffold/init.go`，本文说明生成逻辑和关键设计决策。
+`dtk init` 的核心是 `internal/scaffold/`，本文说明生成逻辑和关键设计决策。
 
 ---
 
@@ -19,102 +19,141 @@ dtk init --name myapp --module github.com/me/myapp
   │     build/ configs/ deployments/ docs/ scripts/ ...
   │
   ├── 6. 写入动态生成文件
-  │     writeGoMod        go.mod，替换 module 和 go 版本
-  │     writeServiceMain  cmd/<name>/main.go
-  │     writeInternalSkeleton  internal/api + auth + pkg/code
-  │     writeAuthPackage  JWT + middleware + RBAC 骨架
-  │     writeMetricsSkeleton   Prometheus 指标
-  │     writeMonitoringSkeleton  prometheus.yml + alertmanager + grafana
-  │     writeTestSkeleton  e2e + integration + smoke
-  │     writeSnapshotSkeleton   snapshots/README.md
-  │     writeSwaggerSpec   docs/swagger.yaml
-  │     writeDockerfile    build/docker/<name>/Dockerfile
-  │     writeBuildSh       build/docker/<name>/build.sh
+  │     writeGoMod              go.mod，替换 module 和 go 版本
+  │     writeServiceMain        cmd/<n>/main.go
   │     writeComponentsConfig   configs/components.yaml
-  │     writeTestScript    scripts/test_api.sh
+  │     writeResourcesConfig    configs/resources.yaml（controller 监控配置）
+  │     writeTestScript         scripts/test_api.sh
+  │     writeInternalSkeleton   internal/api + auth + pkg/code
+  │     writeAuthPackage        JWT + middleware + RBAC 骨架
+  │     writeMetricsSkeleton    Prometheus 指标
+  │     writeMonitoringSkeleton prometheus.yml + alertmanager + grafana
+  │     writeTestSkeleton       e2e + integration + smoke
+  │     writeSnapshotSkeleton   snapshots/README.md
+  │     writeSwaggerSpec        docs/swagger.yaml
+  │     writeDockerfile         build/docker/<n>/Dockerfile
+  │     writeBuildSh            build/docker/<n>/build.sh
+  │     writeHandoffSkeleton    handoff/HANDOFF.md（自动填充项目信息）
+  │     writeAICodingGuide      handoff/AI-CODING-GUIDE.md（AI 编码约束）
   │
-  ├── 7. 目录重命名
-  │     build/docker/helloworld → build/docker/<name>
-  │     deployments/project    → deployments/<name>
+  ├── 7. 生成 project.env（含 ARCH 自动检测）
+  │     go env GOARCH → 填入 ARCH 字段
   │
-  ├── 8. replaceInDir（全文替换）
+  ├── 8. 目录重命名
+  │     build/docker/helloworld → build/docker/<n>
+  │     deployments/project    → deployments/<n>
+  │
+  ├── 9. replaceInDir（全文替换，按 key 长度降序）
   │     "github.com/Ixecd/dev-toolkit" → module
   │     "dev-toolkit"                  → name
-  │     "demo-svc"                     → name
-  │     "helloworld"                   → name
   │
-  ├── 9. replaceInDir deployments/（修正 helm 模板）
-  │     "project" → name
+  ├── 10. replaceInDir deployments/（修正 helm 模板）
+  │       "project" → name
   │
-  ├── 10. fixChartYAMLs（正则修正 Chart.yaml）
-  │      name: project    → name: <name>
-  │      appVersion: 1.16.0 → appVersion: 1.0.0
-  │      dependencies: ... → dependencies: []
+  ├── 11. fixChartYAMLs（逐行解析修正 Chart.yaml）
+  │       dependencies: [...] → dependencies: []
   │
-  ├── 11. 再次重命名（捕捉 replaceInDir 之后漏掉的）
-  │      deployments/dev-toolkit → deployments/<name>
-  │      build/docker/dev-toolkit → build/docker/<name>
+  ├── 12. 再次重命名（捕捉 replaceInDir 之后漏掉的）
+  │       deployments/dev-toolkit → deployments/<n>
+  │       build/docker/dev-toolkit → build/docker/<n>
   │
-  ├── 12. 自动执行
-  │      git init + git add + git commit
-  │      go get testify / jwt / bcrypt / prometheus
-  │      go mod tidy
+  ├── 13. writeHelmTemplateSkeleton（生成完整 Helm chart）
+  │       deployment.yaml / {n}-postgres-statefulset.yaml / {n}-etcd-deployment.yaml
+  │       controller-deployment.yaml / controller-rbac.yaml / resources-configmap.yaml
+  │       NOTES.txt（部署后显示组件状态）
+  │       values.yaml（含 postgres/etcd/controller enabled 开关）
   │
-  └── 13. 如果 --with-frontend：writeFrontendSkeleton
+  ├── 14. 自动执行
+  │       git init + git add + git commit
+  │       go get testify / jwt / bcrypt / prometheus
+  │       go mod tidy
+  │
+  └── 15. 如果 --with-frontend：writeFrontendSkeleton
 ```
 
 ---
 
 ## replaceInDir 的顺序问题
 
-`replaceInDir` 是纯字符串替换，顺序很重要：
+`replaceInDir` 是纯字符串替换，**按 key 长度降序排序后执行**，避免短 key 破坏长 key：
 
-- **步骤 8** 先做全局替换，把 `dev-toolkit` → name，`demo-svc` → name
-- **步骤 9** 专门处理 `deployments/` 下的 `project` → name
-- **步骤 10** `fixChartYAMLs` 用正则兜底，确保 `Chart.yaml` 的 `name` 字段一定被替换
+```go
+sort.Slice(keys, func(i, j int) bool {
+    return len(keys[i]) > len(keys[j])
+})
+```
 
-为什么要 `fixChartYAMLs` 单独处理？因为 `Chart.yaml` 里的 `name: project` 和 `appVersion: "1.16.0"` 是 `helm create` 的默认值，纯字符串替换容易误伤其他字段（如 description 里也可能包含 "project"），正则 `^name:.*$` 更精确。
+**反例**（不排序时可能出现）：
+- 先替换 `dev-toolkit` → `myapp`
+- 再替换 `github.com/Ixecd/dev-toolkit` → 找不到，已变成 `github.com/Ixecd/myapp`
+
+此 bug 已在 v0.8.0 修复，通过单元测试覆盖。
 
 ---
 
-## 为什么 `go mod tidy` 而不是 `go mod download`
+## fixChartYAMLs 实现
 
-生成的项目里有 `internal/` 下的本地包。`go mod download` 只下载外部依赖，
-本地包的 import 路径需要 `go mod tidy` 才能正确解析。
+原来用正则 lookahead（`(?=`），Go RE2 不支持会 panic。
 
-Dockerfile 里同样用 `go mod tidy`：
+现改为逐行解析：找到 `dependencies:` 开头的行，收集后续缩进行，统一替换为 `dependencies: []`。此 bug 已在 v0.8.0 通过单元测试发现并修复。
 
-```dockerfile
-RUN go env -w GOPROXY=https://goproxy.cn,direct
-RUN go mod tidy
-RUN CGO_ENABLED=0 GOOS=linux go build -o myapp ./cmd/myapp
+---
+
+## handoff 目录
+
+`dtk init` 会在 `handoff/` 下生成两个文件：
+
+**HANDOFF.md**：写给下一个接手的 Claude，自动填充：
+- 当前日期、仓库模块路径、项目名
+- 目录结构、dtk 命令速查
+- 快速访问命令（port-forward / kubectl / helm）
+
+需要开发者手动填写：架构设计、已知问题、下一步计划。
+
+**AI-CODING-GUIDE.md**：写给协助写业务代码的 Claude，约束：
+- 该在哪里加 handler / migration / 新模块
+- 不能动哪些文件（project.env / deploy.mk / db/migrations/）
+- 代码风格（slog、错误处理、包依赖方向）
+- 部署配置同步清单
+
+---
+
+## ARCH 自动检测
+
+```go
+func getArch() (string, error) {
+    out, err := exec.Command("go", "env", "GOARCH").Output()
+    if err != nil {
+        return "", err
+    }
+    return strings.TrimSpace(string(out)), nil
+}
+```
+
+生成 `project.env` 时自动填入，不再需要用户手动写 `ARCH=arm64`。
+
+---
+
+## 组件开关
+
+生成的 `values.yaml` 包含以下开关：
+
+```yaml
+postgres:
+  enabled: true   # 关闭时不部署，initContainers 自动跳过 wait-postgres
+
+etcd:
+  enabled: true
+
+controller:
+  enabled: false  # 默认关闭，配置好镜像后再开启
 ```
 
 ---
 
-## frontend 骨架设计约束
+## controller 骨架
 
-`--with-frontend` 生成的骨架遵循严格约束：
-
-1. **零业务逻辑**：不出现任何领域字段（金额、交易、链、权限点等）
-2. **页面仅两个**：`Login.tsx`（通用登录表单）+ `Home.tsx`（占位欢迎页）
-3. **nav 为空数组**：`Layout.tsx` 中 `nav = []`，由业务层追加
-4. **反引号安全**：前端模板中 TypeScript 模板字符串全部改为字符串拼接
-
-第 4 条原因：Go raw string 用反引号包裹，内部出现反引号会提前终止，
-导致 `illegal character U+003F '?'` 编译错误。
-
-错误写法：
-```go
-// TS 代码里的模板字符串
-`/api/v1/users?id=${userID}`
-// 在 Go raw string 里，第一个反引号之后的 ? 是非法字符
-```
-
-正确写法：
-```go
-'/api/v1/users?id=' + userID
-```
+`writeHelmTemplateSkeleton` 同时生成 controller 相关 yaml，均带 `{{- if .Values.controller.enabled }}` guard，`controller.enabled: false` 时不部署任何 controller 资源。
 
 ---
 
@@ -136,6 +175,25 @@ if len(entries) > 0 && !force {
 ```
 1. --template flag 显式指定
 2. DTK_TEMPLATE_ROOT 环境变量
-3. 当前工作目录（检查是否包含 Makefile + scripts/make-rules/common.mk + githooks/pre-commit.sh）
+3. 当前工作目录（检查 Makefile + scripts/make-rules/common.mk + githooks/pre-commit.sh）
 4. 以上都不满足 → 报错
 ```
+
+---
+
+## frontend 骨架设计约束
+
+`--with-frontend` 生成的骨架遵循严格约束：
+
+1. **零业务逻辑**：不出现任何领域字段
+2. **页面仅两个**：`Login.tsx` + `Home.tsx`（占位）
+3. **nav 为空数组**：由业务层追加
+4. **反引号安全**：TypeScript 模板字符串全部改为字符串拼接，避免 Go raw string 中反引号冲突
+
+第 4 条原因：Go raw string 用反引号包裹，内部出现反引号会提前终止，导致编译错误。
+
+---
+
+## go mod tidy 而不是 go mod download
+
+生成的项目有本地包，`go mod download` 只下载外部依赖，本地包的 import 路径需要 `go mod tidy` 才能正确解析。Dockerfile 里同样用 `go mod tidy`。

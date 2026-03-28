@@ -1,6 +1,7 @@
 # 已知坑和注意事项
 
-> 这里记录使用 dtk 过程中会踩到的坑，遇到问题先查这里。
+> 这里记录使用 dtk 和开发过程中踩到的所有坑，遇到问题先查这里。
+> 最后更新：2026-03-28 / v0.8.0
 
 ---
 
@@ -15,25 +16,20 @@ dtk 状态机在 `DEPLOYING` / `VALIDATING` / `ROLLING_BACK` 状态时会拒绝�
 如需继续，请运行: dtk resume
 ```
 
-**这是故意的**，并发部署会导致 helm 状态混乱，状态机无法正确追踪。
-
-如果上次部署卡住了，按以下顺序处理：
+这是故意的，并发部署会导致 helm 状态混乱。如果上次部署卡住了：
 
 ```bash
 dtk resume    # 尝试从中断点恢复
-# 如果 resume 判断服务已正常运行，会同步状态为 RUNNING
-# 如果服务不存在，会从头重新部署
-
-dtk rollback  # 或者直接放弃当前版本，回滚到上一个
+dtk rollback  # 或者放弃当前版本，回滚到上一个
 ```
 
-不要手动重置状态机，除非 resume 和 rollback 都失败了。
+不要手动重置状态机，除非上面两个都失败了。
 
 ---
 
 ### controller 和 dtk deploy 并发触发 pending-rollback 死锁
 
-当 controller 检测到资源缺失并触发 `helm rollback` 的同时，用户手动跑 `dtk deploy`，两个 helm 操作会互相冲突，导致 release 卡在 `pending-rollback` 状态。
+controller 检测到资源缺失并触发 `helm rollback` 的同时，用户手动跑 `dtk deploy`，两个 helm 操作冲突，release 卡在 `pending-rollback`。
 
 **症状**：
 
@@ -41,42 +37,23 @@ dtk rollback  # 或者直接放弃当前版本，回滚到上一个
 helm upgrade failed: UPGRADE FAILED: release: not in a deployable state
 ```
 
-**处理步骤**：
+**dtk deploy 会自动检测并提示处理**（v0.5.1+），按提示操作即可。
+
+手动处理步骤：
 
 ```bash
-# 1. 停掉 controller，防止继续干扰
 kubectl scale deployment/myapp-controller -n myapp --replicas=0
-
-# 2. 清理 pending-rollback secret
 kubectl delete secret -n myapp \
   $(kubectl get secret -n myapp -l owner=helm,name=myapp \
     -o jsonpath='{.items[?(@.metadata.labels.status=="pending-rollback")].metadata.name}')
-
-# 3. 重置状态机
-python3 -c "
-import json, os
-p=os.path.expanduser('~/.dtk/state/myapp/myapp.json')
-d=json.load(open(p))
-d['state']='RUNNING'
-d['reason']='手动重置'
-json.dump(d,open(p,'w'),indent=2)
-"
-
-# 4. 重新部署
 dtk deploy
 ```
 
-**根本预防**：不要在 controller 运行时手动 `dtk deploy`，或者部署前先停掉 controller。
-
 ---
 
-### etcd 断线后 controller 只依赖定时对账
+### etcd 断线后 controller 依赖定时对账
 
-`startEtcdWatcher` 断线后不会自动重连，controller 退化为只依赖 8 秒周期的定时 Reconcile。
-
-**影响**：etcd 状态变更后，controller 最多延迟 8 秒才能感知，不是实时的。
-
-**现状**：已知限制，P1 修复。正常情况下影响不大。
+etcd Watch 断线后，controller 会指数退避重连（1s → 2s → 4s ... 最大 30s）。重连期间只依赖 8s 周期 Reconcile，响应延迟略长。重连成功后恢复实时监听。
 
 ---
 
@@ -89,7 +66,7 @@ dtk deploy
 ```bash
 python3 -c "
 import json, os
-p=os.path.expanduser('~/.dtk/state/{project}/{namespace}.json')
+p=os.path.expanduser('~/.dtk/state/myapp/myapp.json')
 d=json.load(open(p))
 d['state']='IDLE'   # 或 RUNNING，按实际情况
 d['reason']='手动重置'
@@ -103,8 +80,6 @@ json.dump(d,open(p,'w'),indent=2)
 kubectl get pods -n myapp
 helm status myapp -n myapp
 ```
-
-状态机和 K8s 实际状态要对齐，不要设成 RUNNING 但 pod 其实不存在。
 
 ---
 
@@ -120,13 +95,27 @@ helm rollback 失败: 当前是第一个版本（revision=1），无法回滚
 
 ---
 
-### CLEANING 状态下无法 rollback
+### rollback 失败后状态变成 CLEANING（已修复）
 
-状态机处于 `CLEANING` 时，不允许转换到 `ROLLING_BACK`。
+**v0.5.1 之前**：`dtk rollback` 失败时错误地将状态转为 CLEANING，导致后续无法操作。
 
-**原因**：CLEANING 是首次部署失败后的清理阶段，这时候 helm release 可能不完整，rollback 没有意义。
+**v0.5.1 修复**：rollback 失败时状态机保持 RUNNING，允许用户重试。
 
-**处理**：等 CLEANING 完成回到 IDLE，再重新 `dtk deploy`。如果卡在 CLEANING，手动重置到 IDLE。
+---
+
+### RUNNING → ROLLING_BACK 非法转换（已修复）
+
+**v0.5.1 之前**：`dtk rollback` 报"非法状态转换 RUNNING → ROLLING_BACK"。
+
+**v0.5.1 修复**：将 `ROLLING_BACK` 加入 RUNNING 的合法转换目标。
+
+---
+
+### helm rollback 报 release has no 0 version（已修复）
+
+**v0.5.1 之前**：`helmRollback` 传 revision=0，helm 不认，报错。
+
+**v0.5.1 修复**：查询 helm history 取 latest-1，明确传目标 revision。
 
 ---
 
@@ -134,7 +123,7 @@ helm rollback 失败: 当前是第一个版本（revision=1），无法回滚
 
 ### /healthz 路由缺失导致 VALIDATING 卡死
 
-dtk 在 VALIDATING 阶段会通过 `kubectl exec` 检查服务的 `/healthz` 路由是否返回 200。如果路由不存在，会超时后自动回滚。
+dtk 在 VALIDATING 阶段会检查服务的 `/healthz` 路由是否返回 200。如果路由不存在，超时后自动回滚。
 
 **必须在业务服务里实现**：
 
@@ -144,44 +133,32 @@ mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 })
 ```
 
-dtk init 生成的骨架里已经包含这个路由，不要删掉。
-
-**验证方式**：
+验证方式：
 
 ```bash
 kubectl exec -n myapp deployment/myapp -- wget -qO- http://localhost:8080/healthz
-# 返回 200 OK 才正常
 ```
 
 ---
 
 ### Docker 镜像架构不匹配
 
-`configs/project.env` 里的 `ARCH` 必须和本机架构一致：
+`configs/project.env` 里的 `ARCH` 必须和本机架构一致，`dtk init` 会自动检测，但升级 dtk 前生成的老项目需要手动确认：
 
-```ini
-ARCH=arm64   # Apple Silicon / AWS Graviton
-ARCH=amd64   # Intel / AMD
+```bash
+go env GOARCH   # 查看本机架构
 ```
 
 架构不匹配会导致镜像 build 成功但 pod 启动失败（`exec format error`）。
-
-查看本机架构：
-
-```bash
-go env GOARCH
-```
 
 ---
 
 ### kubectl context 切错集群
 
-`dtk deploy` 会操作当前 kubectl context 指向的集群。如果 context 切错，可能误操作生产环境。
-
-**建议**：在 `configs/project.env` 里明确写 `KUBE_CONTEXT`，不要依赖当前默认 context：
+`dtk deploy` 会操作当前 kubectl context 指向的集群。建议在 `configs/project.env` 里明确写 `KUBE_CONTEXT`，不依赖默认 context：
 
 ```ini
-KUBE_CONTEXT=orbstack     # 明确指定，防止误操作
+KUBE_CONTEXT=orbstack
 ```
 
 部署前确认：
@@ -192,78 +169,204 @@ kubectl config current-context
 
 ---
 
+### macOS IPv6 localhost 解析问题（ghost postgres）
+
+**症状**：`psql -h localhost` 连接失败，但 `psql -h 127.0.0.1` 正常。
+
+**原因**：macOS 将 `localhost` 解析为 `::1`（IPv6），而 postgres 只监听 IPv4。
+
+**解法**：连接字符串改用 `127.0.0.1` 而不是 `localhost`，或者用 Docker 容器的直接 IP。
+
+---
+
+### goreman 双进程导致唯一约束冲突
+
+**症状**：本地开发时出现主键/唯一约束冲突，但代码逻辑没问题。
+
+**原因**：goreman 重启时上一个进程没有完全退出，两个进程同时写数据库。
+
+**解法**：`pkill -f 'cmd/wallet-service'` 彻底杀掉旧进程再重启。
+
+---
+
 ## 四、Helm
 
-### SSA 冲突（managedFields）
+### SSA managedFields 冲突
 
-多次 `helm upgrade` 后，K8s 的 Server-Side Apply 可能产生 managedFields 冲突，导致 upgrade 失败：
+多次 `helm upgrade` 后，K8s Server-Side Apply 可能产生 managedFields 冲突：
 
 ```
-Error: UPGRADE FAILED: failed to create resource: ... field is immutable
+Error: UPGRADE FAILED: field is immutable / another manager owns field
 ```
 
-临时处理：
+`dtk deploy` 会自动检测 SSA 冲突，清除 namespace 下所有资源的 managedFields 后重试一次（v0.6.0+）。
+
+手动处理：
 
 ```bash
-helm upgrade myapp ./deployments/myapp \
-  --namespace myapp \
-  --force-conflicts \
-  --wait
+kubectl patch deployment myapp -n myapp \
+  --type=merge \
+  --patch '{"metadata":{"managedFields":null}}'
 ```
 
-dtk 的 `deploy.mk` 已经默认带 `--force-conflicts`，正常情况下不会触发。如果依然报错，说明有字段真的不可变（比如 StatefulSet 的 `volumeClaimTemplates`），需要手动删除 StatefulSet 重建。
+---
+
+### helm pending-rollback 死锁手动处理
+
+```bash
+kubectl scale deployment/myapp-controller -n myapp --replicas=0
+kubectl delete secret -n myapp \
+  $(kubectl get secret -n myapp -l owner=helm,name=myapp \
+    -o jsonpath='{.items[?(@.metadata.labels.status=="pending-rollback")].metadata.name}')
+dtk deploy
+```
+
+---
+
+### helm pending-install 处理
+
+上次首次安装被中断，release 卡在 pending-install：
+
+```bash
+helm delete myapp -n myapp
+dtk deploy
+```
+
+`dtk deploy` 会自动检测并提示（v0.7.0+）。
 
 ---
 
 ### values.yaml 改动后必须 dtk deploy 才能生效
 
-修改 `deployments/myapp/values.yaml` 或 `configs/resources.yaml` 后，必须重新跑 `dtk deploy` 才会同步到集群。
-
-特别注意：`configs/resources.yaml` 是通过 `--set-file` 注入到 helm 的，改了文件后 controller ConfigMap 不会自动更新，必须重新 deploy。
+修改 `deployments/myapp/values.yaml` 或 `configs/resources.yaml` 后，必须重新跑 `dtk deploy` 才会同步到集群。`configs/resources.yaml` 通过 `--set-file` 注入到 helm，改了文件不 deploy，controller ConfigMap 不会更新。
 
 ---
 
-## 五、部署配置
+### fixChartYAMLs 使用了 Go 不支持的正则（已修复）
+
+**v0.8.0 之前**：`fixChartYAMLs` 用了 lookahead 正则 `(?=`，Go RE2 不支持，遇到有 `maintainers:` 字段的 Chart.yaml 直接 panic。
+
+**v0.8.0 修复**：改为逐行解析，单元测试覆盖。
+
+---
+
+## 五、代码生成（scaffold）
+
+### replaceInDir 不跳过 .git 目录（已修复）
+
+**v0.8.0 之前**：`replaceInDir` 遍历时没有跳过 `.git` 目录，会把 git 内部文件也替换，潜在破坏仓库。
+
+**v0.8.0 修复**：所有遍历操作统一用 `shouldSkip` 检查，`.git` / `.cursor` / `node_modules` 等全部跳过。
+
+---
+
+### replaceInDir 多 key 替换顺序不确定（已修复）
+
+**v0.8.0 之前**：Go map 遍历顺序不确定，短 key 可能先于长 key 执行，导致 `github.com/Ixecd/dev-toolkit` 被替换成 `github.com/Ixecd/myapp` 而不是 `github.com/me/myapp`。
+
+**v0.8.0 修复**：按 key 长度降序排序，长的先替换。
+
+---
+
+### 反引号在 Go raw string 里导致编译错误
+
+`--with-frontend` 生成的 TypeScript 文件里不能有反引号（Go raw string 的边界符）。
+
+**已修复**：所有前端模板字符串改为字符串拼接，不使用模板字面量。
+
+---
+
+### pgx v5 找不到表
+
+**症状**：migrate 成功，但查询报 `relation "users" does not exist`。
+
+**原因**：pgx v5 连接时会重置 `search_path` 为空。
+
+**解法**：DSN 加 `&search_path=public`：
+
+```
+postgres://user:pass@localhost:5432/myapp?sslmode=disable&search_path=public
+```
+
+---
+
+## 六、部署配置
 
 ### VERSION 不改不会重新 build/push
 
-dtk 会检查镜像是否已存在于 Docker Hub，如果 `VERSION` 没变，直接跳过 build/push：
+`deploy.mk` 里检查镜像是否已存在于 Docker Hub，如果 VERSION 没变直接跳过 build/push。代码改了但没改 VERSION，新代码不会生效。
 
-```
-===========> Image already exists, skipping build
-===========> Image already pushed, skipping push
-```
-
-这是正常的优化行为。如果代码改了但忘记改 VERSION，新代码不会生效。
-
-**发版标准姿势**：
+**标准姿势**：
 
 ```bash
 dtk release --version v0.2.0 --deploy
-# 自动改 VERSION、commit、tag、build、push、deploy
 ```
 
 ---
 
-### controller 镜像未配置导致 deploy 卡住（已有保护）
+### controller 镜像未配置导致 deploy 卡住
 
-`values.yaml` 里 `controller.enabled` 默认是 `false`，首次 `dtk deploy` 不会部署 controller。
+`values.yaml` 里 `controller.enabled` 默认是 `false`。如果手动改成 `true` 但没有配置正确的镜像，pod 会一直 `ImagePullBackOff`，`--wait` 会超时。
 
-如果手动改成 `true` 但没有配置正确的镜像，pod 会一直 `ImagePullBackOff`，`--wait` 会卡住直到超时。
+启用 controller 前必须：
 
-**启用 controller 前必须**：
-1. 构建包含 `dtk` 二进制 + kubectl + helm 的镜像
+1. 构建包含 dtk + kubectl + helm 的镜像
 2. 填写 `values.yaml` 里的 `controller.image.repository` 和 `tag`
-3. 再将 `controller.enabled` 改为 `true`
 
 ---
 
 ### REGISTRY_PREFIX 未填
 
-`configs/project.env` 里 `REGISTRY_PREFIX` 留空会导致 push 失败：
+留空会导致 push 失败，运行 `dtk doctor` 可以提前检查。
+
+---
+
+### controller 镜像构建必须加 --no-cache
+
+```bash
+docker build --no-cache -f build/docker/controller/Dockerfile ...
+```
+
+不加 `--no-cache` 时代码改动可能不会进镜像，导致 controller 运行的是旧版本。
+
+---
+
+## 七、CI
+
+### fmt.Println 不能带 \n 结尾
+
+golangci-lint 的 `fmt` 检查会报：
 
 ```
-The push refers to repository [docker.io//myapp-arm64]
+fmt.Println arg list ends with redundant newline
 ```
 
-运行 `dtk doctor` 可以检查是否已填写。
+改成两行：
+
+```go
+fmt.Println("检查环境依赖...")
+fmt.Println()
+```
+
+---
+
+### zsh 里感叹号的特殊含义
+
+zsh 把 `!` 当历史扩展符号，commit message 含 `!` 时用单引号：
+
+```bash
+git commit -m 'feat!: breaking change'
+# 不能用双引号：git commit -m "feat!: Crazy"  ← zsh 报 illegal modifier
+```
+
+---
+
+### CI 配置了但不阻止合并
+
+只写了 CI yaml 文件，没有在 GitHub 配 branch protection rules，CI 挂了代码还是能合并。
+
+solo 开发时这是正常配置（CI 只用于提醒），如果需要强制阻止：
+
+**Settings → Branches → Add branch ruleset → Require status checks to pass**
+
+然后把 CI job 名称加入 status checks 列表。

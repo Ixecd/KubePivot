@@ -7,28 +7,92 @@
 ## 分层设计
 
 ```
-┌─────────────────────────────────────────┐
-│              dtk deploy                 │  Go CLI
-│  读配置 → 过滤组件 → 组装 IMAGES → make    │
-└─────────────────┬───────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│                    dtk deploy                       │  Go CLI
+│    读配置 → 前置检查 → 状态机 → AI 规划 → make          │
+└─────────────────┬───────────────────────────────────┘
                   │ makeEnv (IMAGES / VERSION / ARCH ...)
-┌─────────────────▼───────────────────────┐
-│           make deploy.full              │  Makefile
-│  build → push → install → run.all       │
-└─────────────────────────────────────────┘
+┌─────────────────▼───────────────────────────────────┐
+│               make deploy.full                      │  Makefile
+│    build → push → install → run.all                 │
+└─────────────────────────────────────────────────────┘
 ```
 
 **为什么分两层？**
 
-- `dtk`（Go）负责读配置、AI 规划、过滤逻辑，这些需要 Go 的结构化处理
-- `make`（Makefile）负责 docker / helm / kubectl 操作，这些用 shell 更自然
-- 两层通过环境变量通信，职责清晰，也方便用户单独执行 `make deploy.full` 调试
+- `dtk`（Go）负责读配置、前置检查、状态机、AI 规划，这些需要结构化处理
+- `make`（Makefile）负责 docker / helm / kubectl 操作，shell 更自然
+- 两层通过环境变量通信，职责清晰，用户也可单独执行 `make deploy.full` 调试
+
+---
+
+## 前置检查
+
+`dtk deploy` 在执行之前检查：
+
+```
+1. 依赖检查（docker / kubectl / helm 是否可用）
+2. helm release 状态检查（checkHelmReleaseState）
+   ├── pending-rollback → 删除 secret + ForceState RUNNING（询问用户确认）
+   ├── pending-install  → 删除 release 重新安装（询问用户确认）
+   └── failed           → 提供回滚或重新部署选项
+3. 状态机检查（非 IDLE/RUNNING/TERMINATED 拒绝新部署）
+```
+
+---
+
+## 状态机流转
+
+```
+IDLE / RUNNING / TERMINATED
+      │ dtk deploy
+      ▼
+INITIALIZING → DEPLOYING → VALIDATING → RUNNING
+                   ↓              ↓
+             ROLLING_BACK ←───────┘  （失败自动回滚）
+                   ↓
+               CLEANING → IDLE      （首次部署失败，清理 namespace）
+```
+
+状态持久化到 etcd（优先）或 `~/.dtk/state/<project>/<ns>.json`（降级）。
+
+---
+
+## SSA 冲突自动处理
+
+deploy 失败时检查是否是 SSA managedFields 冲突：
+
+```go
+if isSSAConflict(err.Error()) {
+    // 清除 namespace 下所有资源的 managedFields（幂等操作）
+    clearAllManagedFields(cfg)
+    // 重试一次
+    retryDeployWithSSAFix(cfg, makeEnv, root)
+}
+```
+
+**为什么批量清除而不是精确定位**：helm 错误信息格式随版本变化，精确解析容易出错；批量清除是幂等操作，多清了没副作用。
+
+---
+
+## 镜像拉取失败检测
+
+deploy 失败时检查是否是镜像问题：
+
+```go
+if isImagePullError(err.Error()) {
+    // 输出可操作的排查提示：
+    // 1. docker manifest inspect 检查镜像是否存在
+    // 2. docker login 检查登录状态
+    // 3. ARCH 是否和集群节点匹配
+}
+```
 
 ---
 
 ## IMAGES 变量的传递
 
-`dtk deploy` 在调用 `make` 之前，从 plan 中过滤出有效组件，构建 `IMAGES` 环境变量：
+`dtk deploy` 从 plan 中过滤出有 image 的组件，构建 `IMAGES` 环境变量：
 
 ```go
 var imageNames []string
@@ -41,16 +105,27 @@ for _, item := range plan {
 makeEnv = append(makeEnv, "IMAGES="+strings.Join(imageNames, " "))
 ```
 
-**为什么不让 Makefile 自己过滤？**
+**为什么不让 Makefile 自己过滤**：Makefile 变量是纯字符串，`$(foreach)` 里无法判断组件是否有 image，交给 Go 处理更可靠。
 
-Makefile 变量是纯字符串，没有结构化处理能力，很难在 `$(foreach)` 里判断某个组件是否有 image。
-交给 Go 处理更可靠，也更容易测试。
+**如果不传 IMAGES 会怎样**：`deploy.mk` 中 `DEPLOYS ?= $(if $(IMAGES),$(IMAGES),$(BINS))`，`IMAGES` 为空则 fallback 到扫描 `cmd/` 目录，可能混入非预期的文件。
 
-**如果不传 IMAGES 会怎样？**
+---
 
-`deploy.mk` 中 `DEPLOYS ?= $(if $(IMAGES),$(IMAGES),$(BINS))`，
-`IMAGES` 为空则 fallback 到 `BINS`（扫描 `cmd/` 目录），
-可能混入非预期的文件（如 `README.md`），导致构建 `qingchun22/README.md-arm64:v0.1.0`。
+## ARCH 自动检测
+
+`ARCH` 优先级：`project.env` > `go env GOARCH` > `amd64`
+
+```go
+arch := envOrDefault(env, "ARCH", "")
+if arch == "" {
+    if out, err := exec.Command("go", "env", "GOARCH").Output(); err == nil {
+        arch = strings.TrimSpace(string(out))
+    }
+}
+if arch == "" {
+    arch = "amd64"
+}
+```
 
 ---
 
@@ -65,34 +140,17 @@ deploy.build:
     fi
 ```
 
-`docker manifest inspect` 查询远端 registry，无需拉取镜像，只检查 manifest 是否存在。
-VERSION 不变时跳过 build 和 push，避免每次 `dtk deploy` 都重新构建。
+`docker manifest inspect` 查询远端 registry，无需拉取镜像。VERSION 不变时跳过 build 和 push。
 
 ---
 
 ## Helm SSA 与 --force-conflicts
 
-Helm 3.x 默认使用 Server-Side Apply（SSA）管理资源。
-SSA 使用 field manager 追踪每个字段的"所有权"。
+**冲突场景**：`kubectl set image` 的 field manager 是 `kubectl-set`，helm 的 field manager 是 `helm`，两者对同一字段的所有权冲突。
 
-**冲突场景：**
+**解决**：`--force-conflicts` 让 Helm 强制接管这些字段。
 
-```bash
-kubectl set image deployment/myapp myapp=qingchun22/myapp:v0.1.1
-# 这个命令的 field manager 是 "kubectl-set"
-# .spec.template.spec.containers[name="myapp"].image 被 kubectl-set 持有
-
-helm upgrade myapp ...
-# Helm 的 field manager 是 "helm"
-# Helm 发现 image 字段被别的 manager 持有 → 冲突报错
-```
-
-**解决：** `--force-conflicts` 让 Helm 强制接管这些字段，不再报错。
-
-**根本解决：** 不要在 Helm 管理的 deployment 上直接用 `kubectl set image`。
-`deploy.run.%` 里的 `kubectl set image` 在 `deploy.install --wait` 之后执行，
-此时 Helm 已经完成更新，`kubectl set image` 只是再滚动一次，实际上是冗余的。
-未来可以考虑去掉 `deploy.run.all`，完全由 Helm 管理。
+**根本解决**：不要在 Helm 管理的资源上直接用 `kubectl set image`。`deploy.run.all` 里的 `kubectl set image` 是冗余的，未来可考虑去掉。
 
 ---
 
@@ -100,45 +158,45 @@ helm upgrade myapp ...
 
 ```
 没有 --wait：
-helm upgrade --install → 立即返回（资源已创建但 pod 未 ready）
-                       ↓
-deploy.run.all → kubectl set image deployment/myapp ...
-              → Error: deployments.apps "myapp" not found  ❌
+helm upgrade → 立即返回（pod 未 ready）
+            ↓
+deploy.run.all → kubectl set image → Error: deployment not found  ❌
 
 有 --wait：
-helm upgrade --install --wait → 等待 deployment ready 再返回
-                              ↓
+helm upgrade --wait → 等待 ready 再返回
+                    ↓
 deploy.run.all → kubectl set image → 正常执行  ✅
 ```
 
 ---
 
-## image.repository 用 firstword(BINS) 的原因
+## components.yaml 与 AI 规划
 
-```makefile
---set image.repository=$(REGISTRY_PREFIX)/$(firstword $(BINS))-$(ARCH)
+`internal/planner` 读取 `configs/components.yaml`，目前按规则估算资源：
+
+```yaml
+components:
+  - name: myapp
+    port: 8080
+    image: myapp
 ```
 
-`$(BINS)` 由 `golang.mk` 扫描 `cmd/` 目录生成，反映实际 binary 名。
-`$(PROJECT_NAME)` 是 `project.env` 里的配置，可能与 binary 名不一致。
-
-典型例子：
-```
-PROJECT_NAME = dev-toolkit   # helm release name
-BINS         = dtk           # cmd/dtk/main.go 扫描结果
-```
-
-如果用 `$(PROJECT_NAME)`，镜像名是 `qingchun22/dev-toolkit-arm64`，
-但实际推上去的是 `qingchun22/dtk-arm64`，pod 拉镜像失败。
+> 🚧 **待实现**：接入真实 LLM，扫描代码仓库自动生成/更新 components.yaml，AI 给出资源建议（replicas / cpu / memory）。详见 TODO。
 
 ---
 
-## components.yaml 手写 YAML 解析
+## A2 Reconciliation Controller
 
-`internal/ai/ai.go` 使用手写的逐行解析，而不是 yaml 库，原因：
+`dtk deploy` 完成后，controller pod 接管后续自愈：
 
-1. 格式固定简单，不需要通用 YAML 解析
-2. 减少外部依赖
-3. 方便控制字段处理逻辑（如 `image: ""` 去引号）
+```
+dtk deploy（CLI）→ 写状态到 etcd → 返回
+                        ↓
+controller（K8s pod，常驻）
+    ├── etcd Watch（事件驱动，指数退避重连）
+    └── 8s 周期 Reconcile（兜底）
+            ↓
+        资源缺失 → helm rollback → 自动恢复（~10s）
+```
 
-**注意：** `image: ""` 去掉前缀后是 `""`（带引号的字符串），需要显式 `strings.Trim(val, `"`)` 处理，否则 image 不为空，会参与构建。
+详见 [controller 设计文档](controller.md)。

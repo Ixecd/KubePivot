@@ -1,6 +1,5 @@
 # dtk release 设计文档
 
-> 版本：2026-03-24
 > 适用：dev-toolkit v0.4.0+
 
 ---
@@ -14,8 +13,7 @@
 git add configs/project.env
 git commit -m "chore: release v1.0.0"
 git tag -a v1.0.0 -m "release v1.0.0"
-git push
-git push --tags
+git push && git push --tags
 ```
 
 容易忘步骤、版本号写错、tag 和 commit 不一致。`dtk release` 把这些全部自动化。
@@ -32,7 +30,7 @@ dtk release --version v1.0.0
 dtk release --version v1.0.0 --deploy
 
 # 只打本地 tag，不推送到远端
-dtk release --version v1.0.0 --no-push
+dtk release --version v1.0.0 --push=false
 ```
 
 ---
@@ -49,8 +47,8 @@ dtk release --version v1.0.0
   ├── 5. git add configs/project.env
   ├── 6. git commit -m "chore: release v1.0.0"
   ├── 7. git tag -a v1.0.0 -m "release v1.0.0"
-  ├── 8. git push（默认）
-  ├── 9. git push --tags（默认）
+  ├── 8. git push（--push=false 时跳过）
+  ├── 9. git push --tags（--push=false 时跳过）
   └── 10. dtk deploy（仅 --deploy 时）
 ```
 
@@ -61,9 +59,7 @@ dtk release --version v1.0.0
 强制遵循 semver 格式：`v{major}.{minor}.{patch}`
 
 ```
-✅ v0.1.0
-✅ v1.0.0
-✅ v10.20.30
+✅ v0.1.0 / v1.0.0 / v10.20.30
 
 ❌ 1.0.0      缺少 v 前缀
 ❌ v1.0       缺少 patch
@@ -77,7 +73,7 @@ dtk release --version v1.0.0
 
 ### 工作区干净检查
 
-有未提交改动时直接报错退出，不允许带脏工作区发布：
+有未提交改动时直接报错退出：
 
 ```
 工作区有未提交的改动，请先 commit 或 stash：
@@ -95,8 +91,6 @@ tag 已存在时报错退出：
 tag v1.0.0 已存在，请使用其他版本号
 ```
 
-**设计考量**：防止意外覆盖已发布版本，git tag 默认不允许覆盖，提前检查给出更友好的错误信息。
-
 ---
 
 ## updateVersion 实现
@@ -104,15 +98,10 @@ tag v1.0.0 已存在，请使用其他版本号
 逐行扫描 `configs/project.env`，找到 `VERSION=` 开头的行替换，没有则追加：
 
 ```
-# 原文件
-PROJECT_NAME=myapp
-VERSION=v0.1.0     ← 找到这行
-ARCH=arm64
-
-# 更新后
-PROJECT_NAME=myapp
-VERSION=v1.0.0     ← 替换
-ARCH=arm64
+# 原文件              # 更新后
+PROJECT_NAME=myapp    PROJECT_NAME=myapp
+VERSION=v0.1.0    →   VERSION=v1.0.0
+ARCH=arm64            ARCH=arm64
 ```
 
 注释行、空行、其他字段完全保留，不破坏文件结构。
@@ -121,7 +110,7 @@ ARCH=arm64
 
 ## --deploy 标志
 
-打完 tag 后直接调用 `runDeploy`，等同于手动执行 `dtk deploy`：
+打完 tag 后直接调用 `runDeploy`，适用于发布后立即上线的场景：
 
 ```bash
 # 等价于：
@@ -129,16 +118,20 @@ dtk release --version v1.0.0
 dtk deploy
 ```
 
-适用于发布后立即上线的场景。不加 `--deploy` 时只打 tag，部署时机由用户控制。
-
 ---
 
-## --no-push 标志
+## --push=false 标志
 
 只在本地打 tag，不推送到远端。适用于：
 - 本地验证发布流程
-- 需要先在本地测试部署再推送
-- 网络不通时先打 tag
+- 项目没有配置远端仓库
+- 需要先本地测试再推送
+
+**注意**：zsh 下感叹号有特殊含义，带 `!` 的 commit message 需要用单引号：
+
+```bash
+git commit -m 'feat!: breaking change'
+```
 
 ---
 
@@ -163,10 +156,10 @@ TestCheckCleanWorkspace_Dirty    有未提交改动时返回错误
 
 ```
 cmd/dtk/
-└── release.go     # runRelease + 辅助函数
-    ├── semverPattern   版本号正则
+└── release.go
+    ├── semverPattern        版本号正则
     ├── checkCleanWorkspace  检查工作区
-    ├── tagExists       检查 tag
-    ├── updateVersion   更新 project.env
-    └── runOutputInDir  在指定目录执行命令
+    ├── tagExists            检查 tag
+    ├── updateVersion        更新 project.env
+    └── runOutputInDir       在指定目录执行命令
 ```

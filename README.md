@@ -291,6 +291,9 @@ K8s Service 环境变量注入产生的 warn，非 error，不影响运行。
 - [Helm chart 指南](docs/guide/zh-CN/helm.md)
 - [多集群部署](docs/guide/zh-CN/kubeconfig.md)
 - [状态机设计](docs/design/state-machine.md)
+- [整体架构设计](docs/design/architecture.md)
+- [A2 Controller 设计](docs/design/controller.md)
+- [命令参考手册](docs/guide/zh-CN/commands.md)
 
 ---
 
