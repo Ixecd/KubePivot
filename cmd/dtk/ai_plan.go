@@ -34,27 +34,26 @@ func runAIPlan(args []string) {
 		fmt.Fprintln(os.Stderr, "初始化 LLM 客户端失败:", err)
 		fmt.Fprintln(os.Stderr, "\n配置方式：")
 		fmt.Fprintln(os.Stderr, "  export DTK_LLM_API_KEY=your-api-key")
-		fmt.Fprintln(os.Stderr, "  export DTK_LLM_PROVIDER=claude  # claude / openai / doubao")
+		fmt.Fprintln(os.Stderr, "  export DTK_LLM_PROVIDER=grok  # grok / claude / openai / doubao")
 		os.Exit(1)
 	}
 
 	// 扫描仓库
-	fmt.Println("🔍 扫描项目仓库...")
+	P.Start("🔍", "扫描项目仓库")
 	repoCtx, err := ai.ScanRepo(root, *desc)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "扫描仓库失败:", err)
+		P.Fail("扫描仓库失败")
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-
-	fmt.Printf("   发现 %d 个服务：", len(repoCtx.Services))
 	names := make([]string, len(repoCtx.Services))
 	for i, s := range repoCtx.Services {
 		names[i] = s.Name
 	}
-	fmt.Println(strings.Join(names, ", "))
+	P.Done(fmt.Sprintf("发现 %d 个服务：%s", len(repoCtx.Services), strings.Join(names, ", ")))
 
 	// 调用 LLM
-	fmt.Println("🤖 正在分析（这可能需要几秒钟）...")
+	P.Start("🤖", "LLM 分析中")
 	prompt := ai.BuildPrompt(repoCtx)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -62,9 +61,11 @@ func runAIPlan(args []string) {
 
 	raw, err := client.Complete(ctx, prompt)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "LLM 调用失败:", err)
+		P.Fail("LLM 调用失败")
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	P.Done("分析完成")
 
 	// 解析输出
 	plan, err := ai.ParsePlan(raw)
@@ -80,7 +81,8 @@ func runAIPlan(args []string) {
 	fmt.Println("📋 AI 规划结果：")
 	fmt.Println()
 	for _, c := range plan.Components {
-		fmt.Printf("  %-24s replicas=%-2d cpu=%-8s memory=%-8s", c.Name, c.Replicas, c.CPU, c.Memory)
+		fmt.Printf("  %-24s replicas=%-2d cpu=%-8s memory=%-8s",
+			c.Name, c.Replicas, c.CPU, c.Memory)
 		if c.Image == "" {
 			fmt.Print("  (CLI 工具，跳过 build/push)")
 		}
@@ -91,7 +93,7 @@ func runAIPlan(args []string) {
 	fmt.Println()
 
 	if *suggestOnly {
-		fmt.Println("（--suggest-only 模式，不写入文件）")
+		P.Info("ℹ️ ", "--suggest-only 模式，不写入文件")
 		return
 	}
 
@@ -99,13 +101,11 @@ func runAIPlan(args []string) {
 	yamlContent := ai.RenderComponentsYAML(plan)
 	componentsPath := filepath.Join(root, "configs", "components.yaml")
 
-	// 询问用户确认
 	fmt.Println("生成的 components.yaml：")
 	fmt.Println()
 	fmt.Println(yamlContent)
 	fmt.Println()
 
-	// 检查是否已有 components.yaml
 	if _, err := os.Stat(componentsPath); err == nil {
 		fmt.Print("⚠️  configs/components.yaml 已存在，是否覆盖？(y/N): ")
 	} else {
@@ -117,7 +117,7 @@ func runAIPlan(args []string) {
 	input = strings.TrimSpace(strings.ToLower(input))
 
 	if input != "y" {
-		fmt.Println("已取消，未写入文件。")
+		P.Info("ℹ️ ", "已取消，未写入文件")
 		return
 	}
 
@@ -126,9 +126,9 @@ func runAIPlan(args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Println("✅ 已写入 configs/components.yaml")
+	P.Info("✅", "已写入 configs/components.yaml")
 	fmt.Println()
-	fmt.Println("下一步：")
-	fmt.Println("  dtk deploy          # 直接用 AI 规划部署")
+	P.Info("💡", "下一步：")
+	fmt.Println("  dtk deploy            # 直接用 AI 规划部署")
 	fmt.Println("  dtk deploy --dry-run  # 先预览规划再部署")
 }
