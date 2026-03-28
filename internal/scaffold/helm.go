@@ -7,46 +7,59 @@ import (
 	"strings"
 )
 
-// writeHelmTemplateSkeleton 生成自包含的 Helm chart templates。
-// 所有基础设施组件（postgres、etcd）均以 yaml 文件形式存放，
-// 不依赖任何第三方 chart dependency。
-// 组件命名规范：{name}-postgres、{name}-etcd，避免多项目同 namespace 冲突。
+// writeHelmTemplateSkeleton 生成多服务独立 helm chart 目录结构。
+//
+// 目录结构：
+//
+//	deployments/{name}/
+//	├── {name}-postgres/     # 独立 chart（StatefulSet）
+//	├── {name}-etcd/         # 独立 chart（Deployment）
+//	├── {name}/              # 业务服务 chart（含 initContainers）
+//	└── {name}-controller/   # controller chart
+//
+// 每个服务有独立的 helm release：{project}-{service}
 func writeHelmTemplateSkeleton(outputDir, name string) error {
-	templatesDir := filepath.Join(outputDir, "deployments", name, "templates")
-	if err := os.MkdirAll(templatesDir, 0o755); err != nil {
+	deploymentsDir := filepath.Join(outputDir, "deployments", name)
+
+	if err := writePostgresChart(deploymentsDir, name); err != nil {
+		return err
+	}
+	if err := writeEtcdChart(deploymentsDir, name); err != nil {
+		return err
+	}
+	if err := writeServiceChart(deploymentsDir, name); err != nil {
+		return err
+	}
+	if err := writeControllerChart(deploymentsDir, name); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ── postgres 独立 chart ───────────────────────────────────────────────────────
+
+func writePostgresChart(deploymentsDir, name string) error {
+	dir := filepath.Join(deploymentsDir, name+"-postgres", "templates")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 
-	files := map[string]string{
-		// ── NOTES.txt（chart 根目录，helm install/upgrade 后自动打印）──
-		filepath.Join(templatesDir, "NOTES.txt"): `✅ {{ .Release.Name }} 部署成功！
+	chartYAML := fmt.Sprintf(`apiVersion: v2
+name: %s-postgres
+description: PostgreSQL StatefulSet for %s
+type: application
+version: 0.1.0
+appVersion: "16-alpine"
+dependencies: []
+`, name, name)
 
-命名空间: {{ .Release.Namespace }}
-版本:     {{ .Values.image.tag | default .Chart.AppVersion }}
-时间:     {{ now | date "2006-01-02 15:04:05" }}
-
-组件状态:
-  业务服务   ✓ running
-  postgres  {{ if .Values.postgres.enabled }}✓ enabled{{ else }}✗ disabled{{ end }}
-  etcd      {{ if .Values.etcd.enabled }}✓ enabled{{ else }}✗ disabled{{ end }}
-  controller {{ if .Values.controller.enabled }}✓ enabled{{ else }}✗ disabled{{ end }}
-
-快速访问:
-  kubectl get pods -n {{ .Release.Namespace }}
-  kubectl logs -n {{ .Release.Namespace }} deployment/{{ include "` + name + `.fullname" . }}
-  kubectl port-forward -n {{ .Release.Namespace }} deployment/{{ include "` + name + `.fullname" . }} 8080:8080
-`,
-
-		// ── postgres StatefulSet + Service ──────────────────────────
-		filepath.Join(templatesDir, "postgres-statefulset.yaml"): fmt.Sprintf(`{{- if .Values.postgres.enabled }}
-apiVersion: apps/v1
+	statefulset := fmt.Sprintf(`apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: %s-postgres
   namespace: {{ .Release.Namespace }}
   labels:
     app: %s-postgres
-    {{- include "%s.labels" . | nindent 4 }}
 spec:
   serviceName: %s-postgres
   replicas: 1
@@ -77,13 +90,11 @@ spec:
               command: ["pg_isready", "-U", "user", "-d", "%s"]
             initialDelaySeconds: 5
             periodSeconds: 5
-            timeoutSeconds: 3
           livenessProbe:
             exec:
               command: ["pg_isready", "-U", "user", "-d", "%s"]
             initialDelaySeconds: 15
             periodSeconds: 10
-            timeoutSeconds: 3
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
@@ -94,34 +105,54 @@ spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: 1Gi
----
-apiVersion: v1
+            storage: {{ .Values.storage }}
+`, name, name, name, name, name, name, name, name)
+
+	svc := fmt.Sprintf(`apiVersion: v1
 kind: Service
 metadata:
   name: %s-postgres
   namespace: {{ .Release.Namespace }}
-  labels:
-    app: %s-postgres
 spec:
   selector:
     app: %s-postgres
   ports:
     - port: 5432
       targetPort: 5432
-{{- end }}
-`, name, name, name, name, name, name, name, name, name, name, name, name),
+`, name, name)
 
-		// ── etcd Deployment + Service ────────────────────────────────
-		filepath.Join(templatesDir, "etcd-deployment.yaml"): fmt.Sprintf(`{{- if .Values.etcd.enabled }}
-apiVersion: apps/v1
+	return writeFiles(map[string]string{
+		filepath.Join(deploymentsDir, name+"-postgres", "Chart.yaml"):  chartYAML,
+		filepath.Join(deploymentsDir, name+"-postgres", "values.yaml"): "storage: 1Gi\n",
+		filepath.Join(dir, "statefulset.yaml"):                         statefulset,
+		filepath.Join(dir, "service.yaml"):                             svc,
+	})
+}
+
+// ── etcd 独立 chart ───────────────────────────────────────────────────────────
+
+func writeEtcdChart(deploymentsDir, name string) error {
+	dir := filepath.Join(deploymentsDir, name+"-etcd", "templates")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+
+	chartYAML := fmt.Sprintf(`apiVersion: v2
+name: %s-etcd
+description: etcd Deployment for %s
+type: application
+version: 0.1.0
+appVersion: "v3.5.14"
+dependencies: []
+`, name, name)
+
+	deployment := fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: %s-etcd
   namespace: {{ .Release.Namespace }}
   labels:
     app: %s-etcd
-    {{- include "%s.labels" . | nindent 4 }}
 spec:
   replicas: 1
   selector:
@@ -154,28 +185,25 @@ spec:
               port: 2379
             initialDelaySeconds: 5
             periodSeconds: 5
-            timeoutSeconds: 3
           livenessProbe:
             httpGet:
               path: /health
               port: 2379
             initialDelaySeconds: 10
             periodSeconds: 10
-            timeoutSeconds: 3
           volumeMounts:
             - name: etcd-data
               mountPath: /etcd-data
       volumes:
         - name: etcd-data
           emptyDir: {}
----
-apiVersion: v1
+`, name, name, name, name, name)
+
+	svc := fmt.Sprintf(`apiVersion: v1
 kind: Service
 metadata:
   name: %s-etcd
   namespace: {{ .Release.Namespace }}
-  labels:
-    app: %s-etcd
 spec:
   selector:
     app: %s-etcd
@@ -186,55 +214,73 @@ spec:
     - name: peer
       port: 2380
       targetPort: 2380
-{{- end }}
-`, name, name, name, name, name, name, name, name, name),
+`, name, name)
 
-		// ── 业务服务 deployment，含 initContainers ───────────────────
-		filepath.Join(templatesDir, "deployment.yaml"): fmt.Sprintf(`apiVersion: apps/v1
+	return writeFiles(map[string]string{
+		filepath.Join(deploymentsDir, name+"-etcd", "Chart.yaml"): chartYAML,
+		filepath.Join(dir, "deployment.yaml"):                     deployment,
+		filepath.Join(dir, "service.yaml"):                        svc,
+	})
+}
+
+// ── 业务服务 chart ────────────────────────────────────────────────────────────
+
+func writeServiceChart(deploymentsDir, name string) error {
+	dir := filepath.Join(deploymentsDir, name, "templates")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+
+	chartYAML := fmt.Sprintf(`apiVersion: v2
+name: %s
+description: %s business service
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+dependencies: []
+`, name, name)
+
+	notes := fmt.Sprintf(`✅ {{ .Release.Name }} 部署成功！
+
+命名空间: {{ .Release.Namespace }}
+版本:     {{ .Values.image.tag | default .Chart.AppVersion }}
+时间:     {{ now | date "2006-01-02 15:04:05" }}
+
+快速访问:
+  kubectl get pods -n {{ .Release.Namespace }}
+  kubectl logs -n {{ .Release.Namespace }} deployment/%s
+  kubectl port-forward -n {{ .Release.Namespace }} deployment/%s {{ .Values.service.port }}:{{ .Values.service.port }}
+`, name, name)
+
+	deployment := fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "%s.fullname" . }}
+  name: %s
+  namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "%s.labels" . | nindent 4 }}
+    app: %s
+    version: {{ .Values.image.tag | default .Chart.AppVersion }}
 spec:
-  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
-  {{- end }}
   selector:
     matchLabels:
-      {{- include "%s.selectorLabels" . | nindent 6 }}
+      app: %s
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
-      annotations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
       labels:
-        {{- include "%s.labels" . | nindent 8 }}
-        {{- with .Values.podLabels }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
+        app: %s
+        version: {{ .Values.image.tag | default .Chart.AppVersion }}
     spec:
-      {{- with .Values.imagePullSecrets }}
-      imagePullSecrets:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      serviceAccountName: {{ include "%s.serviceAccountName" . }}
-      {{- if or .Values.postgres.enabled .Values.etcd.enabled }}
+      serviceAccountName: %s
       initContainers:
-        {{- if .Values.postgres.enabled }}
         - name: wait-postgres
           image: busybox:1.35
-          command: ['sh', '-c', 'until nc -z %s-postgres 5432; do echo waiting for %s-postgres; sleep 2; done']
-        {{- end }}
-        {{- if .Values.etcd.enabled }}
+          command: ['sh', '-c', 'until nc -z %s-postgres 5432; do echo waiting for postgres; sleep 2; done']
         - name: wait-etcd
           image: busybox:1.35
-          command: ['sh', '-c', 'until nc -z %s-etcd 2379; do echo waiting for %s-etcd; sleep 2; done']
-        {{- end }}
-      {{- end }}
+          command: ['sh', '-c', 'until nc -z %s-etcd 2379; do echo waiting for etcd; sleep 2; done']
       containers:
-        - name: {{ .Chart.Name }}
+        - name: %s
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
@@ -245,56 +291,110 @@ spec:
           env:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- with .Values.envFrom }}
-          envFrom:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- with .Values.livenessProbe }}
           livenessProbe:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- with .Values.readinessProbe }}
+            httpGet:
+              path: /healthz
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
           readinessProbe:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
+            httpGet:
+              path: /healthz
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- with .Values.volumeMounts }}
-          volumeMounts:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-      {{- with .Values.volumes }}
-      volumes:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.tolerations }}
-      tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-`, name, name, name, name, name, name, name, name, name),
+`, name, name, name, name, name, name, name, name)
 
-		// ── controller RBAC ──────────────────────────────────────────
-		filepath.Join(templatesDir, "controller-rbac.yaml"): `{{- if .Values.controller.enabled }}
+	svc := fmt.Sprintf(`apiVersion: v1
+kind: Service
+metadata:
+  name: %s
+  namespace: {{ .Release.Namespace }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app: %s
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.port }}
+      protocol: TCP
+`, name, name)
+
+	sa := fmt.Sprintf(`apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: %s
+  namespace: {{ .Release.Namespace }}
+`, name)
+
+	var vb strings.Builder
+	vb.WriteString("replicaCount: 1\n\n")
+	vb.WriteString("image:\n")
+	vb.WriteString("  repository: qingchun22/" + name + "-arm64\n")
+	vb.WriteString("  pullPolicy: IfNotPresent\n")
+	vb.WriteString("  tag: \"\"\n\n")
+	vb.WriteString("service:\n")
+	vb.WriteString("  type: ClusterIP\n")
+	vb.WriteString("  port: 8080\n\n")
+	vb.WriteString("resources: {}\n\n")
+	vb.WriteString("env:\n")
+	vb.WriteString("  - name: DATABASE_URL\n")
+	vb.WriteString("    value: \"postgres://user:pass@" + name + "-postgres:5432/" + name + "?sslmode=disable&search_path=public\"\n")
+	vb.WriteString("  - name: ETCD_ENDPOINTS\n")
+	vb.WriteString("    value: \"" + name + "-etcd:2379\"\n")
+
+	return writeFiles(map[string]string{
+		filepath.Join(deploymentsDir, name, "Chart.yaml"):        chartYAML,
+		filepath.Join(deploymentsDir, name, "values.yaml"):       vb.String(),
+		filepath.Join(dir, "NOTES.txt"):                          notes,
+		filepath.Join(dir, "deployment.yaml"):                    deployment,
+		filepath.Join(dir, "service.yaml"):                       svc,
+		filepath.Join(dir, "serviceaccount.yaml"):                sa,
+	})
+}
+
+// ── controller 独立 chart ─────────────────────────────────────────────────────
+
+func writeControllerChart(deploymentsDir, name string) error {
+	dir := filepath.Join(deploymentsDir, name+"-controller", "templates")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+
+	chartYAML := fmt.Sprintf(`apiVersion: v2
+name: %s-controller
+description: A2 Reconciliation Controller for %s
+type: application
+version: 0.1.0
+appVersion: "latest"
+dependencies: []
+`, name, name)
+
+	var vb strings.Builder
+	vb.WriteString("# 配置好镜像后将 enabled 改为 true，再重新 dtk deploy\n")
+	vb.WriteString("enabled: false\n\n")
+	vb.WriteString("image:\n")
+	vb.WriteString("  # TODO: 替换为你构建的 controller 镜像（需包含 dtk + kubectl + helm）\n")
+	vb.WriteString("  repository: your-registry/" + name + "-controller\n")
+	vb.WriteString("  tag: latest\n\n")
+	vb.WriteString("# 由 dtk deploy 通过 --set-file 自动注入 configs/resources.yaml\n")
+	vb.WriteString("resourcesConfig: \"\"\n")
+
+	rbac := fmt.Sprintf(`{{- if .Values.enabled }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ include "` + name + `.fullname" . }}-controller
+  name: %s-controller
   namespace: {{ .Release.Namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "` + name + `.fullname" . }}-controller
+  name: %s-controller
 rules:
   # 当前为全量权限，上线前请按实际需要收紧
   - apiGroups: ["*"]
@@ -304,164 +404,93 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "` + name + `.fullname" . }}-controller
+  name: %s-controller
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "` + name + `.fullname" . }}-controller
+  name: %s-controller
 subjects:
   - kind: ServiceAccount
-    name: {{ include "` + name + `.fullname" . }}-controller
+    name: %s-controller
     namespace: {{ .Release.Namespace }}
 {{- end }}
-`,
+`, name, name, name, name, name)
 
-		// ── resources ConfigMap ──────────────────────────────────────
-		filepath.Join(templatesDir, "resources-configmap.yaml"): `{{- if .Values.controller.enabled }}
+	configmap := fmt.Sprintf(`{{- if .Values.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "` + name + `.fullname" . }}-resources
+  name: %s-controller-resources
   namespace: {{ .Release.Namespace }}
 data:
   resources.yaml: |
-{{ .Values.controller.resourcesConfig | indent 4 }}
-{{ end }}
-`,
+{{ .Values.resourcesConfig | indent 4 }}
+{{- end }}
+`, name)
 
-		// ── controller Deployment ────────────────────────────────────
-		filepath.Join(templatesDir, "controller-deployment.yaml"): `{{- if .Values.controller.enabled }}
+	deployment := fmt.Sprintf(`{{- if .Values.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "` + name + `.fullname" . }}-controller
+  name: %s-controller
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "` + name + `.labels" . | nindent 4 }}
+    app: %s-controller
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: {{ include "` + name + `.fullname" . }}-controller
+      app: %s-controller
   template:
     metadata:
       labels:
-        app: {{ include "` + name + `.fullname" . }}-controller
+        app: %s-controller
     spec:
-      serviceAccountName: {{ include "` + name + `.fullname" . }}-controller
+      serviceAccountName: %s-controller
       containers:
         - name: controller
-          image: "{{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag }}"
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: IfNotPresent
           command: ["dtk", "controller", "start"]
           env:
             - name: PROJECT_NAME
-              value: "` + name + `"
+              value: "%s"
             - name: KUBE_NAMESPACE
-              value: {{ .Release.Namespace }}
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             - name: ETCD_ENDPOINTS
-              value: "` + name + `-etcd:2379"
+              value: "%s-etcd:2379"
             - name: RESOURCES_CONFIG
               value: "/etc/controller/resources.yaml"
-            - name: VERSION
-              value: "{{ .Values.image.tag }}"
           volumeMounts:
             - name: resources-config
               mountPath: /etc/controller
       volumes:
         - name: resources-config
           configMap:
-            name: {{ include "` + name + `.fullname" . }}-resources
+            name: %s-controller-resources
 {{- end }}
-`,
-	}
+`, name, name, name, name, name, name, name, name)
 
-	// values.yaml 单独用 Builder 生成，避免 fmt.Sprintf raw string 嵌套问题
-	var vb strings.Builder
-	vb.WriteString("# Default values for " + name + ".\n")
-	vb.WriteString("replicaCount: 1\n\n")
-	vb.WriteString("image:\n")
-	vb.WriteString("  repository: qingchun22/" + name + "-arm64\n")
-	vb.WriteString("  pullPolicy: IfNotPresent\n")
-	vb.WriteString("  tag: \"\"\n\n")
-	vb.WriteString("imagePullSecrets: []\n")
-	vb.WriteString("nameOverride: \"\"\n")
-	vb.WriteString("fullnameOverride: \"\"\n\n")
-	vb.WriteString("serviceAccount:\n")
-	vb.WriteString("  create: true\n")
-	vb.WriteString("  automount: true\n")
-	vb.WriteString("  annotations: {}\n")
-	vb.WriteString("  name: \"\"\n\n")
-	vb.WriteString("podAnnotations: {}\n")
-	vb.WriteString("podLabels: {}\n")
-	vb.WriteString("podSecurityContext: {}\n")
-	vb.WriteString("securityContext: {}\n\n")
-	vb.WriteString("service:\n")
-	vb.WriteString("  type: ClusterIP\n")
-	vb.WriteString("  port: 8080\n\n")
-	vb.WriteString("ingress:\n")
-	vb.WriteString("  enabled: false\n\n")
-	vb.WriteString("httpRoute:\n")
-	vb.WriteString("  enabled: false\n\n")
-	vb.WriteString("# 基础设施组件开关\n")
-	vb.WriteString("# 不需要 postgres 或 etcd 时改为 false\n")
-	vb.WriteString("# initContainers 会自动跳过对应的 wait 步骤\n")
-	vb.WriteString("postgres:\n")
-	vb.WriteString("  enabled: true\n\n")
-	vb.WriteString("etcd:\n")
-	vb.WriteString("  enabled: true\n\n")
-	vb.WriteString("resources: {}\n\n")
-	vb.WriteString("autoscaling:\n")
-	vb.WriteString("  enabled: false\n")
-	vb.WriteString("  minReplicas: 1\n")
-	vb.WriteString("  maxReplicas: 100\n")
-	vb.WriteString("  targetCPUUtilizationPercentage: 80\n\n")
-	vb.WriteString("livenessProbe:\n")
-	vb.WriteString("  httpGet:\n")
-	vb.WriteString("    path: /healthz\n")
-	vb.WriteString("    port: 8080\n")
-	vb.WriteString("  initialDelaySeconds: 10\n")
-	vb.WriteString("  periodSeconds: 10\n\n")
-	vb.WriteString("readinessProbe:\n")
-	vb.WriteString("  httpGet:\n")
-	vb.WriteString("    path: /healthz\n")
-	vb.WriteString("    port: 8080\n")
-	vb.WriteString("  initialDelaySeconds: 5\n")
-	vb.WriteString("  periodSeconds: 5\n\n")
-	vb.WriteString("volumes: []\n")
-	vb.WriteString("volumeMounts: []\n")
-	vb.WriteString("nodeSelector: {}\n")
-	vb.WriteString("tolerations: []\n")
-	vb.WriteString("affinity: {}\n\n")
-	vb.WriteString("# 环境变量 — 通过 deployment template 注入到容器\n")
-	vb.WriteString("env:\n")
-	vb.WriteString("  - name: DATABASE_URL\n")
-	vb.WriteString("    value: \"postgres://user:pass@" + name + "-postgres:5432/" + name + "?sslmode=disable&search_path=public\"\n")
-	vb.WriteString("  - name: ETCD_ENDPOINTS\n")
-	vb.WriteString("    value: \"" + name + "-etcd:2379\"\n\n")
-	vb.WriteString("controller:\n")
-	vb.WriteString("  # 配置好镜像后将 enabled 改为 true，再重新 dtk deploy\n")
-	vb.WriteString("  enabled: false\n")
-	vb.WriteString("  # TODO: 替换为你构建的 controller 镜像\n")
-	vb.WriteString("  # 镜像需包含 dtk 二进制 + kubectl + helm\n")
-	vb.WriteString("  # 构建方式参考 build/docker/controller/Dockerfile\n")
-	vb.WriteString("  image:\n")
-	vb.WriteString("    repository: your-registry/" + name + "-controller\n")
-	vb.WriteString("    tag: latest\n")
-	vb.WriteString("  # 由 dtk deploy 通过 --set-file 自动注入 configs/resources.yaml\n")
-	vb.WriteString("  resourcesConfig: \"\"\n")
+	return writeFiles(map[string]string{
+		filepath.Join(deploymentsDir, name+"-controller", "Chart.yaml"):  chartYAML,
+		filepath.Join(deploymentsDir, name+"-controller", "values.yaml"): vb.String(),
+		filepath.Join(dir, "rbac.yaml"):                                  rbac,
+		filepath.Join(dir, "configmap.yaml"):                             configmap,
+		filepath.Join(dir, "deployment.yaml"):                            deployment,
+	})
+}
 
-	valuesPath := filepath.Join(outputDir, "deployments", name, "values.yaml")
-	if err := os.WriteFile(valuesPath, []byte(vb.String()), 0o644); err != nil {
-		return fmt.Errorf("gen values.yaml: %w", err)
-	}
+// ── 工具函数 ──────────────────────────────────────────────────────────────────
 
+func writeFiles(files map[string]string) error {
 	for path, content := range files {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-			return fmt.Errorf("gen helm template %s: %w", path, err)
+			return fmt.Errorf("写入 %s 失败: %w", path, err)
 		}
 	}
 	return nil

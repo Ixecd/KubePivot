@@ -241,82 +241,95 @@ func executeDeploy(sm *state.Machine, cfg *deployConfig, env map[string]string, 
 		return err
 	}
 
-	makeEnv := buildMakeEnv(env, cfg, plan)
-
-	// ── 1. Build ──────────────────────────────────────────────────────────────
-	hasImages := false
-	for _, item := range plan {
-		if item.Image != "" {
-			hasImages = true
-			break
-		}
+	// 尝试读取拓扑分层
+	layers, err := planner.BuildLayers(filepath.Join(root, cfg.components))
+	if err != nil {
+		return fmt.Errorf("构建部署计划失败: %w", err)
 	}
 
-	if hasImages {
-		imageList := []string{}
+	// 多服务（多层 或 同层多个服务）走独立 release 路径
+	isMultiService := len(layers) > 1 || (len(layers) == 1 && len(layers[0]) > 1)
+	if isMultiService {
+		P.Info("🗂 ", fmt.Sprintf("多服务模式：%d 层，独立 helm release", len(layers)))
+		if err := deployLayers(sm, cfg, env, layers, root); err != nil {
+			return err
+		}
+		goto validating
+	}
+
+	// ── 单服务：原有 make 路径 ────────────────────────────────────────────────
+	{
+		makeEnv := buildMakeEnv(env, cfg, plan)
+
+		// ── 1. Build ─────────────────────────────────────────────────────────
+		var imageList []string
 		for _, item := range plan {
 			if item.Image != "" {
 				imageList = append(imageList, item.Image)
 			}
 		}
-		P.Start("🏗 ", fmt.Sprintf("构建镜像 %s（%s）",
-			strings.Join(imageList, ", "), version))
-		if err := runCmd(root, makeEnv, "make", "deploy.build"); err != nil {
-			P.Fail("构建失败")
-			return handleDeployError(sm, cfg, env, err)
-		}
-		P.Done("构建完成")
 
-		// ── 2. Push ──────────────────────────────────────────────────────────
-		P.Start("📤", fmt.Sprintf("推送镜像 %s（%s）",
-		strings.Join(imageList, ", "), version))
-		if err := runCmd(root, makeEnv, "make", "deploy.push"); err != nil {
-			P.Fail("推送失败")
-			return handleDeployError(sm, cfg, env, err)
-		}
-		P.Done("推送完成")
-	}
-
-	// ── 3. Install ───────────────────────────────────────────────────────────
-	P.Start("⛵", fmt.Sprintf("helm upgrade %s", projectName))
-	installErr := runCmd(root, makeEnv, "make", "deploy.install")
-	if installErr != nil {
-		P.Fail("helm upgrade 失败")
-
-		// SSA 冲突检测
-		if isSSAConflict(installErr.Error()) {
-			P.Info("🔧", "检测到 SSA 冲突，正在自动修复...")
-			if retryErr := retryDeployWithSSAFix(cfg, makeEnv, root); retryErr == nil {
-				P.Done("SSA 修复成功，继续部署")
-				goto rollout
-			} else {
-				installErr = retryErr
+		if len(imageList) > 0 {
+			P.Start("🏗 ", fmt.Sprintf("构建镜像 %s（%s）",
+				strings.Join(imageList, ", "), version))
+			if err := runCmd(root, makeEnv, "make", "deploy.build"); err != nil {
+				P.Fail("构建失败")
+				return handleDeployError(sm, cfg, env, err)
 			}
+			P.Done("构建完成")
+
+			// ── 2. Push ───────────────────────────────────────────────────────
+			P.Start("📤", fmt.Sprintf("推送镜像 %s（%s）",
+				strings.Join(imageList, ", "), version))
+			if err := runCmd(root, makeEnv, "make", "deploy.push"); err != nil {
+				P.Fail("推送失败")
+				return handleDeployError(sm, cfg, env, err)
+			}
+			P.Done("推送完成")
 		}
 
-		// 镜像拉取失败提示
-		if isImagePullError(installErr.Error()) {
-			fmt.Fprintln(os.Stderr, "")
-			P.Info("❌", "检测到镜像拉取失败，请检查：")
-			fmt.Fprintf(os.Stderr, "  1. 镜像是否已推送：docker manifest inspect %s/%s-%s:%s\n",
-				env["REGISTRY_PREFIX"], projectName, env["ARCH"], version)
-			fmt.Fprintln(os.Stderr, "  2. registry 是否需要登录：docker login")
-			fmt.Fprintf(os.Stderr, "  3. ARCH 是否正确：当前 %s，集群节点架构是否匹配\n", env["ARCH"])
+		// ── 3. Install ────────────────────────────────────────────────────────
+		P.Start("⛵", fmt.Sprintf("helm upgrade %s", projectName))
+		installErr := runCmd(root, makeEnv, "make", "deploy.install")
+		if installErr != nil {
+			P.Fail("helm upgrade 失败")
+
+			// SSA 冲突检测
+			if isSSAConflict(installErr.Error()) {
+				P.Info("🔧", "检测到 SSA 冲突，正在自动修复...")
+				if retryErr := retryDeployWithSSAFix(cfg, makeEnv, root); retryErr == nil {
+					P.Done("SSA 修复成功，继续部署")
+					goto rollout
+				} else {
+					installErr = retryErr
+				}
+			}
+
+			// 镜像拉取失败提示
+			if isImagePullError(installErr.Error()) {
+				fmt.Fprintln(os.Stderr, "")
+				P.Info("❌", "检测到镜像拉取失败，请检查：")
+				fmt.Fprintf(os.Stderr, "  1. 镜像是否已推送：docker manifest inspect %s/%s-%s:%s\n",
+					env["REGISTRY_PREFIX"], projectName, env["ARCH"], version)
+				fmt.Fprintln(os.Stderr, "  2. registry 是否需要登录：docker login")
+				fmt.Fprintf(os.Stderr, "  3. ARCH 是否正确：当前 %s，集群节点架构是否匹配\n", env["ARCH"])
+			}
+
+			return handleDeployError(sm, cfg, env, installErr)
 		}
+		P.Done("helm upgrade 完成")
 
-		return handleDeployError(sm, cfg, env, installErr)
+	rollout:
+		// ── 4. Rollout ────────────────────────────────────────────────────────
+		P.Start("🔍", "等待 rollout 就绪")
+		if err := runCmd(root, makeEnv, "make", "deploy.run.all"); err != nil {
+			P.Fail("rollout 超时")
+			return handleDeployError(sm, cfg, env, err)
+		}
+		P.Done("服务就绪")
 	}
-	P.Done("helm upgrade 完成")
 
-rollout:
-	// ── 4. Rollout ───────────────────────────────────────────────────────────
-	P.Start("🔍", "等待 rollout 就绪")
-	if err := runCmd(root, makeEnv, "make", "deploy.run.all"); err != nil {
-		P.Fail("rollout 超时")
-		return handleDeployError(sm, cfg, env, err)
-	}
-	P.Done("服务就绪")
-
+validating:
 	// DEPLOYING → VALIDATING → RUNNING
 	if err := sm.Transition(state.StateValidating, "验证部署结果"); err != nil {
 		return err
