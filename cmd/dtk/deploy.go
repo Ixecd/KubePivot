@@ -253,8 +253,14 @@ func executeDeploy(sm *state.Machine, cfg *deployConfig, env map[string]string, 
 	}
 
 	if hasImages {
-		P.Start("🏗 ", fmt.Sprintf("构建镜像 %s-%s:%s",
-			envOrDefault(env, "REGISTRY_PREFIX", ""), projectName, version))
+		imageList := []string{}
+		for _, item := range plan {
+			if item.Image != "" {
+				imageList = append(imageList, item.Image)
+			}
+		}
+		P.Start("🏗 ", fmt.Sprintf("构建镜像 %s（%s）",
+			strings.Join(imageList, ", "), version))
 		if err := runCmd(root, makeEnv, "make", "deploy.build"); err != nil {
 			P.Fail("构建失败")
 			return handleDeployError(sm, cfg, env, err)
@@ -262,8 +268,8 @@ func executeDeploy(sm *state.Machine, cfg *deployConfig, env map[string]string, 
 		P.Done("构建完成")
 
 		// ── 2. Push ──────────────────────────────────────────────────────────
-		P.Start("📤", fmt.Sprintf("推送镜像 %s-%s:%s",
-			envOrDefault(env, "REGISTRY_PREFIX", ""), projectName, version))
+		P.Start("📤", fmt.Sprintf("推送镜像 %s（%s）",
+		strings.Join(imageList, ", "), version))
 		if err := runCmd(root, makeEnv, "make", "deploy.push"); err != nil {
 			P.Fail("推送失败")
 			return handleDeployError(sm, cfg, env, err)
