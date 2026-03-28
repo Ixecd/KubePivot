@@ -341,13 +341,6 @@ initContainers:
 
 用户使用方式不变，内部按拓扑排序多次调用 helm。
 
-### 9.2 dtk rollback（新增 --service 参数）
-
-```bash
-dtk rollback                   # 整组回滚（现有行为）
-dtk rollback --service myapp   # 只回滚指定服务 + 其下游（新增）
-```
-
 ### 9.3 dtk status（增强）
 
 ```bash
