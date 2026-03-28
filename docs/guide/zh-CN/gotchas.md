@@ -370,3 +370,37 @@ solo 开发时这是正常配置（CI 只用于提醒），如果需要强制阻
 **Settings → Branches → Add branch ruleset → Require status checks to pass**
 
 然后把 CI job 名称加入 status checks 列表。
+
+---
+
+## 八、多服务场景
+
+### 单个服务出问题，不要单独回滚
+
+dtk 不支持 `dtk rollback --service`，这是故意的设计决策。
+
+单独回滚某个服务会导致版本割裂：
+- `wallet-service` 回滚到 v1.1，但 `postgres` 已经 migrate 到 v1.5 的表结构
+- `admin-service` 还在调 `wallet-service` v1.2 的接口，回滚后接口不兼容
+
+**正确姿势：热修复整体发布**
+```bash
+# 1. 只改有问题的服务代码
+vim internal/wallet/handler.go
+
+# 2. 整体重新发布（其他服务镜像 tag 不变，只有修复的服务会重新 build/push）
+dtk release --version v0.2.1 --deploy
+```
+
+dtk 会检测哪些服务的镜像已经存在（VERSION 没变则跳过 build/push），只重新部署有变化的服务，其他服务 helm upgrade 但 pod 不会重启。版本号统一，历史可追溯。
+
+### 整体回滚的日志
+
+`dtk rollback` 会按拓扑逆序回滚所有服务，打印每步进度：
+```
+正在回滚 admin-service...     ✓
+正在回滚 wallet-service...    ✓
+正在回滚 etcd...              ✓
+正在回滚 postgres...          ✓
+✅ 回滚完成，所有服务已回滚到上一版本
+```
