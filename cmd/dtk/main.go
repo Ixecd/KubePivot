@@ -55,6 +55,8 @@ func main() {
 		runDeploy(os.Args[2:])
 	case "down":
 		runDown(os.Args[2:])
+	case "ai-plan":
+		runAIPlan(os.Args[2:])
 	case "doctor":
 		runDoctor(os.Args[2:])
 	case "history":
@@ -127,6 +129,7 @@ func printUsage() {
 
 用法:
   dtk init     --name <project> --module <module> [--output <dir>] [--template <dir>] [--force]
+  dtk ai-plan  [--suggest-only] [--desc "描述"]   AI 扫描仓库，自动规划组件配置
   dtk doctor   检查环境依赖
   dtk deploy   [--components <path>] [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>] [--dry-run]
   dtk status   [--namespace] [--context] [--kubeconfig] [--history]  查看部署状态
