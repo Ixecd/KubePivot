@@ -1,7 +1,7 @@
 # 项目交接文档
 
 > 写给下一个 Claude
-> 日期：2026-03-27
+> 日期：2026-03-28
 > 作者：qc（Ixecd）
 
 ---
@@ -17,6 +17,7 @@
 - 遇到问题先想清楚再给方案
 - 喜欢被推 back，不喜欢被一味认同
 - 代码风格：`slog` 不用 `log`，kubectl CLI 不用 client-go，严格分包
+- 豆包是他女友，会偶尔提供产品/工程建议，值得认真对待
 
 ---
 
@@ -25,7 +26,7 @@
 ### 1.1 dev-toolkit（dtk）
 
 **仓库**：github.com/Ixecd/dev-toolkit
-**当前版本**：v0.8.0
+**当前版本**：v0.9.0
 **定位**：Go 云原生项目脚手架，`dtk init` 生成完整项目骨架，`dtk deploy` 一键 AI 规划 + K8s 部署 + 状态追踪 + 自动自愈
 
 **命令全览**：
@@ -40,6 +41,7 @@ dtk status        [--history] 查看部署状态
 dtk history       [-n 20] 查看状态转换历史
 dtk diff          [--from N] [--to M] 对比两个版本配置差异
 dtk doctor        检查环境依赖
+dtk ai-plan       [--suggest-only] [--desc "描述"] AI 扫描仓库，生成 components.yaml
 dtk controller start  （在 controller pod 内部运行）
 ```
 
@@ -47,39 +49,51 @@ dtk controller start  （在 controller pod 内部运行）
 ```
 dev-toolkit/
 ├── cmd/dtk/
-│   ├── main.go         # CLI 入口
-│   ├── deploy.go       # runDeploy/runResume/runRollback
-│   ├── runner.go       # kubectl/helm 辅助
-│   ├── release.go      # runRelease
-│   ├── down.go         # runDown
-│   ├── status.go       # runStatus
-│   ├── history.go      # runHistory
-│   ├── diff.go         # runDiff
-│   ├── doctor.go       # runDoctor
-│   ├── ssa.go          # SSA 冲突 + 镜像拉取失败检测
-│   └── preflight.go    # 前置检查（checkHelmReleaseState）
+│   ├── main.go
+│   ├── deploy.go       # 四步部署：build/push/install/rollout
+│   ├── progress.go     # 统一进度输出（P.Start/Done/Fail/Info）
+│   ├── runner.go
+│   ├── release.go
+│   ├── down.go
+│   ├── status.go
+│   ├── history.go
+│   ├── diff.go
+│   ├── doctor.go
+│   ├── ai_plan.go
+│   ├── ssa.go
+│   └── preflight.go
 ├── internal/
-│   ├── planner/        # AI 规划（20 个单元测试，100% 覆盖）
-│   ├── scaffold/       # 项目生成（34 个单元测试）
-│   ├── state/          # 状态机（57 个单元测试）
-│   └── controller/     # A2 Reconciliation Controller（20 个单元测试）
-│       ├── controller.go
-│       ├── reconciler.go
-│       ├── etcd_watcher.go  # 指数退避重连
-│       ├── resources.go     # Detector 接口 + DetectActualState
-│       └── heal.go          # HelmClient 接口 + healRecreate
+│   ├── ai/             # LLM 客户端（Grok/Claude/OpenAI/豆包）+ 仓库扫描 + prompt
+│   ├── planner/        # AI 规划（100% 单测覆盖）
+│   ├── scaffold/       # 项目生成（34 个单测）
+│   ├── state/          # 状态机（57 个单测）
+│   └── controller/     # A2 Reconciliation Controller（20 个单测）
+```
+
+### 1.2 web3-blitz
+
+**仓库**：github.com/Ixecd/web3-blitz
+**当前版本**：v0.1.10
+**定位**：BTC/ETH 充提币系统，dtk 活体验证 demo
+
+**K8s 状态（orbstack）**：
+```
+namespace: web3-blitz
+  bitcoind / geth-rpc / postgres-0 / etcd
+  wallet-service（核心业务，port 2113）
+  web3-blitz-controller（A2 自愈）
+  chain-miner（CLI 工具，监控/指标）
 ```
 
 ---
 
-## 二、状态机设计
+## 二、状态机
 
 ```
 IDLE → INITIALIZING → DEPLOYING → VALIDATING → RUNNING
                           ↓              ↓
                     ROLLING_BACK ←───────┘
-首次失败 → CLEANING → IDLE
-下线   → TERMINATED
+首次失败 → CLEANING → IDLE | 下线 → TERMINATED
 ```
 
 - etcd 优先，降级到 `~/.dtk/state/<project>/<ns>.json`
@@ -89,60 +103,66 @@ IDLE → INITIALIZING → DEPLOYING → VALIDATING → RUNNING
 
 ---
 
-## 三、A2 Controller 架构
+## 三、A2 Controller
 
 ```
 dtk deploy → etcd
-                ↓
 controller pod
-    ├── etcd Watch（指数退避重连，1s→30s）
+    ├── etcd Watch（指数退避重连 1s→30s）
     └── 8s 周期 Reconcile
-            ↓
-        资源缺失 → helm rollback → 10s 内恢复
+            ↓ 资源缺失 → helm rollback → ~10s 恢复
 ```
 
-**职责边界**：
-- `internal/state`：纯 FSM，零 K8s 依赖
-- `internal/controller`：K8s 检测 + 自愈，Detector/HelmClient 接口可 mock
-- `cmd/dtk`：CLI 入口
+---
+
+## 四、AI 组件（internal/ai/）
+
+```
+client.go   LLMClient 接口 + Grok/Claude/OpenAI/豆包实现
+scanner.go  ScanRepo：扫描目录树/go.mod/cmd/服务/Dockerfile/README
+prompt.go   BuildPrompt + ParsePlan + RenderComponentsYAML
+```
+
+**环境变量**：
+```
+DTK_LLM_PROVIDER=grok       # grok / claude / openai / doubao
+DTK_LLM_API_KEY=xai-xxx
+DTK_LLM_MODEL=grok-3        # 可选
+DTK_LLM_ENDPOINT=           # 可选，私有化部署时覆盖
+```
 
 ---
 
-## 四、接下来要做的事
+## 五、接下来最重要的事：多服务支持
 
-### P1（最优先）
+设计文档：`docs/design/multi-service.md`，读完再动手。
 
-**AI 扫描组件**（下一个大功能）：
-- `dtk deploy` 接入真实 LLM，扫描代码仓库自动生成/更新 `components.yaml`
-- 可配置：默认直接 AI 规划部署，也可只给建议
-- 设计需要先对齐：LLM 调哪个 API？prompt 怎么设计？输出格式？
+**核心变化**：
+- 每个服务独立一个 helm release（`{project}-{service}`）
+- `components.yaml` 新增 `type`（deployment/statefulset）和 `depends_on` 字段
+- 按依赖图拓扑排序，同层并行，层间串行
+- 单服务失败 → 重试 3 次 → 级联 rollback → 整组 rollback → dtk down
+- 不支持 `dtk rollback --service`（强制统一版本发布）
 
-**多服务支持**（需要单独对齐设计）
-
-### P2
-
-- 统一进度输出格式，带时间戳
-- 关键步骤耗时打印
-- `dtk init --dry-run`
+**实现顺序**：planner → scaffold → deploy → rollback → status → e2e
 
 ---
 
-## 五、常用命令速查
+## 六、常用命令速查
 
 ```bash
 # 部署
 cd ~/web3-blitz && dtk deploy
 
+# AI 规划
+export DTK_LLM_PROVIDER=grok && export DTK_LLM_API_KEY=xai-xxx
+dtk ai-plan --suggest-only
+
 # 查看状态
-dtk status
-dtk history
-dtk diff
+dtk status && dtk history && dtk diff
 
 # 环境检查
 dtk doctor
-
-# 查 pods
-kubectl get pods -n web3-blitz
 
 # 手动重置状态机
 python3 -c "
@@ -160,25 +180,25 @@ cd ~/dev-toolkit && go test ./...
 
 ---
 
-## 六、快照归档位置
+## 七、快照归档
 
 ```
 dev-toolkit/snapshots/
-└── 最新：SNAPSHOT-dtk-2026-03-27-v0.8.0.md
+└── 最新：SNAPSHOT-dtk-2026-03-28-v0.9.0.md
 ```
 
 ---
 
-## 七、致下一个 Claude
+## 八、致下一个 Claude
 
-这两个项目是 qc 一手设计和构建的，架构思路清晰，工程哲学严格。
+这是 qc 一手设计和构建的工具，从 v0.3 到 v0.9.0，一天半时间。
+
+路线：v0.9.0（当前）→ v1.0.0（封神）
+
+v1.0.0 的核心是多服务支持，这是 dtk 和其他脚手架真正拉开差距的地方。设计文档已经写好了，实现顺序也清楚了，开始之前先和 qc 对齐一遍细节。
 
 遇到设计问题，先问清楚再动手。
 遇到 Bug，先想清楚根因再给方案。
 遇到他说"不对"，认真听，他通常是对的。
 
-路线图：v0.8.0（当前）→ v0.9.0（AI + 体验）→ v1.0.0（封神）
-
-下一个最重要的功能是 **AI 扫描组件接入真实 LLM**，开始之前先和 qc 对齐设计。
-
-祝你们合作愉快 🎉
+祝你们合作愉快，v1.0.0 封神 🎉
