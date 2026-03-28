@@ -7,36 +7,47 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Component 组件定义
 type Component struct {
-	Name     string
-	Image    string
-	Port     int
-	Replicas int
-	CPU      string
-	Memory   string
-	Storage  string
+	Name      string
+	Type      string   // deployment（默认）/ statefulset
+	Image     string
+	Port      int
+	Replicas  int
+	CPU       string
+	Memory    string
+	Storage   string
+	DependsOn []string // 依赖的服务名列表
 }
 
+// Plan 单个组件的部署计划
 type Plan struct {
-	Name     string
-	Replicas int
-	CPU      string
-	Memory   string
-	Storage  string
-	Image    string
-	Port     int
+	Name      string
+	Type      string
+	Replicas  int
+	CPU       string
+	Memory    string
+	Storage   string
+	Image     string
+	Port      int
+	DependsOn []string
 }
+
+// Layer 拓扑排序后的一层（同层可并行部署）
+type Layer []Plan
 
 // yamlComponents 对应 components.yaml 的结构
 type yamlComponents struct {
 	Components []struct {
-		Name     string `yaml:"name"`
-		Image    string `yaml:"image"`
-		Port     int    `yaml:"port"`
-		Replicas int    `yaml:"replicas"`
-		CPU      string `yaml:"cpu"`
-		Memory   string `yaml:"memory"`
-		Storage  string `yaml:"storage"`
+		Name      string   `yaml:"name"`
+		Type      string   `yaml:"type"`
+		Image     string   `yaml:"image"`
+		Port      int      `yaml:"port"`
+		Replicas  int      `yaml:"replicas"`
+		CPU       string   `yaml:"cpu"`
+		Memory    string   `yaml:"memory"`
+		Storage   string   `yaml:"storage"`
+		DependsOn []string `yaml:"depends_on"`
 	} `yaml:"components"`
 }
 
@@ -53,14 +64,20 @@ func LoadComponents(path string) ([]Component, error) {
 
 	components := make([]Component, 0, len(raw.Components))
 	for _, c := range raw.Components {
+		t := c.Type
+		if t == "" {
+			t = "deployment"
+		}
 		components = append(components, Component{
-			Name:     c.Name,
-			Image:    c.Image,
-			Port:     c.Port,
-			Replicas: c.Replicas,
-			CPU:      c.CPU,
-			Memory:   c.Memory,
-			Storage:  c.Storage,
+			Name:      c.Name,
+			Type:      t,
+			Image:     c.Image,
+			Port:      c.Port,
+			Replicas:  c.Replicas,
+			CPU:       c.CPU,
+			Memory:    c.Memory,
+			Storage:   c.Storage,
+			DependsOn: c.DependsOn,
 		})
 	}
 	return components, nil
@@ -74,15 +91,9 @@ func EstimateReplicas(component Component) int {
 }
 
 func EstimateResources(component Component) (cpu string, memory string, storage string) {
-	if component.CPU != "" {
-		cpu = component.CPU
-	}
-	if component.Memory != "" {
-		memory = component.Memory
-	}
-	if component.Storage != "" {
-		storage = component.Storage
-	}
+	cpu = component.CPU
+	memory = component.Memory
+	storage = component.Storage
 	if cpu == "" {
 		cpu = "100m"
 	}
@@ -95,23 +106,155 @@ func EstimateResources(component Component) (cpu string, memory string, storage 
 	return cpu, memory, storage
 }
 
+// BuildPlan 构建部署计划（扁平列表，保持原有接口兼容）
 func BuildPlan(path string) ([]Plan, error) {
+	layers, err := BuildLayers(path)
+	if err != nil {
+		return nil, err
+	}
+	var plans []Plan
+	for _, layer := range layers {
+		plans = append(plans, layer...)
+	}
+	return plans, nil
+}
+
+// BuildLayers 构建拓扑分层部署计划
+// 返回按依赖顺序排列的层级，同层可并行部署，层间必须串行
+func BuildLayers(path string) ([]Layer, error) {
 	components, err := LoadComponents(path)
 	if err != nil {
 		return nil, err
 	}
-	plans := make([]Plan, 0, len(components))
-	for _, component := range components {
-		cpu, memory, storage := EstimateResources(component)
-		plans = append(plans, Plan{
-			Name:     component.Name,
-			Replicas: EstimateReplicas(component),
-			CPU:      cpu,
-			Memory:   memory,
-			Storage:  storage,
-			Image:    component.Image,
-			Port:     component.Port,
-		})
+
+	// 构建 Plan 列表
+	planMap := make(map[string]Plan, len(components))
+	for _, c := range components {
+		cpu, memory, storage := EstimateResources(c)
+		planMap[c.Name] = Plan{
+			Name:      c.Name,
+			Type:      c.Type,
+			Replicas:  EstimateReplicas(c),
+			CPU:       cpu,
+			Memory:    memory,
+			Storage:   storage,
+			Image:     c.Image,
+			Port:      c.Port,
+			DependsOn: c.DependsOn,
+		}
 	}
-	return plans, nil
+
+	// 验证 depends_on 里的服务名都存在
+	for name, plan := range planMap {
+		for _, dep := range plan.DependsOn {
+			if _, ok := planMap[dep]; !ok {
+				return nil, fmt.Errorf("服务 %s 依赖 %s，但 %s 未在 components.yaml 中定义", name, dep, dep)
+			}
+		}
+	}
+
+	// 拓扑排序（Kahn 算法），同时检测循环依赖
+	return topoSort(components, planMap)
+}
+
+// topoSort Kahn 算法拓扑排序，返回分层结果
+func topoSort(components []Component, planMap map[string]Plan) ([]Layer, error) {
+	// 计算每个节点的入度
+	inDegree := make(map[string]int, len(components))
+	// 反向邻接表：dep → 依赖 dep 的服务列表
+	dependents := make(map[string][]string, len(components))
+
+	for _, c := range components {
+		if _, ok := inDegree[c.Name]; !ok {
+			inDegree[c.Name] = 0
+		}
+		for _, dep := range c.DependsOn {
+			inDegree[c.Name]++
+			dependents[dep] = append(dependents[dep], c.Name)
+		}
+	}
+
+	// 初始队列：入度为 0 的节点（无依赖）
+	var queue []string
+	// 保持原始顺序
+	for _, c := range components {
+		if inDegree[c.Name] == 0 {
+			queue = append(queue, c.Name)
+		}
+	}
+
+	var layers []Layer
+	visited := 0
+
+	for len(queue) > 0 {
+		// 当前队列的所有节点形成一层（可并行）
+		layer := make(Layer, 0, len(queue))
+		for _, name := range queue {
+			layer = append(layer, planMap[name])
+			visited++
+		}
+		layers = append(layers, layer)
+
+		// 处理当前层的所有节点，更新下一层
+		var nextQueue []string
+		for _, name := range queue {
+			for _, dependent := range dependents[name] {
+				inDegree[dependent]--
+				if inDegree[dependent] == 0 {
+					nextQueue = append(nextQueue, dependent)
+				}
+			}
+		}
+		queue = nextQueue
+	}
+
+	// 如果 visited < 总节点数，说明有循环依赖
+	if visited < len(components) {
+		var cycle []string
+		for name, deg := range inDegree {
+			if deg > 0 {
+				cycle = append(cycle, name)
+			}
+		}
+		return nil, fmt.Errorf("检测到循环依赖，涉及服务：%v", cycle)
+	}
+
+	return layers, nil
+}
+
+// Downstream 找出 target 服务的所有下游服务（含自身），逆拓扑顺序
+// 用于级联 rollback：失败服务 + 所有依赖它的服务
+func Downstream(layers []Layer, target string) []string {
+	// 构建服务 → 其下游的映射
+	dependents := make(map[string][]string)
+	for _, layer := range layers {
+		for _, plan := range layer {
+			for _, dep := range plan.DependsOn {
+				dependents[dep] = append(dependents[dep], plan.Name)
+			}
+		}
+	}
+
+	// BFS 找出所有下游
+	visited := map[string]bool{target: true}
+	queue := []string{target}
+	var result []string
+
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		result = append(result, cur)
+		for _, d := range dependents[cur] {
+			if !visited[d] {
+				visited[d] = true
+				queue = append(queue, d)
+			}
+		}
+	}
+
+	// 逆序（先 rollback 最下游）
+	for i, j := 0, len(result)-1; i < j; i, j = i+1, j-1 {
+		result[i], result[j] = result[j], result[i]
+	}
+	return result
 }

@@ -267,3 +267,265 @@ func writeYAML(t *testing.T, content string) string {
 	require.NoError(t, os.WriteFile(path, []byte(content), 0644))
 	return path
 }
+
+// ── LoadComponents: type / depends_on ────────────────────────────────────────
+
+func TestLoadComponents_TypeAndDependsOn(t *testing.T) {
+	dir := t.TempDir()
+	content := `
+components:
+  - name: postgres
+    type: statefulset
+    port: 5432
+    image: ""
+  - name: wallet-service
+    type: deployment
+    port: 2113
+    image: wallet-service
+    depends_on:
+      - postgres
+`
+	path := filepath.Join(dir, "components.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0644))
+
+	components, err := LoadComponents(path)
+	require.NoError(t, err)
+	require.Len(t, components, 2)
+
+	assert.Equal(t, "statefulset", components[0].Type)
+	assert.Empty(t, components[0].DependsOn)
+
+	assert.Equal(t, "deployment", components[1].Type)
+	assert.Equal(t, []string{"postgres"}, components[1].DependsOn)
+}
+
+func TestLoadComponents_DefaultType(t *testing.T) {
+	dir := t.TempDir()
+	content := `
+components:
+  - name: myapp
+    port: 8080
+    image: myapp
+`
+	path := filepath.Join(dir, "components.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0644))
+
+	components, err := LoadComponents(path)
+	require.NoError(t, err)
+	assert.Equal(t, "deployment", components[0].Type)
+}
+
+// ── BuildLayers: 拓扑排序 ─────────────────────────────────────────────────────
+
+func TestBuildLayers_NoDependencies(t *testing.T) {
+	dir := t.TempDir()
+	content := `
+components:
+  - name: postgres
+    port: 5432
+    image: ""
+  - name: etcd
+    port: 2379
+    image: ""
+  - name: myapp
+    port: 8080
+    image: myapp
+`
+	path := filepath.Join(dir, "components.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0644))
+
+	layers, err := BuildLayers(path)
+	require.NoError(t, err)
+	// 没有依赖，全部在同一层
+	assert.Len(t, layers, 1)
+	assert.Len(t, layers[0], 3)
+}
+
+func TestBuildLayers_LinearDependency(t *testing.T) {
+	dir := t.TempDir()
+	content := `
+components:
+  - name: postgres
+    port: 5432
+    image: ""
+  - name: wallet-service
+    port: 2113
+    image: wallet-service
+    depends_on:
+      - postgres
+  - name: admin-service
+    port: 8080
+    image: admin-service
+    depends_on:
+      - wallet-service
+`
+	path := filepath.Join(dir, "components.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0644))
+
+	layers, err := BuildLayers(path)
+	require.NoError(t, err)
+	require.Len(t, layers, 3)
+
+	assert.Equal(t, "postgres", layers[0][0].Name)
+	assert.Equal(t, "wallet-service", layers[1][0].Name)
+	assert.Equal(t, "admin-service", layers[2][0].Name)
+}
+
+func TestBuildLayers_DiamondDependency(t *testing.T) {
+	dir := t.TempDir()
+	// postgres ─┐
+	//           ├──→ admin-service
+	// etcd    ──┘
+	content := `
+components:
+  - name: postgres
+    port: 5432
+    image: ""
+  - name: etcd
+    port: 2379
+    image: ""
+  - name: admin-service
+    port: 8080
+    image: admin-service
+    depends_on:
+      - postgres
+      - etcd
+`
+	path := filepath.Join(dir, "components.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0644))
+
+	layers, err := BuildLayers(path)
+	require.NoError(t, err)
+	require.Len(t, layers, 2)
+
+	// 层级 0：postgres 和 etcd（顺序不保证，但都在这层）
+	names0 := []string{layers[0][0].Name, layers[0][1].Name}
+	assert.Contains(t, names0, "postgres")
+	assert.Contains(t, names0, "etcd")
+
+	// 层级 1：admin-service
+	assert.Equal(t, "admin-service", layers[1][0].Name)
+}
+
+func TestBuildLayers_CircularDependency(t *testing.T) {
+	dir := t.TempDir()
+	content := `
+components:
+  - name: service-a
+    port: 8080
+    image: service-a
+    depends_on:
+      - service-b
+  - name: service-b
+    port: 8081
+    image: service-b
+    depends_on:
+      - service-a
+`
+	path := filepath.Join(dir, "components.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0644))
+
+	_, err := BuildLayers(path)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "循环依赖")
+}
+
+func TestBuildLayers_UndefinedDependency(t *testing.T) {
+	dir := t.TempDir()
+	content := `
+components:
+  - name: myapp
+    port: 8080
+    image: myapp
+    depends_on:
+      - nonexistent
+`
+	path := filepath.Join(dir, "components.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0644))
+
+	_, err := BuildLayers(path)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "nonexistent")
+}
+
+func TestBuildLayers_BuildPlanCompatible(t *testing.T) {
+	// 验证 BuildPlan 和 BuildLayers 返回的内容一致（顺序按拓扑）
+	dir := t.TempDir()
+	content := `
+components:
+  - name: postgres
+    port: 5432
+    image: ""
+  - name: myapp
+    port: 8080
+    image: myapp
+    depends_on:
+      - postgres
+`
+	path := filepath.Join(dir, "components.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0644))
+
+	plans, err := BuildPlan(path)
+	require.NoError(t, err)
+	require.Len(t, plans, 2)
+
+	assert.Equal(t, "postgres", plans[0].Name)
+	assert.Equal(t, "myapp", plans[1].Name)
+}
+
+// ── Downstream ────────────────────────────────────────────────────────────────
+
+func TestDownstream_SingleService(t *testing.T) {
+	// postgres → wallet → admin
+	layers := []Layer{
+		{{Name: "postgres"}},
+		{{Name: "wallet-service", DependsOn: []string{"postgres"}}},
+		{{Name: "admin-service", DependsOn: []string{"wallet-service"}}},
+	}
+
+	result := Downstream(layers, "wallet-service")
+	// 逆序：admin-service 先，wallet-service 后
+	assert.Equal(t, []string{"admin-service", "wallet-service"}, result)
+}
+
+func TestDownstream_RootService(t *testing.T) {
+	// postgres → wallet → admin
+	layers := []Layer{
+		{{Name: "postgres"}},
+		{{Name: "wallet-service", DependsOn: []string{"postgres"}}},
+		{{Name: "admin-service", DependsOn: []string{"wallet-service"}}},
+	}
+
+	result := Downstream(layers, "postgres")
+	// postgres 的下游是 wallet 和 admin，逆序
+	assert.Contains(t, result, "postgres")
+	assert.Contains(t, result, "wallet-service")
+	assert.Contains(t, result, "admin-service")
+	// postgres 应该在最后（最上游最后 rollback）
+	assert.Equal(t, "postgres", result[len(result)-1])
+}
+
+func TestDownstream_LeafService(t *testing.T) {
+	layers := []Layer{
+		{{Name: "postgres"}},
+		{{Name: "wallet-service", DependsOn: []string{"postgres"}}},
+		{{Name: "admin-service", DependsOn: []string{"wallet-service"}}},
+	}
+
+	result := Downstream(layers, "admin-service")
+	// 叶节点没有下游，只有自身
+	assert.Equal(t, []string{"admin-service"}, result)
+}
+
+func TestDownstream_NoDependencies(t *testing.T) {
+	layers := []Layer{
+		{
+			{Name: "postgres"},
+			{Name: "etcd"},
+			{Name: "myapp"},
+		},
+	}
+
+	result := Downstream(layers, "postgres")
+	assert.Equal(t, []string{"postgres"}, result)
+}
