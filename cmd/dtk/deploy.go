@@ -132,42 +132,41 @@ func runResume(args []string) {
 		os.Exit(1)
 	}
 
-	// 推荐写法：单独定义 record，提升可读性
 	record := sm.Record()
-	fmt.Printf("当前状态: %s（%s）\n", record.State, record.Reason)
-	fmt.Println("检查 K8s 实际状态...")
+	P.Info("📋", fmt.Sprintf("当前状态: %s（%s）", record.State, record.Reason))
 
+	P.Start("🔍", "检查 K8s 实际状态")
 	plan, err := planner.BuildPlan(filepath.Join(root, cfg.components))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "解析组件失败:", err)
 		os.Exit(1)
 	}
 
-	// 使用状态机统一检查（基于 resources.yaml）
 	actual, err := controller.DetectActualState(
 		cfg.kubeconfig,
 		cfg.namespace,
 		filepath.Join(root, "configs", "resources.yaml"),
 	)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "检测 K8s 状态失败:", err)
+		P.Fail("检测 K8s 状态失败")
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	fmt.Printf("K8s 实际状态: %s\n", actual)
+	P.Done(fmt.Sprintf("K8s 实际状态: %s", actual))
 
 	switch actual {
 	case state.StateRunning:
-		fmt.Println("服务已正常运行，同步状态为 RUNNING")
+		P.Info("✅", "服务已正常运行，同步状态为 RUNNING")
 		sm.Transition(state.StateRunning, "resume: K8s 检测服务正常")
 	case state.StateIdle:
 		if err := checkHelmReleaseState(cfg, env, sm); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		fmt.Println("服务不存在，从头重新部署")
+		P.Info("🔄", "服务不存在，从头重新部署")
 		executeDeploy(sm, cfg, env, plan, root)
 	default:
-		fmt.Printf("无法自动恢复状态 %s，请手动处理\n", actual)
+		fmt.Fprintf(os.Stderr, "无法自动恢复状态 %s，请手动处理\n", actual)
 		os.Exit(1)
 	}
 }
@@ -207,27 +206,33 @@ func runRollback(args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("当前状态: %s，发起回滚...\n", sm.State())
+	P.Info("⏪", fmt.Sprintf("当前状态: %s，发起回滚...", sm.State()))
 	if err := sm.Transition(state.StateRollingBack, "手动触发回滚"); err != nil {
 		fmt.Fprintln(os.Stderr, "状态转换失败:", err)
 		os.Exit(1)
 	}
 
 	release := envOrDefault(env, "PROJECT_NAME", filepath.Base(root))
+	P.Start("⏪", fmt.Sprintf("helm rollback %s", release))
 	if err := helmRollback(cfg.kubeconfig, cfg.context, cfg.namespace, release); err != nil {
-		fmt.Fprintln(os.Stderr, "helm rollback 失败:", err)
+		P.Fail("回滚失败")
+		fmt.Fprintln(os.Stderr, err)
 		sm.Transition(state.StateRunning, "回滚失败，保持 RUNNING")
 		os.Exit(1)
 	}
+	P.Done("回滚完成")
 
 	sm.Transition(state.StateRunning, "回滚成功")
-	fmt.Println("✅ 回滚完成")
+	P.Info("✅", "回滚完成")
 }
 
 // executeDeploy 执行完整部署流程（带状态机）
 func executeDeploy(sm *state.Machine, cfg *deployConfig, env map[string]string, plan []planner.Plan, root string) error {
+	version := envOrDefault(env, "VERSION", "v0.1.0")
+	projectName := envOrDefault(env, "PROJECT_NAME", filepath.Base(root))
+
 	// IDLE/RUNNING → INITIALIZING
-	if err := sm.Transition(state.StateInitializing, "开始部署 "+env["VERSION"]); err != nil {
+	if err := sm.Transition(state.StateInitializing, "开始部署 "+version); err != nil {
 		return err
 	}
 
@@ -237,63 +242,110 @@ func executeDeploy(sm *state.Machine, cfg *deployConfig, env map[string]string, 
 	}
 
 	makeEnv := buildMakeEnv(env, cfg, plan)
-	deployOK := false
-	if err := runCmd(root, makeEnv, "make", "deploy.full"); err != nil {
-		// 检查是否是 SSA 冲突，是的话自动清除 managedFields 重试一次
-		if isSSAConflict(err.Error()) {
-			if retryErr := retryDeployWithSSAFix(cfg, makeEnv, root); retryErr == nil {
-				deployOK = true
-			} else {
-				err = retryErr
-			}
-		}
 
-		// 镜像拉取失败检查（和 SSA 并列，不是嵌套）
-		if !deployOK && isImagePullError(err.Error()) {
-			projectName := envOrDefault(env, "PROJECT_NAME", "")
-			fmt.Fprintln(os.Stderr, "")
-			fmt.Fprintln(os.Stderr, "检测到镜像拉取失败，请检查：")
-			fmt.Fprintf(os.Stderr, "  1. 镜像是否已推送：docker manifest inspect %s/%s-%s:%s\n",
-				env["REGISTRY_PREFIX"], projectName, env["ARCH"], env["VERSION"])
-			fmt.Fprintln(os.Stderr, "  2. registry 是否需要登录：docker login")
-			fmt.Fprintf(os.Stderr, "  3. ARCH 是否正确：当前 %s，集群节点架构是否匹配\n", env["ARCH"])
-			fmt.Fprintln(os.Stderr, "")
-		}
-
-		if !deployOK {
-			if sm.IsFirstDeploy() {
-				sm.Transition(state.StateCleaning, "首次部署失败，清理 namespace")
-				deleteNamespace(cfg.kubeconfig, cfg.context, cfg.namespace)
-				sm.Transition(state.StateIdle, "清理完成")
-			} else {
-				sm.Transition(state.StateRollingBack, "更新失败，回滚")
-				release := envOrDefault(env, "PROJECT_NAME", "")
-				if rbErr := helmRollback(cfg.kubeconfig, cfg.context, cfg.namespace, release); rbErr != nil {
-					sm.Transition(state.StateCleaning, "回滚失败")
-				} else {
-					sm.Transition(state.StateRunning, "回滚成功")
-				}
-			}
-			return fmt.Errorf("部署失败: %w", err)
+	// ── 1. Build ──────────────────────────────────────────────────────────────
+	hasImages := false
+	for _, item := range plan {
+		if item.Image != "" {
+			hasImages = true
+			break
 		}
 	}
 
-	// DEPLOYING → VALIDATING
+	if hasImages {
+		P.Start("🏗 ", fmt.Sprintf("构建镜像 %s-%s:%s",
+			envOrDefault(env, "REGISTRY_PREFIX", ""), projectName, version))
+		if err := runCmd(root, makeEnv, "make", "deploy.build"); err != nil {
+			P.Fail("构建失败")
+			return handleDeployError(sm, cfg, env, err)
+		}
+		P.Done("构建完成")
+
+		// ── 2. Push ──────────────────────────────────────────────────────────
+		P.Start("📤", fmt.Sprintf("推送镜像 %s-%s:%s",
+			envOrDefault(env, "REGISTRY_PREFIX", ""), projectName, version))
+		if err := runCmd(root, makeEnv, "make", "deploy.push"); err != nil {
+			P.Fail("推送失败")
+			return handleDeployError(sm, cfg, env, err)
+		}
+		P.Done("推送完成")
+	}
+
+	// ── 3. Install ───────────────────────────────────────────────────────────
+	P.Start("⛵", fmt.Sprintf("helm upgrade %s", projectName))
+	installErr := runCmd(root, makeEnv, "make", "deploy.install")
+	if installErr != nil {
+		P.Fail("helm upgrade 失败")
+
+		// SSA 冲突检测
+		if isSSAConflict(installErr.Error()) {
+			P.Info("🔧", "检测到 SSA 冲突，正在自动修复...")
+			if retryErr := retryDeployWithSSAFix(cfg, makeEnv, root); retryErr == nil {
+				P.Done("SSA 修复成功，继续部署")
+				goto rollout
+			} else {
+				installErr = retryErr
+			}
+		}
+
+		// 镜像拉取失败提示
+		if isImagePullError(installErr.Error()) {
+			fmt.Fprintln(os.Stderr, "")
+			P.Info("❌", "检测到镜像拉取失败，请检查：")
+			fmt.Fprintf(os.Stderr, "  1. 镜像是否已推送：docker manifest inspect %s/%s-%s:%s\n",
+				env["REGISTRY_PREFIX"], projectName, env["ARCH"], version)
+			fmt.Fprintln(os.Stderr, "  2. registry 是否需要登录：docker login")
+			fmt.Fprintf(os.Stderr, "  3. ARCH 是否正确：当前 %s，集群节点架构是否匹配\n", env["ARCH"])
+		}
+
+		return handleDeployError(sm, cfg, env, installErr)
+	}
+	P.Done("helm upgrade 完成")
+
+rollout:
+	// ── 4. Rollout ───────────────────────────────────────────────────────────
+	P.Start("🔍", "等待 rollout 就绪")
+	if err := runCmd(root, makeEnv, "make", "deploy.run.all"); err != nil {
+		P.Fail("rollout 超时")
+		return handleDeployError(sm, cfg, env, err)
+	}
+	P.Done("服务就绪")
+
+	// DEPLOYING → VALIDATING → RUNNING
 	if err := sm.Transition(state.StateValidating, "验证部署结果"); err != nil {
 		return err
 	}
-
-	// 验证阶段（使用状态机统一逻辑）
 	if err := sm.ResumeFromValidating("部署验证通过"); err != nil {
 		return err
 	}
 
-	fmt.Printf("✅ 部署完成，状态: RUNNING (version=%s)\n", env["VERSION"])
-
+	P.Info("✅", fmt.Sprintf("部署完成，状态: RUNNING (version=%s)", version))
 	return nil
 }
 
-// resumeFromValidating 从 VALIDATING 阶段恢复（使用状态机方法）
+// handleDeployError 统一处理部署失败：首次清理 namespace，否则回滚
+func handleDeployError(sm *state.Machine, cfg *deployConfig, env map[string]string, err error) error {
+	if sm.IsFirstDeploy() {
+		P.Info("🧹", "首次部署失败，清理 namespace")
+		sm.Transition(state.StateCleaning, "首次部署失败，清理 namespace")
+		deleteNamespace(cfg.kubeconfig, cfg.context, cfg.namespace)
+		sm.Transition(state.StateIdle, "清理完成")
+	} else {
+		P.Start("⏪", "部署失败，自动回滚")
+		sm.Transition(state.StateRollingBack, "更新失败，回滚")
+		release := envOrDefault(env, "PROJECT_NAME", "")
+		if rbErr := helmRollback(cfg.kubeconfig, cfg.context, cfg.namespace, release); rbErr != nil {
+			P.Fail("回滚失败")
+			sm.Transition(state.StateCleaning, "回滚失败")
+		} else {
+			P.Done("回滚完成")
+			sm.Transition(state.StateRunning, "回滚成功")
+		}
+	}
+	return fmt.Errorf("部署失败: %w", err)
+}
+
+// resumeFromValidating 从 VALIDATING 阶段恢复
 func resumeFromValidating(sm *state.Machine, cfg *deployConfig, env map[string]string, plan []planner.Plan, root string) {
 	if err := sm.ResumeFromValidating("resume: 重新验证"); err != nil {
 		fmt.Fprintln(os.Stderr, "ResumeFromValidating 失败:", err)
@@ -317,7 +369,7 @@ func resumeFromValidating(sm *state.Machine, cfg *deployConfig, env map[string]s
 		}
 	}
 	sm.Transition(state.StateRunning, "resume 验证通过")
-	fmt.Println("✅ 恢复成功，状态: RUNNING")
+	P.Info("✅", "恢复成功，状态: RUNNING")
 }
 
 // detectActualState 通过 kubectl 检查 plan 里的服务是否存在
@@ -335,7 +387,7 @@ func detectActualState(cfg *deployConfig, plan []planner.Plan) state.State {
 	return state.StateIdle
 }
 
-// kubectlBaseArgs 构建 kubectl 基础参数（供 deploy.go 内部使用）
+// kubectlBaseArgs 构建 kubectl 基础参数
 func kubectlBaseArgs(kubeconfig, context, namespace string) []string {
 	var args []string
 	if kubeconfig != "" {
@@ -369,9 +421,20 @@ func buildMakeEnv(env map[string]string, cfg *deployConfig, plan []planner.Plan)
 			makeEnv = append(makeEnv, k+"="+v)
 		}
 	}
+
+	arch := envOrDefault(env, "ARCH", "")
+	if arch == "" {
+		if out, err := exec.Command("go", "env", "GOARCH").Output(); err == nil {
+			arch = strings.TrimSpace(string(out))
+		}
+	}
+	if arch == "" {
+		arch = "amd64"
+	}
+
 	makeEnv = append(makeEnv,
 		"VERSION="+envOrDefault(env, "VERSION", "v0.1.0"),
-		"ARCH="+envOrDefault(env, "ARCH", "amd64"),
+		"ARCH="+arch,
 		"REGISTRY_PREFIX="+envOrDefault(env, "REGISTRY_PREFIX", ""),
 	)
 
@@ -384,16 +447,6 @@ func buildMakeEnv(env map[string]string, cfg *deployConfig, plan []planner.Plan)
 	if len(imageNames) > 0 {
 		makeEnv = append(makeEnv, "IMAGES="+strings.Join(imageNames, " "))
 	}
-	arch := envOrDefault(env, "ARCH", "")
-	if arch == "" {
-		if out, err := exec.Command("go", "env", "GOARCH").Output(); err == nil {
-			arch = strings.TrimSpace(string(out))
-		}
-	}
-	if arch == "" {
-		arch = "amd64"
-	}
-	makeEnv = append(makeEnv, "ARCH="+arch)
 	return makeEnv
 }
 
