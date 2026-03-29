@@ -1,80 +1,79 @@
 # TODO — dev-toolkit 路线图
 
 > 从"自用脚手架"走向"真正可推广的 Go 云原生工具"。
-> 按优先级排列，持续更新。当前：v0.9.0
+> 按优先级排列，持续更新。当前：v1.0.0
 
 ---
 
-## 🔴 P0 — 全部完成 ✅
+## 🟡 v1.1.0
 
----
-
-## 🟡 v1.0.0 — 封神
-
-### 多服务支持（最大改动）
-
-设计文档：`docs/design/multi-service.md`
-
-- [ ] `planner`：解析 `type`/`depends_on`，构建依赖 DAG，拓扑排序（含循环检测）
-- [ ] `scaffold`：每个服务生成独立 helm chart（`deployments/{project}/{service}/`）
-- [ ] `deploy`：按拓扑层级部署，同层并行，层间串行
-- [ ] `deploy`：单服务失败 → 最多重试 3 次 → 级联 rollback（失败服务 + 下游）
-- [ ] `deploy`：级联 rollback 失败 → 整组 rollback → 失败则 dtk down
-- [ ] `status`：展示每个 helm release 独立状态
-- [ ] `rollback`：按拓扑逆序整组回滚，打印每步进度
-- [ ] e2e 验证：web3-blitz 双服务场景
-
-### 稳定性
-- [ ] web3-blitz NOTES.txt 同步 dtk 最新版本
-- [ ] web3-blitz deploy.mk 同步 dtk 最新版本（镜像存在检查）
-- [ ] controller 单元测试补充（heal/reconcile 边界 case）
-
-### 文档
-- [ ] 最终文档审查，确保与代码一致
-- [ ] 外部用户能独立跑通的 quickstart 验证
-
----
-
-## 🟢 P2 — 体验（可选）
-
+- [ ] `dtk status` 展示每个 helm release 独立状态和 revision
+- [ ] `dtk rollback` 打印每步拓扑逆序进度
+- [ ] controller SSA 冲突处理（CLI 层已处理，controller 层待补）
+- [ ] 构建 `dev-toolkit-controller` 镜像并推送，验证 controller 自愈 e2e
 - [ ] `REGISTRY_PREFIX` 支持阿里云 ACR 格式
 - [ ] `dtk init --dry-run`
 - [ ] 统一进度输出带颜色（终端支持时）
+- [ ] 灰度发布支持（豆包建议）
+
+---
+
+## 🟢 P2 — 长期
+
+- [ ] 服务级 FSM（v2.0，目前是项目级）
+- [ ] 跨 namespace 依赖支持
+- [ ] `dtk ai-plan` 接入私有化 LLM 最佳实践文档
+- [ ] 安全扫描 + RBAC 越权检测（豆包建议，平台级方向）
 
 ---
 
 ## ✅ 已完成
 
-- [x] `dtk init` 端到端生成可编译项目（含 ARCH 自动检测）
-- [x] `dtk deploy` build → push → helm → rollout → 状态追踪
-- [x] `dtk deploy` 四步拆分，独立计时，统一进度输出
-- [x] `dtk deploy` SSA 冲突自动处理、pending-rollback/install/failed 前置处理
-- [x] `dtk deploy` 镜像拉取失败友好提示
-- [x] `dtk resume` / `dtk rollback` / `dtk release` / `dtk down`
-- [x] `dtk doctor` 环境依赖检查
-- [x] `dtk status` 三层状态 + `--history` + 时区修复
-- [x] `dtk history` 查看部署历史，支持 `-n` 限制
-- [x] `dtk diff` 对比两个 revision 的 helm values
+### v1.0.0 封神 🏆
+
+- [x] 多服务独立 helm release（每个服务 `{project}-{service}`）
+- [x] `components.yaml` 支持 `type`（deployment/statefulset）和 `depends_on`
+- [x] `planner`：DAG 依赖图 + Kahn 拓扑排序 + Downstream 级联下游（32个单测）
+- [x] `scaffold`：四个独立 chart（postgres/etcd/业务服务/controller）
+- [x] `deploy`：同层 goroutine 并行，层间串行
+- [x] `deploy`：build/push 只做一次，helm+rollout 最多重试 3 次
+- [x] `deploy`：级联 rollback → 整组 rollback → dtk down
+- [x] `helmReleaseExists` 防止 rollback 未安装的 release 误触发 dtk down
+- [x] controller 统一命名为 `dev-toolkit-controller`，所有项目共用同一镜像
+- [x] 清理旧 templates/ 里的 controller 文件，修复 helm --wait 超时
+- [x] e2e 验证：e2e 项目（3层拓扑）+ web3-blitz（2层拓扑）全部跑通
+- [x] 全量文档更新（architecture/controller/deploy/helm/scaffold/state-machine/multi-service）
+- [x] gotchas 补充老项目迁移、chart 不存在、service name 冲突等坑
+
+### v0.9.0
+
 - [x] `dtk ai-plan` AI 扫描仓库，自动生成 components.yaml
   - 支持 Grok / Claude / OpenAI / 豆包四个 provider
   - `--suggest-only` 只看建议，`--desc` 补充描述
   - `DTK_LLM_ENDPOINT` 支持私有化部署
-- [x] 部署状态机完整实现，57 个单元测试
-- [x] A2 Reconciliation Controller（etcd Watch 指数退避重连）
-- [x] controller Detector/HelmClient 接口重构，20 个单元测试
+- [x] 统一进度输出（P.Start/Done/Fail/Info，带时间戳和耗时）
+- [x] `make deploy.full` 拆成四步独立计时
+
+### v0.8.x 及之前
+
+- [x] `dtk init` 端到端生成可编译项目（含 ARCH 自动检测）
+- [x] `dtk deploy` build → push → helm → rollout → 状态追踪
+- [x] `dtk deploy` SSA 冲突自动处理、pending-rollback/install/failed 前置处理
+- [x] `dtk deploy` 镜像拉取失败友好提示
+- [x] `dtk resume` / `dtk rollback` / `dtk release` / `dtk down`
+- [x] `dtk doctor` 环境依赖检查
+- [x] `dtk status` 三层状态 + `--history`
+- [x] `dtk history` 查看部署历史，支持 `-n` 限制
+- [x] `dtk diff` 对比两个 revision 的 helm values
+- [x] 部署状态机完整实现（57个单测）
+- [x] A2 Reconciliation Controller（etcd Watch 指数退避重连，20个单测）
 - [x] state 包零 K8s 依赖，本地→etcd 自动迁移
-- [x] scaffold 完整生成（34 个单元测试，修复 .git 跳过和 regex panic）
-- [x] planner 100% 覆盖（20 个单元测试）
-- [x] CI 加 -race 检测
-- [x] README 重写 + quickstart + gotchas + AI 使用手册
-- [x] 设计文档全量更新（architecture / controller / deploy / helm / scaffold / release / multi-service）
-- [x] 端到端全流程验证（e2e + web3-blitz 大测试）
-- [x] controller 自愈 e2e 验证（10s 内恢复）
-- [x] etcd 自动迁移验证通过
+- [x] scaffold 完整生成（34个单测）
+- [x] planner（32个单测，100% 覆盖）
+- [x] CI 加 -race 检测，143个单测全绿
+- [x] 全量文档 + quickstart + gotchas + AI 使用手册
 
 ---
 
-> 路线：v0.9.0（当前）→ v1.0.0（封神）
->
-> v1.0.0 的核心是多服务支持，这是 dtk 和其他脚手架拉开差距的关键。
-> 每完成一项，移到 ✅ 已完成，并更新 SNAPSHOT。
+> v1.0.0 已封神 🏆
+> v1.1.0 重点：controller 自愈 e2e 验证 + dtk status 多 release 展示
