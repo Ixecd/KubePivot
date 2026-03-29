@@ -21,6 +21,17 @@ import (
 func writeHelmTemplateSkeleton(outputDir, name string) error {
 	deploymentsDir := filepath.Join(outputDir, "deployments", name)
 
+	// 清理旧模板目录里的 controller 文件（已移到独立 chart）
+	oldTemplatesDir := filepath.Join(deploymentsDir, "templates")
+	filesToRemove := []string{
+		"controller-deployment.yaml",
+		"controller-rbac.yaml",
+		"resources-configmap.yaml",
+	}
+	for _, f := range filesToRemove {
+		os.Remove(filepath.Join(oldTemplatesDir, f)) // 忽略不存在的错误
+	}
+
 	if err := writePostgresChart(deploymentsDir, name); err != nil {
 		return err
 	}
@@ -348,12 +359,12 @@ metadata:
 	vb.WriteString("    value: \"" + name + "-etcd:2379\"\n")
 
 	return writeFiles(map[string]string{
-		filepath.Join(deploymentsDir, name, "Chart.yaml"):        chartYAML,
-		filepath.Join(deploymentsDir, name, "values.yaml"):       vb.String(),
-		filepath.Join(dir, "NOTES.txt"):                          notes,
-		filepath.Join(dir, "deployment.yaml"):                    deployment,
-		filepath.Join(dir, "service.yaml"):                       svc,
-		filepath.Join(dir, "serviceaccount.yaml"):                sa,
+		filepath.Join(deploymentsDir, name, "Chart.yaml"):  chartYAML,
+		filepath.Join(deploymentsDir, name, "values.yaml"): vb.String(),
+		filepath.Join(dir, "NOTES.txt"):                    notes,
+		filepath.Join(dir, "deployment.yaml"):              deployment,
+		filepath.Join(dir, "service.yaml"):                 svc,
+		filepath.Join(dir, "serviceaccount.yaml"):          sa,
 	})
 }
 
@@ -378,23 +389,24 @@ dependencies: []
 	vb.WriteString("# 配置好镜像后将 enabled 改为 true，再重新 dtk deploy\n")
 	vb.WriteString("enabled: false\n\n")
 	vb.WriteString("image:\n")
-	vb.WriteString("  # TODO: 替换为你构建的 controller 镜像（需包含 dtk + kubectl + helm）\n")
-	vb.WriteString("  repository: your-registry/" + name + "-controller\n")
+	vb.WriteString("  # TODO: 替换为你构建的 dev-toolkit-controller 镜像（需包含 dtk + kubectl + helm）\n")
+	vb.WriteString("  repository: your-registry/dev-toolkit-controller\n")
+	vb.WriteString("  pullPolicy: IfNotPresent\n")
 	vb.WriteString("  tag: latest\n\n")
 	vb.WriteString("# 由 dtk deploy 通过 --set-file 自动注入 configs/resources.yaml\n")
 	vb.WriteString("resourcesConfig: \"\"\n")
 
-	rbac := fmt.Sprintf(`{{- if .Values.enabled }}
+	rbac := `{{- if .Values.enabled }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: %s-controller
+  name: dev-toolkit-controller
   namespace: {{ .Release.Namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: %s-controller
+  name: dev-toolkit-controller
 rules:
   # 当前为全量权限，上线前请按实际需要收紧
   - apiGroups: ["*"]
@@ -404,53 +416,53 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: %s-controller
+  name: dev-toolkit-controller
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: %s-controller
+  name: dev-toolkit-controller
 subjects:
   - kind: ServiceAccount
-    name: %s-controller
+    name: dev-toolkit-controller
     namespace: {{ .Release.Namespace }}
 {{- end }}
-`, name, name, name, name, name)
+`
 
 	configmap := fmt.Sprintf(`{{- if .Values.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: %s-controller-resources
+  name: dev-toolkit-controller-resources
   namespace: {{ .Release.Namespace }}
 data:
   resources.yaml: |
 {{ .Values.resourcesConfig | indent 4 }}
 {{- end }}
-`, name)
+`, )
 
 	deployment := fmt.Sprintf(`{{- if .Values.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: %s-controller
+  name: dev-toolkit-controller
   namespace: {{ .Release.Namespace }}
   labels:
-    app: %s-controller
+    app: dev-toolkit-controller
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: %s-controller
+      app: dev-toolkit-controller
   template:
     metadata:
       labels:
-        app: %s-controller
+        app: dev-toolkit-controller
     spec:
-      serviceAccountName: %s-controller
+      serviceAccountName: dev-toolkit-controller
       containers:
-        - name: controller
+        - name: dev-toolkit-controller
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["dtk", "controller", "start"]
           env:
             - name: PROJECT_NAME
@@ -469,9 +481,9 @@ spec:
       volumes:
         - name: resources-config
           configMap:
-            name: %s-controller-resources
+            name: dev-toolkit-controller-resources
 {{- end }}
-`, name, name, name, name, name, name, name, name)
+`, name, name)
 
 	return writeFiles(map[string]string{
 		filepath.Join(deploymentsDir, name+"-controller", "Chart.yaml"):  chartYAML,
@@ -481,6 +493,7 @@ spec:
 		filepath.Join(dir, "deployment.yaml"):                            deployment,
 	})
 }
+
 
 // ── 工具函数 ──────────────────────────────────────────────────────────────────
 
