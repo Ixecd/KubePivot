@@ -27,7 +27,7 @@ dtk deploy（CLI）
 etcd: dtk/{project}/{ns}/state
 
     ↓ Watch / 8s 定时
-{n}-controller（K8s Deployment，常驻）
+dev-toolkit-controller（K8s Deployment，常驻，部署在项目 namespace）
     ├── etcd Watcher（事件驱动）
     │     断线 → 指数退避重连（1s → 2s → 4s ... 最大 30s）
     │     重连成功 → delay 重置为 1s
@@ -43,6 +43,8 @@ etcd: dtk/{project}/{ns}/state
                 ├── auto-heal → helm rollback
                 └── alert    → 只记日志
 ```
+
+**命名规范**：所有项目的 controller pod 统一命名为 `dev-toolkit-controller`，部署在各自项目的 namespace 里，互不影响。镜像也统一为 `dev-toolkit-controller`，所有项目共用，不需要每个项目单独构建。
 
 ---
 
@@ -153,14 +155,14 @@ wg.Wait()  // 等当前 reconcile 跑完再退出
 
 ## 镜像构建
 
-controller 镜像需要包含三个二进制：`dtk`、`kubectl`、`helm`。
+controller 镜像统一命名为 `dev-toolkit-controller`，包含三个二进制：`dtk`、`kubectl`、`helm`。**所有项目共用同一镜像，不需要每个项目单独构建。**
 
 ```bash
 cd ~/dev-toolkit
 docker build --no-cache \
   -f build/docker/controller/Dockerfile \
-  -t your-registry/myapp-controller:v1.0.0 .
-docker push your-registry/myapp-controller:v1.0.0
+  -t your-registry/dev-toolkit-controller:latest .
+docker push your-registry/dev-toolkit-controller:latest
 ```
 
 ⚠️ 必须加 `--no-cache`，否则代码改动不会进镜像。
@@ -169,14 +171,13 @@ docker push your-registry/myapp-controller:v1.0.0
 
 ## 启用步骤
 
-1. 构建 controller 镜像（见上）
-2. 编辑 `deployments/<n>/values.yaml`：
+1. 构建 controller 镜像（全局只需构建一次，所有项目共用）
+2. 编辑 `deployments/<n>/<n>-controller/values.yaml`：
    ```yaml
-   controller:
-     enabled: true
-     image:
-       repository: your-registry/myapp-controller
-       tag: v1.0.0
+   enabled: true
+   image:
+     repository: your-registry/dev-toolkit-controller
+     tag: latest
    ```
 3. `dtk deploy`
 
@@ -188,7 +189,7 @@ docker push your-registry/myapp-controller:v1.0.0
 |------|------|--------|
 | `PROJECT_NAME` | helm release 名 | 同项目名 |
 | `KUBE_NAMESPACE` | namespace | 同 PROJECT_NAME |
-| `ETCD_ENDPOINTS` | etcd 地址 | `etcd:2379` |
+| `ETCD_ENDPOINTS` | etcd 地址 | `{project}-etcd:2379` |
 | `RESOURCES_CONFIG` | resources.yaml 路径 | `/etc/controller/resources.yaml` |
 | `KUBE_CONFIG` | kubeconfig 路径 | 空（使用 pod ServiceAccount） |
 | `VERSION` | 当前版本号 | `latest` |
@@ -208,6 +209,7 @@ rules:
 ```
 
 最小权限参考：
+
 ```yaml
 rules:
   - apiGroups: ["apps"]

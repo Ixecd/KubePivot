@@ -1,6 +1,6 @@
 # dtk 状态机设计文档
 
-> 版本：2026-03-25
+> 适用：dev-toolkit v0.4.0+
 > 状态：A2 独立 Controller Pod 方案已落地
 
 ---
@@ -21,14 +21,9 @@
 
 ---
 
-## 架构升级（A2 方案）
+## 架构（A2 方案）
 
-**核心变化**：
-- 新增独立 `*-controller` Deployment，专门运行 Reconciliation Loop
-- Loop 运行在集群内部，不依赖 dtk CLI（dtk CLI 执行完即退出）
-- 配置驱动：`configs/resources.yaml`
-- 通信方式：纯 etcd（Watch + 定期 Reconcile）
-- 纠正策略：优先自动自愈 → 多次失败后自动 rollback
+**核心**：独立 `*-controller` Deployment，运行在集群内部，不依赖 dtk CLI（dtk CLI 执行完即退出）。通过 etcd Watch + 定期 Reconcile 驱动，配置化资源列表。
 
 ---
 
@@ -64,20 +59,19 @@ TERMINATED     → （终态，不可转换）
 
 ---
 
-## Reconciliation Loop（核心新增）
+## Reconciliation Loop
 
-**运行位置**：`web3-blitz-controller` Deployment（独立 pod）
+**运行位置**：`{project}-controller` Deployment（独立 pod）
 
 **工作机制**：
-- **etcd Watch**：实时监听 `dtk/<project>/<namespace>/state` 变化
-- **定期 Reconcile**：每 8 秒全面对账一次
+- **etcd Watch**：实时监听状态变化，指数退避重连（1s → 30s）
+- **定期 Reconcile**：每 8 秒全面对账一次（兜底）
 - **资源检查**：根据 `configs/resources.yaml` 配置检查所有核心资源
-- **自动自愈**：资源缺失 → 尝试 `helm upgrade --install --force-conflicts`
-- **失败兜底**：自愈失败 N 次 → 自动 `helm rollback` 到上一个版本
+- **自动自愈**：资源缺失 → 执行 `helm rollback` 到上一个版本
 
 ---
 
-## configs/resources.yaml（配置化扩展）
+## configs/resources.yaml
 
 ```yaml
 resources:
@@ -91,108 +85,45 @@ resources:
     on-missing: auto-heal
     max-retry: 2
     fallback: rollback
-  # ... 可随意扩展任何 K8s 资源
 ```
 
-## Controller与业务解耦
+**on-missing 策略**：`auto-heal`（自动 rollback）/ `alert`（只记日志）
 
-- wallet-service：只负责业务逻辑
-- web3-blitz-controller：只负责状态对账和自愈
-- 两者通过 etcd 通信
-
-## 文件结构（新增部分）
-
-```text
-internal/controller/          # 新增
-├── controller.go
-├── reconciler.go
-├── resources.go
-├── etcd_watcher.go
-└── heal.go
-
-configs/resources.yaml        # 新增配置化资源列表
-
-deployments/web3-blitz/templates/
-└── controller-deployment.yaml   # 新增 controller Deployment
-```
+---
 
 ## 完整流程图
 
 ### 正常部署
 
 ```
-IDLE
-  │  dtk deploy
-  ▼
-INITIALIZING
-  │  执行 helm upgrade
-  ▼
-DEPLOYING
-  │  rollout 完成
-  ▼
-VALIDATING  ──── 所有 pod Ready + healthz 200 ────▶ RUNNING
+IDLE → INITIALIZING → DEPLOYING → VALIDATING → RUNNING
 ```
 
 ### 首次部署失败
 
 ```
-DEPLOYING / INITIALIZING
-  │  helm upgrade 失败
-  ▼
-CLEANING  ──── kubectl delete namespace ────▶ IDLE
+DEPLOYING/INITIALIZING → CLEANING → IDLE
 ```
 
-### 更新失败（已有 RUNNING 状态）
+### 更新失败
 
 ```
-DEPLOYING / VALIDATING
-  │  失败或超时
-  ▼
-ROLLING_BACK  ──── helm rollback ────▶ RUNNING
-```
-
-### 手动回滚
-
-```
-任意状态
-  │  dtk rollback
-  ▼
-ROLLING_BACK  ──── helm rollback ────▶ RUNNING
+DEPLOYING/VALIDATING → ROLLING_BACK → RUNNING
 ```
 
 ---
 
 ## 持久化
 
-### etcd 优先
+**etcd 优先**，key 格式：`dtk/<project>/<namespace>/state`
 
-状态持久化到 etcd，key 格式：
+**本地文件降级**：无 etcd 时自动降级到 `~/.dtk/state/<project>/<namespace>.json`
 
-```
-dtk/<project>/<namespace>/state
-```
-
-value 是 JSON 序列化的 `DeployRecord`。
-
-### 本地文件降级
-
-无 etcd 时自动降级到本地文件：
-
-```
-~/.dtk/state/<project>/<namespace>.json
-```
-
-### 自动选择
+**自动选择**：
 
 ```go
-// ETCD_ENDPOINTS 留空 → 使用本地文件
 store := state.NewAutoStore(env["ETCD_ENDPOINTS"])
-```
-
-配置方式：在 `configs/project.env` 里加：
-
-```ini
-ETCD_ENDPOINTS=localhost:2379   # 留空=本地文件
+// ETCD_ENDPOINTS 留空 → 使用本地文件
 ```
 
 ---
@@ -204,17 +135,17 @@ ETCD_ENDPOINTS=localhost:2379   # 留空=本地文件
   "project":    "web3-blitz",
   "namespace":  "web3-blitz",
   "state":      "RUNNING",
-  "version":    "v0.1.5",
+  "version":    "v0.1.10",
   "is_first":   false,
   "reason":     "部署成功",
-  "updated_at": "2026-03-24T15:55:10.632524+08:00",
+  "updated_at": "2026-03-28T17:00:00+08:00",
   "history": [
     {
       "from":      "DEPLOYING",
       "to":        "VALIDATING",
       "reason":    "验证部署结果",
-      "version":   "v0.1.5",
-      "timestamp": "2026-03-24T15:55:10.431840+08:00"
+      "version":   "v0.1.10",
+      "timestamp": "2026-03-28T17:00:00+08:00"
     }
   ]
 }
@@ -237,12 +168,11 @@ ETCD_ENDPOINTS=localhost:2379   # 留空=本地文件
 
 为什么用 `kubectl exec` 而不是直接 HTTP：pod IP 是集群内部地址，本机无法直连，`kubectl exec` 在 pod 内部执行，绕开网络问题。
 
-业务服务必须实现 `/healthz` 路由，返回 200：
+业务服务必须实现 `/healthz` 路由：
 
 ```go
 mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
     w.WriteHeader(http.StatusOK)
-    w.Write([]byte("ok"))
 })
 ```
 
@@ -252,35 +182,15 @@ mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 
 ### dtk deploy
 
-正常部署入口，状态必须为 `IDLE`、`RUNNING` 或 `TERMINATED` 才能发起新部署。
-
-```bash
-dtk deploy [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>] [--dry-run]
-```
+状态必须为 `IDLE`、`RUNNING` 或 `TERMINATED` 才能发起新部署。内部按拓扑排序多 helm release 部署（多服务），或走 make deploy.full（单服务）。
 
 ### dtk resume
 
-中断恢复。先检查 K8s 实际状态，再决定从哪里继续：
-
-```
-K8s 实际状态      → resume 行为
-──────────────────────────────────────────
-服务正常运行       → 同步状态为 RUNNING
-rollout 未完成    → 重新进入 VALIDATING
-namespace 不存在  → 从头部署
-```
-
-```bash
-dtk resume [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
-```
+先检查 K8s 实际状态，再决定从哪里继续：服务正常 → 同步 RUNNING；服务不存在 → 从头部署。
 
 ### dtk rollback
 
-手动触发回滚，执行 `helm rollback`，状态回到 `RUNNING`。
-
-```bash
-dtk rollback [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
-```
+手动触发整组 helm rollback，按拓扑逆序回滚所有 release，状态回到 RUNNING。
 
 ---
 
@@ -292,12 +202,3 @@ dtk rollback [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
 当前部署状态为 DEPLOYING，不能发起新部署
 如需继续，请运行: dtk resume
 ```
-
----
-
-## 下一步
-
-- controller pod 集成到同一个 Helm Chart
-- 完整 e2e 测试（手动删除 deployment → 自动自愈）
-- SSA 冲突自动清理
-- 多资源类型全面支持

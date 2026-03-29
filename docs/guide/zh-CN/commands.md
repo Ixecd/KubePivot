@@ -328,11 +328,109 @@ json.dump(d,open(p,'w'),indent=2)
 重置前先确认 K8s 实际状态与设置的值一致。
 
 ---
+## 多服务部署
 
-## 待实现
+v1.0.0 起，`dtk deploy` 自动检测 `components.yaml` 里的服务数量和依赖关系，决定走单服务还是多服务路径。
 
-> 🚧 以下命令在规划中，尚未实现：
+**触发条件**：多层依赖 或 同层多个服务时自动进入多服务模式：
 
-**多服务支持**：一个项目多个服务，按依赖顺序部署，任意失败整组回滚。设计对齐中。
+```
+[16:43:48] 🗂  多服务模式：2 层，独立 helm release
+[16:43:48] 📦 部署第 1 层（共 2 层，2 个服务）
+[16:43:48] ⏭  跳过 chain-miner（CLI 工具，无 chart）
+[16:43:48] 🏗  构建 wallet-service:v0.1.10
 
-**AI 扫描组件**：`dtk deploy` 接入真实 LLM，扫描代码仓库自动生成/更新 `components.yaml`，AI 给出资源建议。可配置为只给建议或直接部署。
+...
+
+[16:43:55] ✓  推送 wallet-service 完成（7.7s）
+[16:43:55] ⛵ helm upgrade web3-blitz-wallet-service
+[16:44:11] ✓  helm upgrade web3-blitz-wallet-service 完成
+[16:44:11] ✓  wallet-service 就绪
+
+```
+**helm release 命名**：`{project}-{service}`，每个服务独立 release，独立回滚。
+
+**CLI 工具跳过**：`image` 为空且无对应 chart 目录的服务自动跳过，不参与 build/push/deploy。
+
+**失败策略**：
+
+```
+
+单服务重试 3 次失败
+    ↓
+级联 rollback（失败服务 + 所有下游，逆拓扑顺序）
+    ↓ 级联也失败
+整组 rollback（所有已部署 release，逆序）
+    ↓ 整组也失败
+dtk down（清理 namespace）
+
+```
+---
+
+## dtk ai-plan
+
+AI 扫描仓库，自动生成 `configs/components.yaml`。
+
+```bash
+dtk ai-plan [flags]
+```
+
+| Flag             | 说明                          | 默认值 |
+| ---------------- | ----------------------------- | ------ |
+| `--suggest-only` | 只打印建议，不写入文件        | false  |
+| `--desc`         | 补充描述，帮助 LLM 更准确分析 | 空     |
+
+**配置方式**：
+
+```bash
+export DTK_LLM_PROVIDER=grok      # grok / claude / openai / doubao
+export DTK_LLM_API_KEY=xai-xxx
+export DTK_LLM_MODEL=grok-3       # 可选，有默认值
+export DTK_LLM_ENDPOINT=          # 可选，私有化部署时覆盖
+```
+
+**示例**：
+
+```bash
+dtk ai-plan --suggest-only
+dtk ai-plan --desc "BTC/ETH 充提币系统，wallet-service 是核心，基础设施不要列进来"
+dtk ai-plan && dtk deploy
+```
+
+详见 [AI 使用手册](ai.md)。
+
+---
+
+## 状态机速查
+
+| 状态           | 含义               | 允许的后续操作           |
+| -------------- | ------------------ | ------------------------ |
+| `IDLE`         | 未部署             | deploy                   |
+| `INITIALIZING` | 初始化中           | -                        |
+| `DEPLOYING`    | 部署中             | -                        |
+| `VALIDATING`   | 验证中             | -                        |
+| `RUNNING`      | 正常运行           | deploy / rollback / down |
+| `ROLLING_BACK` | 回滚中             | -                        |
+| `CLEANING`     | 清理中（首次失败） | -                        |
+| `TERMINATED`   | 已下线             | deploy                   |
+
+非 `IDLE / RUNNING / TERMINATED` 状态时，`dtk deploy` 会被拒绝，用 `dtk resume` 恢复。
+
+---
+
+## 手动重置状态机
+
+所有自动手段都失败时的最后手段：
+
+```bash
+python3 -c "
+import json, os
+p=os.path.expanduser('~/.dtk/state/<project>/<ns>.json')
+d=json.load(open(p))
+d['state']='IDLE'   # 或 RUNNING
+d['reason']='手动重置'
+json.dump(d,open(p,'w'),indent=2)
+"
+```
+
+重置前先确认 K8s 实际状态与设置的值一致。

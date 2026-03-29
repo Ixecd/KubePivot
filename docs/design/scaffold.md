@@ -11,7 +11,7 @@ dtk init --name myapp --module github.com/me/myapp
   │
   ├── 1. 参数校验（name 必须匹配 ^[a-z0-9-]+$）
   ├── 2. resolveTemplateRoot（DTK_TEMPLATE_ROOT 或当前目录）
-  ├── 3. resolveOutputDir（默认 ./<name>）
+  ├── 3. resolveOutputDir（默认 ./<n>）
   ├── 4. ensureOutputDir（非空目录需要 --force）
   │
   ├── 5. copyEntries（复制模板静态文件）
@@ -57,11 +57,37 @@ dtk init --name myapp --module github.com/me/myapp
   │       deployments/dev-toolkit → deployments/<n>
   │       build/docker/dev-toolkit → build/docker/<n>
   │
-  ├── 13. writeHelmTemplateSkeleton（生成完整 Helm chart）
-  │       deployment.yaml / {n}-postgres-statefulset.yaml / {n}-etcd-deployment.yaml
-  │       controller-deployment.yaml / controller-rbac.yaml / resources-configmap.yaml
-  │       NOTES.txt（部署后显示组件状态）
-  │       values.yaml（含 postgres/etcd/controller enabled 开关）
+  ├── 13. writeHelmTemplateSkeleton（生成多服务独立 chart 结构）
+  │
+  │     writePostgresChart → deployments/<n>/<n>-postgres/
+  │       ├── Chart.yaml
+  │       ├── values.yaml（storage: 1Gi）
+  │       └── templates/
+  │           ├── statefulset.yaml
+  │           └── service.yaml
+  │
+  │     writeEtcdChart → deployments/<n>/<n>-etcd/
+  │       ├── Chart.yaml
+  │       └── templates/
+  │           ├── deployment.yaml
+  │           └── service.yaml
+  │
+  │     writeServiceChart → deployments/<n>/<n>/
+  │       ├── Chart.yaml
+  │       ├── values.yaml（image / service / env / resources）
+  │       └── templates/
+  │           ├── deployment.yaml（含 initContainers 等待 postgres/etcd）
+  │           ├── service.yaml
+  │           ├── serviceaccount.yaml
+  │           └── NOTES.txt
+  │
+  │     writeControllerChart → deployments/<n>/<n>-controller/
+  │       ├── Chart.yaml
+  │       ├── values.yaml（enabled: false，image 待填写）
+  │       └── templates/
+  │           ├── deployment.yaml（带 enabled guard）
+  │           ├── rbac.yaml（带 enabled guard）
+  │           └── configmap.yaml（带 enabled guard）
   │
   ├── 14. 自动执行
   │       git init + git add + git commit
@@ -83,9 +109,7 @@ sort.Slice(keys, func(i, j int) bool {
 })
 ```
 
-**反例**（不排序时可能出现）：
-- 先替换 `dev-toolkit` → `myapp`
-- 再替换 `github.com/Ixecd/dev-toolkit` → 找不到，已变成 `github.com/Ixecd/myapp`
+**反例**（不排序时可能出现）：先替换 `dev-toolkit` → `myapp`，再替换 `github.com/Ixecd/dev-toolkit` → 找不到，已变成 `github.com/Ixecd/myapp`。
 
 此 bug 已在 v0.8.0 修复，通过单元测试覆盖。
 
@@ -103,18 +127,9 @@ sort.Slice(keys, func(i, j int) bool {
 
 `dtk init` 会在 `handoff/` 下生成两个文件：
 
-**HANDOFF.md**：写给下一个接手的 Claude，自动填充：
-- 当前日期、仓库模块路径、项目名
-- 目录结构、dtk 命令速查
-- 快速访问命令（port-forward / kubectl / helm）
+**HANDOFF.md**：写给下一个接手的 Claude，自动填充：当前日期、仓库模块路径、项目名、目录结构、dtk 命令速查、快速访问命令。需要开发者手动填写：架构设计、已知问题、下一步计划。
 
-需要开发者手动填写：架构设计、已知问题、下一步计划。
-
-**AI-CODING-GUIDE.md**：写给协助写业务代码的 Claude，约束：
-- 该在哪里加 handler / migration / 新模块
-- 不能动哪些文件（project.env / deploy.mk / db/migrations/）
-- 代码风格（slog、错误处理、包依赖方向）
-- 部署配置同步清单
+**AI-CODING-GUIDE.md**：写给协助写业务代码的 Claude，约束该在哪里加 handler / migration / 新模块，不能动哪些文件，代码风格，部署配置同步清单。
 
 ---
 
@@ -134,33 +149,9 @@ func getArch() (string, error) {
 
 ---
 
-## 组件开关
-
-生成的 `values.yaml` 包含以下开关：
-
-```yaml
-postgres:
-  enabled: true   # 关闭时不部署，initContainers 自动跳过 wait-postgres
-
-etcd:
-  enabled: true
-
-controller:
-  enabled: false  # 默认关闭，配置好镜像后再开启
-```
-
----
-
-## controller 骨架
-
-`writeHelmTemplateSkeleton` 同时生成 controller 相关 yaml，均带 `{{- if .Values.controller.enabled }}` guard，`controller.enabled: false` 时不部署任何 controller 资源。
-
----
-
 ## ensureOutputDir 的保护逻辑
 
 ```go
-// 目录存在且非空，且没有 --force → 报错
 if len(entries) > 0 && !force {
     return fmt.Errorf("输出目录已存在：%s\n请加 --force 强制覆盖", path)
 }
@@ -183,14 +174,7 @@ if len(entries) > 0 && !force {
 
 ## frontend 骨架设计约束
 
-`--with-frontend` 生成的骨架遵循严格约束：
-
-1. **零业务逻辑**：不出现任何领域字段
-2. **页面仅两个**：`Login.tsx` + `Home.tsx`（占位）
-3. **nav 为空数组**：由业务层追加
-4. **反引号安全**：TypeScript 模板字符串全部改为字符串拼接，避免 Go raw string 中反引号冲突
-
-第 4 条原因：Go raw string 用反引号包裹，内部出现反引号会提前终止，导致编译错误。
+`--with-frontend` 生成的骨架：零业务逻辑，页面仅两个（Login.tsx + Home.tsx），nav 为空数组，TypeScript 模板字符串全部改为字符串拼接（避免 Go raw string 中反引号冲突）。
 
 ---
 

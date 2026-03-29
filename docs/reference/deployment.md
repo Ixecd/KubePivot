@@ -98,16 +98,13 @@ dtk deploy 封装了以上所有步骤，并加入了 VERSION 跳过、SSA 冲�
 ---
 
 ## 回滚
-
 ```bash
-# 查看 helm 历史
-helm history <project-name> -n <namespace>
+# dtk 整组回滚（推荐，按拓扑逆序）
+dtk rollback
 
-# 回滚到上一版本
-helm rollback <project-name> -n <namespace>
-
-# 回滚到指定版本
-helm rollback <project-name> <revision> -n <namespace>
+# 手动回滚某个 release
+helm history web3-blitz-wallet-service -n web3-blitz
+helm rollback web3-blitz-wallet-service -n web3-blitz
 ```
 
 ---

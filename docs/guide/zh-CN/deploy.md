@@ -168,3 +168,29 @@ kubectl patch deployment myapp -n myapp \
 ```bash
 kubectl exec -n myapp <pod-name> -- wget -qO- http://localhost:8080/healthz
 ```
+
+**`type` 字段（v1.0.0+）：**
+```yaml
+components:
+  - name: postgres
+    type: statefulset    # deployment（默认）/ statefulset
+    port: 5432
+    image: ""
+    depends_on: []       # 依赖的服务名，dtk 按依赖顺序部署
+```
+```
+
+**quickstart.md** — 第五步的输出示例替换为：
+```
+AI 规划结果:
+- myapp: replicas=1 cpu=100m memory=128Mi storage=1Gi
+
+[07:52:10] 🏗  构建镜像 myapp（v0.1.0）
+[07:52:18] ✓  构建完成（8.3s）
+[07:52:18] 📤 推送镜像 myapp（v0.1.0）
+[07:52:21] ✓  推送完成（3.1s）
+[07:52:21] ⛵ helm upgrade myapp
+[07:52:30] ✓  helm upgrade 完成（9.2s）
+[07:52:30] 🔍 等待 rollout 就绪
+[07:52:32] ✓  服务就绪（1.8s）
+[07:52:32] ✅ 部署完成，状态: RUNNING (version=v0.1.0)

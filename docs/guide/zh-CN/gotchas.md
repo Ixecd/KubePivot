@@ -404,3 +404,159 @@ dtk 会检测哪些服务的镜像已经存在（VERSION 没变则跳过 build/p
 正在回滚 postgres...          ✓
 ✅ 回滚完成，所有服务已回滚到上一版本
 ```
+
+### 老项目迁移到多 chart 结构
+
+v1.0.0 之前的项目是单 chart 结构，迁移到多 chart 时会遇到 helm ownership 冲突：
+
+```
+Error: unable to continue with install: Deployment "wallet-service" in namespace "web3-blitz"
+exists and cannot be imported into the current release: invalid ownership metadata;
+annotation validation error: key "meta.helm.sh/release-name" must equal
+"web3-blitz-wallet-service": current value is "web3-blitz"
+```
+
+**原因**：`wallet-service` Deployment 被老 release 管理，新 release 无法接管。
+
+**解法 A（推荐）**：把老 release 里的业务服务 templates 删掉，只保留基础设施：
+
+```bash
+# 删掉老 chart 里的业务服务文件
+cd deployments/web3-blitz/templates
+rm wallet-service-deployment.yaml service.yaml serviceaccount.yaml hpa.yaml
+
+# 重新安装老 release（只管基础设施）
+helm uninstall web3-blitz -n web3-blitz
+helm upgrade --install web3-blitz-infra ./deployments/web3-blitz -n web3-blitz --create-namespace
+
+# 再 dtk deploy（wallet-service 走新独立 release）
+dtk deploy
+```
+
+**解法 B（临时）**：修改 annotation 让新 release 接管：
+
+```bash
+kubectl annotate deployment wallet-service -n web3-blitz \
+  meta.helm.sh/release-name=web3-blitz-wallet-service \
+  meta.helm.sh/release-namespace=web3-blitz \
+  --overwrite
+kubectl label deployment wallet-service -n web3-blitz \
+  app.kubernetes.io/managed-by=Helm --overwrite
+```
+
+---
+
+### 多 chart 项目：service name 必须和 chart 内一致
+
+`dtk init` 生成的 chart 里 service name 是 `{name}-postgres`、`{name}-etcd`。
+
+老项目里 service name 可能是裸的 `postgres`、`etcd`，需要手动对齐：
+
+```bash
+# 查一下实际 service name
+kubectl get svc -n web3-blitz
+
+# 如果 service name 是 postgres（不带前缀），改 chart 里的引用
+sed -i '' 's/{name}-postgres/postgres/g' \
+  deployments/web3-blitz/wallet-service/templates/deployment.yaml
+sed -i '' 's/{name}-postgres/postgres/g' \
+  deployments/web3-blitz/wallet-service/values.yaml
+```
+
+---
+
+### chart 目录不存在时 helm upgrade 立即失败
+
+多服务模式下，`dtk deploy` 会查找 `deployments/{project}/{service}/` 作为 chart 路径。
+
+如果目录不存在，会直接报错，不进入重试：
+
+```
+错误：chart 目录不存在：deployments/web3-blitz/chain-miner
+请运行 dtk init 重新生成项目结构，或手动创建该目录
+```
+
+CLI 工具（image 为空且无 chart）会自动跳过，不报错。
+
+---
+
+### 多服务部署时基础设施必须先就绪
+
+`dtk deploy` 按 `depends_on` 拓扑顺序部署，但如果 `components.yaml` 没有列 postgres/etcd（只列业务服务），而 postgres/etcd 还没起来，业务服务的 initContainers 会一直 pending，触发 helm `--wait` 超时。
+
+**解法**：在 `components.yaml` 把 postgres/etcd 也列进去，让 dtk 负责顺序：
+
+```yaml
+components:
+  - name: postgres
+    type: statefulset
+    port: 5432
+    image: ""          # 空 = 用预置镜像，跳过 build/push
+
+  - name: etcd
+    type: deployment
+    port: 2379
+    image: ""
+
+  - name: wallet-service
+    type: deployment
+    port: 2113
+    image: wallet-service
+    depends_on:
+      - postgres
+      - etcd
+```
+
+---
+
+### 多服务 rollback 前检查 release 是否存在
+
+如果某个服务 helm upgrade 失败（首次安装失败，release 从未创建成功），rollback 会找不到 release。
+
+dtk 在 rollback 前会用 `helm history --max 1` 检查 release 是否存在，不存在时跳过，不会误触发 dtk down：
+
+```
+[17:20:43] ⏭  跳过 rollback web3-blitz-wallet-service（未安装）
+```
+
+### 老项目迁移：手动生成基础设施独立 chart
+
+v1.0.0 之前的项目 postgres/etcd 都在老的单 chart 里，迁移到多 chart
+结构后需要手动生成独立 chart：
+
+1. 生成 postgres/etcd 独立 chart（注意用实际的用户名/密码/数据库名）：
+   参考 `gen_infra_charts.sh` 脚本，关键是 POSTGRES_USER/PASSWORD/DB
+   要和实际数据库一致。
+
+2. 修复业务服务 chart 里的 service name：
+   老项目 service name 是裸的 `postgres`/`etcd`，
+   新的多 chart 结构 service name 带项目前缀：`{project}-postgres`/`{project}-etcd`。
+   initContainers 和 DATABASE_URL/ETCD_ENDPOINTS 都要同步改。
+
+3. 更新 components.yaml 把基础设施也列进去并加 depends_on：
+```yaml
+   components:
+     - name: web3-blitz-postgres
+       type: statefulset
+       port: 5432
+       image: ""
+
+     - name: web3-blitz-etcd
+       type: deployment
+       port: 2379
+       image: ""
+
+     - name: wallet-service
+       type: deployment
+       port: 2113
+       image: wallet-service
+       depends_on:
+         - web3-blitz-postgres
+         - web3-blitz-etcd
+```
+
+4. 删掉老的单 chart release，重新 dtk deploy：
+```bash
+   helm uninstall {old-release} -n {namespace}
+   dtk deploy
+```

@@ -7,22 +7,29 @@
 ## 分层设计
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                    dtk deploy                       │  Go CLI
-│    读配置 → 前置检查 → 状态机 → AI 规划 → make          │
-└─────────────────┬───────────────────────────────────┘
-                  │ makeEnv (IMAGES / VERSION / ARCH ...)
-┌─────────────────▼───────────────────────────────────┐
-│               make deploy.full                      │  Makefile
-│    build → push → install → run.all                 │
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                      dtk deploy                          │  Go CLI
+│  读配置 → 前置检查 → 状态机 → 拓扑排序 → 逐层部署          │
+└──────────────────┬───────────────────────────────────────┘
+                   │
+        ┌──────────┴──────────┐
+        │ 单服务               │ 多服务
+        ▼                     ▼
+  make deploy.full     deployLayers（goroutine 并行）
+  build/push/install   每个服务独立 helm release
+        │                     │
+        └──────────┬──────────┘
+                   ▼
+           状态机 → RUNNING
 ```
 
-**为什么分两层？**
+**单服务 vs 多服务判断**：
 
-- `dtk`（Go）负责读配置、前置检查、状态机、AI 规划，这些需要结构化处理
-- `make`（Makefile）负责 docker / helm / kubectl 操作，shell 更自然
-- 两层通过环境变量通信，职责清晰，用户也可单独执行 `make deploy.full` 调试
+```go
+isMultiService := len(layers) > 1 || (len(layers) == 1 && len(layers[0]) > 1)
+```
+
+单服务走原有 `make deploy.full` 路径，向后兼容；多服务走 `deployLayers`，每个服务独立 release。
 
 ---
 
@@ -58,56 +65,79 @@ INITIALIZING → DEPLOYING → VALIDATING → RUNNING
 
 ---
 
-## SSA 冲突自动处理
+## 多服务部署流程
+
+```
+BuildLayers → []Layer
+
+for each 层级（同层 goroutine 并行，层间串行）：
+    deployService：
+        ① chart 目录存在检查（不存在快速失败，不重试）
+        ② image 为空且无 chart → 跳过（CLI 工具）
+        ③ build 镜像（只做一次，失败直接返回）
+        ④ push 镜像（只做一次）
+        ⑤ helm upgrade --install {project}-{service}（最多重试 3 次）
+        ⑥ kubectl rollout status --timeout=120s
+
+    ↓ 任意服务失败
+    collectAffected → Downstream（失败服务 + 所有下游，逆拓扑顺序）
+    for each affected：
+        helmReleaseExists 检查（未安装的跳过）
+        helm rollback {release}
+    ↓ 级联 rollback 也失败
+    整组逆序 rollback（所有已成功部署的 release）
+    ↓ 整组也失败
+    dtk down（清理 namespace）
+```
+
+**build/push 只做一次**：失败直接返回，不随 helm 重试而重复执行。
+
+**helmReleaseExists**：用 `helm history --max 1` 检查 release 是否存在，防止 rollback 从未安装的 release 触发误下线。
+
+---
+
+## SSA 冲突自动处理（单服务路径）
 
 deploy 失败时检查是否是 SSA managedFields 冲突：
 
 ```go
 if isSSAConflict(err.Error()) {
-    // 清除 namespace 下所有资源的 managedFields（幂等操作）
-    clearAllManagedFields(cfg)
-    // 重试一次
+    clearAllManagedFields(cfg)  // 批量清除（幂等）
     retryDeployWithSSAFix(cfg, makeEnv, root)
 }
 ```
 
-**为什么批量清除而不是精确定位**：helm 错误信息格式随版本变化，精确解析容易出错；批量清除是幂等操作，多清了没副作用。
+**为什么批量清除**：helm 错误信息格式随版本变化，精确解析容易出错；批量清除是幂等操作，多清了没副作用。
 
 ---
 
 ## 镜像拉取失败检测
 
-deploy 失败时检查是否是镜像问题：
+deploy 失败时检查是否是镜像问题，输出可操作的排查提示：
 
-```go
-if isImagePullError(err.Error()) {
-    // 输出可操作的排查提示：
-    // 1. docker manifest inspect 检查镜像是否存在
-    // 2. docker login 检查登录状态
-    // 3. ARCH 是否和集群节点匹配
-}
+```
+检测到镜像拉取失败，请检查：
+  1. 镜像是否已推送：docker manifest inspect registry/myapp-arm64:v1.0.0
+  2. registry 是否需要登录：docker login
+  3. ARCH 是否正确：当前 arm64，集群节点架构是否匹配
 ```
 
 ---
 
-## IMAGES 变量的传递
+## IMAGES 变量的传递（单服务路径）
 
-`dtk deploy` 从 plan 中过滤出有 image 的组件，构建 `IMAGES` 环境变量：
+`dtk deploy` 从 plan 中过滤出有 image 的组件，构建 `IMAGES` 环境变量传给 Makefile：
 
 ```go
-var imageNames []string
 for _, item := range plan {
-    if item.Image == "" {
-        continue  // CLI 工具、辅助组件跳过
+    if item.Image != "" {
+        imageNames = append(imageNames, item.Name)
     }
-    imageNames = append(imageNames, item.Name)
 }
 makeEnv = append(makeEnv, "IMAGES="+strings.Join(imageNames, " "))
 ```
 
-**为什么不让 Makefile 自己过滤**：Makefile 变量是纯字符串，`$(foreach)` 里无法判断组件是否有 image，交给 Go 处理更可靠。
-
-**如果不传 IMAGES 会怎样**：`deploy.mk` 中 `DEPLOYS ?= $(if $(IMAGES),$(IMAGES),$(BINS))`，`IMAGES` 为空则 fallback 到扫描 `cmd/` 目录，可能混入非预期的文件。
+多服务路径每个服务单独传 `IMAGES=<service-name>`，不走 Makefile 的 IMAGES 逻辑。
 
 ---
 
@@ -140,48 +170,47 @@ deploy.build:
     fi
 ```
 
-`docker manifest inspect` 查询远端 registry，无需拉取镜像。VERSION 不变时跳过 build 和 push。
-
----
-
-## Helm SSA 与 --force-conflicts
-
-**冲突场景**：`kubectl set image` 的 field manager 是 `kubectl-set`，helm 的 field manager 是 `helm`，两者对同一字段的所有权冲突。
-
-**解决**：`--force-conflicts` 让 Helm 强制接管这些字段。
-
-**根本解决**：不要在 Helm 管理的资源上直接用 `kubectl set image`。`deploy.run.all` 里的 `kubectl set image` 是冗余的，未来可考虑去掉。
-
----
-
-## --wait 的必要性
-
-```
-没有 --wait：
-helm upgrade → 立即返回（pod 未 ready）
-            ↓
-deploy.run.all → kubectl set image → Error: deployment not found  ❌
-
-有 --wait：
-helm upgrade --wait → 等待 ready 再返回
-                    ↓
-deploy.run.all → kubectl set image → 正常执行  ✅
-```
+`docker manifest inspect` 查询远端 registry，无需拉取镜像。VERSION 不变时跳过 build 和 push，重跑 deploy 只更新 helm values。
 
 ---
 
 ## components.yaml 与 AI 规划
 
-`internal/planner` 读取 `configs/components.yaml`，目前按规则估算资源：
+`internal/planner` 读取 `configs/components.yaml`，`dtk ai-plan` 自动生成：
 
 ```yaml
 components:
-  - name: myapp
-    port: 8080
-    image: myapp
+  - name: wallet-service
+    type: deployment
+    port: 2113
+    image: wallet-service
+    replicas: 2
+    cpu: 200m
+    memory: 256Mi
+    depends_on:
+      - postgres
+      - etcd
 ```
 
-> 🚧 **待实现**：接入真实 LLM，扫描代码仓库自动生成/更新 components.yaml，AI 给出资源建议（replicas / cpu / memory）。详见 TODO。
+`dtk ai-plan` 支持 Grok / Claude / OpenAI / 豆包四个 provider，通过 `DTK_LLM_PROVIDER` 和 `DTK_LLM_API_KEY` 配置。详见 [AI 使用手册](../guide/zh-CN/ai.md)。
+
+---
+
+## 统一进度输出
+
+所有部署步骤通过 `P.Start/Done/Fail/Info` 统一输出，带时间戳和耗时：
+
+```
+[15:38:09] 🏗  构建镜像 wallet-service（v0.1.10）
+[15:38:23] ✓  构建完成（14.2s）
+[15:38:23] 📤 推送镜像 wallet-service（v0.1.10）
+[15:38:28] ✓  推送完成（5.5s）
+[15:38:28] ⛵ helm upgrade web3-blitz-wallet-service
+[15:38:29] ✓  helm upgrade 完成（0.6s）
+[15:38:29] 🔍 等待 rollout 就绪
+[15:38:29] ✓  服务就绪（0.3s）
+[15:38:29] ✅ 部署完成，状态: RUNNING (version=v0.1.10)
+```
 
 ---
 

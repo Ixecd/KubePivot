@@ -6,7 +6,7 @@
 
 dtk 是一个 **Go 云原生项目脚手架**，解决两个核心问题：
 
-1. **从零搭建**：`dtk init` 生成完整可部署的骨架，含 Helm chart、认证、迁移、监控
+1. **从零搭建**：`dtk init` 生成完整可部署的骨架，含多服务 Helm chart、认证、迁移、监控
 2. **持续交付**：`dtk deploy` 一键 AI 规划 + build + push + helm upgrade + 状态追踪 + 自动自愈
 
 目标用户是 **Go 后端开发者**，不要求熟悉 K8s 运维细节。
@@ -19,10 +19,12 @@ dtk 是一个 **Go 云原生项目脚手架**，解决两个核心问题：
 开发者本机                              K8s 集群
 ──────────────────────────              ──────────────────────────────────
 dtk CLI
-  ├── dtk init      → 生成项目骨架
+  ├── dtk init      → 生成项目骨架（多 chart）
   │
-  ├── dtk deploy    → build/push
-  │       ↓ helm upgrade
+  ├── dtk ai-plan   → 扫描仓库 + LLM 规划 → components.yaml
+  │
+  ├── dtk deploy    → 拓扑排序 → 逐层 build/push/helm upgrade
+  │       ↓ 每个服务独立 helm release
   │       ↓ 写状态到 etcd ──────────────→ etcd pod
   │       ↓                                   │
   │   状态机（本地/etcd）             controller pod
@@ -32,7 +34,7 @@ dtk CLI
   ├── dtk status    ←── 读状态机              自动自愈（~10s）
   ├── dtk history   ←── 读 history
   ├── dtk diff      ←── helm history
-  ├── dtk rollback  → helm rollback
+  ├── dtk rollback  → helm rollback（整组逆序）
   ├── dtk doctor    → 环境检查
   └── dtk down      → 清理所有资源
 ```
@@ -61,22 +63,18 @@ IDLE → INITIALIZING → DEPLOYING → VALIDATING → RUNNING
 
 所有 K8s 操作通过 `kubectl` 命令行实现，不引入 `k8s.io/client-go`。
 
-**为什么**：
-- kubectl 行为经过充分验证，是 K8s 的事实标准
-- client-go 依赖庞大，增加二进制体积和编译时间
-- kubectl 输出格式稳定，易于解析
+**为什么**：kubectl 行为经过充分验证，是 K8s 的事实标准；client-go 依赖庞大，增加二进制体积和编译时间。
 
-### 4. Helm 管理所有资源
+### 4. 每个服务独立 helm release
 
-不用裸 kubectl apply，所有资源管理通过 Helm。
+不再是一个大 chart 管所有资源，每个服务有独立 release：`{project}-{service}`。
 
-**为什么**：Helm 提供版本历史，rollback 有记录可查。`dtk rollback` 本质是 `helm rollback`，利用 Helm 的原子性保证。
+**为什么**：独立回滚不影响其他服务，按依赖顺序部署，出问题容易定位。
 
 ### 5. 配置驱动
 
-controller 监控的资源由 `configs/resources.yaml` 决定，新增监控资源只改配置，不改代码。
-
-**为什么**：不同项目需要监控不同资源，硬编码会让 controller 变成特定项目专属，失去通用性。
+- `configs/components.yaml`：描述服务列表、类型、依赖关系，驱动 planner 和 deploy
+- `configs/resources.yaml`：描述 controller 监控的资源，新增资源只改配置不改代码
 
 ### 6. 自包含 Helm chart
 
@@ -84,29 +82,36 @@ controller 监控的资源由 `configs/resources.yaml` 决定，新增监控资�
 
 **为什么**：第三方 chart 的可用性不可控，probe、镜像版本、启动脚本都可能与用户需求不匹配。
 
+### 7. AI 辅助规划
+
+`dtk ai-plan` 扫描代码仓库，调用 LLM（Grok/Claude/OpenAI/豆包）自动生成 `components.yaml`，省去手动配置。
+
 ---
 
 ## 包结构与职责
 
 ```
 internal/
-├── planner/      AI 规划：读 components.yaml → 估算资源 → 生成 Plan
-├── scaffold/     项目生成：模板复制 + 动态文件 + helm chart 骨架
-├── state/        状态机：FSM + etcd/本地持久化（零 K8s 依赖）
-└── controller/   自愈控制器：资源检测 + helm rollback（依赖 kubectl/helm CLI）
+├── ai/       LLM 客户端（Grok/Claude/OpenAI/豆包）+ 仓库扫描 + prompt
+├── planner/  AI 规划：读 components.yaml → DAG → 拓扑排序 → Plan
+├── scaffold/ 项目生成：模板复制 + 动态文件 + 多 chart 骨架
+├── state/    状态机：FSM + etcd/本地持久化（零 K8s 依赖）
+└── controller/ 自愈控制器：资源检测 + helm rollback（依赖 kubectl/helm CLI）
 
-cmd/dtk/          CLI 入口：各命令的参数解析和流程编排
+cmd/dtk/      CLI 入口：各命令的参数解析和流程编排
 ```
 
 **依赖方向**（严格单向）：
 
 ```
+cmd/dtk → internal/ai
 cmd/dtk → internal/planner
 cmd/dtk → internal/state
 cmd/dtk → internal/controller
 internal/controller → internal/state（只读状态，不写）
 internal/scaffold（独立）
 internal/planner（独立）
+internal/ai（独立）
 internal/state（独立，零外部依赖）
 ```
 
@@ -114,19 +119,22 @@ internal/state（独立，零外部依赖）
 
 ## 数据流
 
-### dtk deploy
+### dtk deploy（多服务路径）
 
 ```
 project.env ──→ deployConfig
-components.yaml → planner.BuildPlan → []Plan
-                                          ↓
-state.New(etcd/local) → Machine       buildMakeEnv
-                            ↓               ↓
-                     Transition        make deploy.full
-                     (INIT→DEPLOY           ↓
-                      →VALIDATE       helm upgrade → K8s
-                      →RUNNING)             ↓
-                                      etcd.Put(state)
+components.yaml → planner.BuildLayers → []Layer（拓扑分层）
+                                            ↓
+state.New(etcd/local) → Machine     isMultiService?
+                            ↓               ↓ yes
+                     Transition     deployLayers：
+                     (INIT→DEPLOY       同层 goroutine 并行
+                      →VALIDATE         层间串行
+                      →RUNNING)         build/push（只做一次）
+                                         helm upgrade --install
+                                         kubectl rollout status
+                                         ↓ 失败
+                                     级联 rollback → 整组 rollback → dtk down
 ```
 
 ### controller Reconcile
@@ -150,11 +158,11 @@ resources.yaml → []Resource
 
 | 包 | 测试方式 | 测试数 |
 |---|---|---|
-| internal/planner | 纯逻辑，直接测 | 20（100% 覆盖） |
+| internal/planner | 纯逻辑，直接测 | 32（100% 覆盖） |
 | internal/state | 纯逻辑 + localStore（TempDir） | 57 |
 | internal/scaffold | 纯逻辑 + 文件操作（TempDir） | 34 |
 | internal/controller | Detector/HelmClient mock 注入 | 20 |
-| cmd/dtk | 集成测试 + e2e 验证 | 部分 |
+| **合计** | | **143** |
 
 etcdStore 和 validator.go 依赖外部（etcd / kubectl），不做单元测试。
 
@@ -168,6 +176,7 @@ etcdStore 和 validator.go 依赖外部（etcd / kubectl），不做单元测试
 | v0.5.x | 体验命令（doctor/status/history） | ✅ |
 | v0.6.x | 稳定性（etcd重连/SSA/etcd迁移） | ✅ |
 | v0.7.x | 边界 case（pending处理/diff/ARCH） | ✅ |
-| v0.8.x | 全面单元测试 + CI | ✅ |
-| v0.9.x | AI 扫描组件接入真实 LLM | 🚧 |
-| v1.0.0 | 多服务支持 + 文档完善 | 🚧 |
+| v0.8.x | 全面单元测试（143个）+ CI | ✅ |
+| v0.9.0 | AI 扫描组件（dtk ai-plan，四个 LLM provider）+ 统一进度输出 | ✅ |
+| v1.0.0 | 多服务独立 release + 拓扑排序 + 级联 rollback + 文档完善 | ✅ |
+| v1.1.0 | dtk status 多 release 展示 / 灰度发布 | 🚧 |
