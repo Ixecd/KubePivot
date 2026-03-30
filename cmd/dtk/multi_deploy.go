@@ -17,6 +17,11 @@ func deployLayers(sm *state.Machine, cfg *deployConfig, env map[string]string, l
 	// secret 存在性检查（只警告，不阻断）
 	checkRequiredSecrets(cfg, root)
 
+	// 镜像安全扫描（有 trivy 才跑，没有静默跳过）
+	if _, err := runOutput("trivy", "--version"); err == nil {
+		runScan([]string{})
+	}
+
 	projectName := envOrDefault(env, "PROJECT_NAME", filepath.Base(root))
 	version := envOrDefault(env, "VERSION", "v0.1.0")
 

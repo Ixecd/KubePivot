@@ -127,3 +127,15 @@ install.kube-score:
 .PHONY: install.go-gitlint
 install.go-gitlint:
 	@$(GO) install github.com/marmotedu/go-gitlint/cmd/go-gitlint@latest
+
+.PHONY: install.trivy
+install.trivy:
+	@echo "===========> Installing trivy"
+	@curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+		| sh -s -- -b $(HOME)/bin
+
+.PHONY: install.cosign
+install.cosign:
+	@echo "===========> Installing cosign"
+	@curl -sfL https://raw.githubusercontent.com/sigstore/cosign/main/scripts/install.sh \
+		| sh -s -- -b $(HOME)/bin

@@ -71,6 +71,8 @@ func main() {
 		runRollback(os.Args[2:])
 	case "release":
 		runRelease(os.Args[2:])
+	case "scan":
+		runScan(os.Args[2:])
 	case "controller":
 		if len(os.Args) > 2 && os.Args[2] == "start" {
 			controller.Start()
@@ -141,6 +143,7 @@ func printUsage() {
   dtk resume   [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
   dtk rollback [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
   dtk release  --version <v1.2.3> [--deploy] [--no-push]
+  dtk scan     [--severity CRITICAL,HIGH] [--image img:tag]   扫描镜像 CVE
   dtk controller start   （在 controller pod 内部运行，启动 Reconciliation Loop）
 
 示例:

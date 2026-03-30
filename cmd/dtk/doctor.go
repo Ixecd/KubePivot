@@ -27,6 +27,7 @@ func runDoctor(_ []string) {
 	results = append(results, checkDocker())
 	results = append(results, checkKubectl())
 	results = append(results, checkHelm())
+	results = append(results, checkTrivy())
 	results = append(results, checkK8sCluster())
 
 	root, err := projectRoot()
@@ -262,4 +263,19 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func checkTrivy() checkResult {
+	out, err := exec.Command("trivy", "--version").Output()
+	if err != nil {
+		return checkResult{
+			name:    "trivy",
+			ok:      false,
+			isError: false,
+			detail:  "未安装，dtk scan / dtk deploy 扫描功能不可用",
+			fix:     "make install.trivy  或  brew install aquasecurity/trivy/trivy",
+		}
+	}
+	version := strings.TrimSpace(strings.Split(string(out), "\n")[0])
+	return checkResult{name: "trivy", ok: true, detail: version}
 }
