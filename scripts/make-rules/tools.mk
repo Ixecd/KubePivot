@@ -139,3 +139,8 @@ install.cosign:
 	@echo "===========> Installing cosign"
 	@curl -sfL https://raw.githubusercontent.com/sigstore/cosign/main/scripts/install.sh \
 		| sh -s -- -b $(HOME)/bin
+
+.PHONY: install.oasdiff
+install.oasdiff:
+	@echo "===========> Installing oasdiff"
+	@go install github.com/oasdiff/oasdiff/cmd/oasdiff@latest

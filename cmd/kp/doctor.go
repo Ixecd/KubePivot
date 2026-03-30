@@ -28,6 +28,7 @@ func runDoctor(_ []string) {
 	results = append(results, checkKubectl())
 	results = append(results, checkHelm())
 	results = append(results, checkTrivy())
+	results = append(results, checkOasdiff())
 	results = append(results, checkK8sCluster())
 
 	root, err := projectRoot()
@@ -278,4 +279,19 @@ func checkTrivy() checkResult {
 	}
 	version := strings.TrimSpace(strings.Split(string(out), "\n")[0])
 	return checkResult{name: "trivy", ok: true, detail: version}
+}
+
+func checkOasdiff() checkResult {
+	out, err := exec.Command("oasdiff", "--version").Output()
+	if err != nil {
+		return checkResult{
+			name:    "oasdiff",
+			ok:      false,
+			isError: false,
+			detail:  "未安装，kp compat check 不可用",
+			fix:     "brew install oasdiff  或  参考 https://github.com/oasdiff/oasdiff",
+		}
+	}
+	version := strings.TrimSpace(strings.Split(string(out), "\n")[0])
+	return checkResult{name: "oasdiff", ok: true, detail: version}
 }
