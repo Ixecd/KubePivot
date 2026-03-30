@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Ixecd/dev-toolkit/internal/controller"
@@ -212,18 +213,72 @@ func runRollback(args []string) {
 		os.Exit(1)
 	}
 
-	release := envOrDefault(env, "PROJECT_NAME", filepath.Base(root))
-	P.Start("⏪", fmt.Sprintf("helm rollback %s", release))
-	if err := helmRollback(cfg.kubeconfig, cfg.context, cfg.namespace, release); err != nil {
-		P.Fail("回滚失败")
-		fmt.Fprintln(os.Stderr, err)
-		sm.Transition(state.StateRunning, "回滚失败，保持 RUNNING")
+	// 加载 components.yaml，走多服务拓扑逆序
+	componentsPath := filepath.Join(root, "configs", "components.yaml")
+	layers, err := planner.BuildLayers(componentsPath)
+	if err != nil || len(layers) == 0 {
+		// 降级：单 release
+		release := projectName
+		P.Start("⏪", fmt.Sprintf("helm rollback %s", release))
+		if err := helmRollback(cfg.kubeconfig, cfg.context, cfg.namespace, release); err != nil {
+			P.Fail("回滚失败")
+			fmt.Fprintln(os.Stderr, err)
+			sm.Transition(state.StateRunning, "回滚失败，保持 RUNNING")
+			os.Exit(1)
+		}
+		P.Done("回滚完成")
+		sm.Transition(state.StateRunning, "回滚成功")
+		P.Info("✅", "回滚完成")
+		return
+	}
+
+	// 多服务：拓扑逆序逐层 rollback
+	P.Info("⏪", fmt.Sprintf("多服务模式：%d 层，逆序回滚", len(layers)))
+	allOK := true
+	for i := len(layers) - 1; i >= 0; i-- {
+		layer := layers[i]
+		P.Info("⏪", fmt.Sprintf("回滚第 %d 层（共 %d 层，%d 个服务）",
+			len(layers)-i, len(layers), len(layer)))
+
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		layerOK := true
+
+		for _, plan := range layer {
+			wg.Add(1)
+			go func(p planner.Plan) {
+				defer wg.Done()
+				release := releaseName(projectName, p.Name)
+				if !helmReleaseExists(cfg.kubeconfig, cfg.context, cfg.namespace, release) {
+					P.Info("⏭ ", fmt.Sprintf("跳过 %s（未安装）", release))
+					return
+				}
+				P.Start("⏪", fmt.Sprintf("rollback %s", release))
+				if err := helmRollback(cfg.kubeconfig, cfg.context, cfg.namespace, release); err != nil {
+					P.Fail(fmt.Sprintf("rollback %s 失败", release))
+					mu.Lock()
+					layerOK = false
+					mu.Unlock()
+				} else {
+					P.Done(fmt.Sprintf("rollback %s 完成", release))
+				}
+			}(plan)
+		}
+		wg.Wait()
+
+		if !layerOK {
+			allOK = false
+		}
+	}
+
+	if allOK {
+		sm.Transition(state.StateRunning, "回滚成功")
+		P.Info("✅", "全部服务回滚完成")
+	} else {
+		sm.Transition(state.StateRunning, "部分回滚失败，保持 RUNNING")
+		P.Fail("部分服务回滚失败，请手动检查")
 		os.Exit(1)
 	}
-	P.Done("回滚完成")
-
-	sm.Transition(state.StateRunning, "回滚成功")
-	P.Info("✅", "回滚完成")
 }
 
 // executeDeploy 执行完整部署流程（带状态机）

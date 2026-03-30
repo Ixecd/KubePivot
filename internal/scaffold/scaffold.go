@@ -22,6 +22,7 @@ type InitOptions struct {
 	TemplateRoot string
 	Force        bool
 	WithFrontend bool
+	DryRun       bool
 	Stdout       io.Writer
 }
 
@@ -72,6 +73,11 @@ func InitProject(opts InitOptions) (err error) {
 	outputDir, err := resolveOutputDir(opts.OutputDir, name)
 	if err != nil {
 		return err
+	}
+
+	if opts.DryRun {
+		printDryRun(opts)
+		return nil
 	}
 
 	// 记录目录是否由本次 init 创建
@@ -633,4 +639,57 @@ func writeResourcesConfig(outputDir, name string) error {
 		return fmt.Errorf("写入 resources.yaml 失败: %w", err)
 	}
 	return nil
+}
+
+func printDryRun(opts InitOptions) {
+	outputDir := opts.OutputDir
+	if outputDir == "" {
+		outputDir = "./" + opts.Name
+	}
+	module := opts.Module
+	if module == "" {
+		module = opts.Name
+	}
+
+	fmt.Fprintf(opts.Stdout, "[dry-run] dtk init --name %s --module %s\n\n", opts.Name, module)
+	fmt.Fprintf(opts.Stdout, "将生成项目：%s\n", outputDir)
+	fmt.Fprintf(opts.Stdout, "  模块路径：%s\n", module)
+	fmt.Fprintf(opts.Stdout, "  前端骨架：%s\n\n", map[bool]string{true: "是", false: "否"}[opts.WithFrontend])
+
+	n := opts.Name
+	lines := []string{
+		n + "/",
+		"├── cmd/" + n + "/",
+		"├── internal/",
+		"│   ├── api/",
+		"│   ├── auth/",
+		"│   ├── metrics/",
+		"│   └── db/migrations/",
+		"├── configs/",
+		"│   ├── project.env",
+		"│   └── components.yaml",
+		"├── deployments/" + n + "/",
+		"│   ├── " + n + "-postgres/",
+		"│   ├── " + n + "-etcd/",
+		"│   ├── " + n + "/",
+		"│   └── " + n + "-controller/",
+		"├── monitoring/",
+		"├── build/docker/" + n + "/",
+		"├── test/",
+		"├── handoff/",
+		"└── snapshots/",
+	}
+	if opts.WithFrontend {
+		lines = append(lines[:len(lines)-1],
+			"├── frontend/",
+			"└── snapshots/",
+		)
+	}
+
+	fmt.Fprintln(opts.Stdout, "目录结构：")
+	for _, l := range lines {
+		fmt.Fprintf(opts.Stdout, "  %s\n", l)
+	}
+	fmt.Fprintln(opts.Stdout)
+	fmt.Fprintln(opts.Stdout, "不会执行：go mod tidy / git init / git commit / 文件写入")
 }
