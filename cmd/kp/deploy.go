@@ -17,12 +17,13 @@ import (
 
 // deployConfig 部署参数
 type deployConfig struct {
-	components string
-	namespace  string
-	context    string
-	kubeconfig string
-	dryRun     bool
-	sign       bool
+	components   string
+	namespace    string
+	context      string
+	kubeconfig   string
+	dryRun       bool
+	sign         bool
+	forceMigrate bool
 }
 
 func runDeploy(args []string) {
@@ -39,6 +40,7 @@ func runDeploy(args []string) {
 	flags.StringVar(&cfg.kubeconfig, "kubeconfig", "", "kubeconfig 文件路径")
 	flags.BoolVar(&cfg.dryRun, "dry-run", false, "print plan only, do not deploy")
 	flags.BoolVar(&cfg.sign, "sign", false, "部署后对镜像进行 cosign keyless 签名")
+	flags.BoolVar(&cfg.forceMigrate, "force-migrate", false, "忽略破坏性迁移警告强制部署（不推荐）")
 
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "解析参数失败:", err)

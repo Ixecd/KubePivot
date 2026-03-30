@@ -1,9 +1,11 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -17,6 +19,11 @@ import (
 func deployLayers(sm *state.Machine, cfg *deployConfig, env map[string]string, layers []planner.Layer, root string) error {
 	// secret 存在性检查（只警告，不阻断）
 	checkRequiredSecrets(cfg, root)
+
+	// 迁移兼容性检查
+	if err := checkMigrationCompatibility(cfg, root, env); err != nil {
+		return err
+	}
 
 	// 镜像安全扫描（有 trivy 才跑，没有静默跳过）
 	if _, err := runOutput("trivy", "--version"); err == nil {
@@ -339,4 +346,92 @@ func imageRepo(registryPrefix, image, arch string) string {
 		return fmt.Sprintf("%s/%s", registryPrefix, image)
 	}
 	return fmt.Sprintf("%s/%s-%s", registryPrefix, image, arch)
+}
+
+func checkMigrationCompatibility(cfg *deployConfig, root string, env map[string]string) error {
+	if cfg.forceMigrate {
+		P.Info("⚠️ ", "--force-migrate 已开启，跳过数据库迁移风险检查")
+		return nil
+	}
+
+	// 解析 DATABASE_URL
+	dbURL := resolveDatabaseURL(&migrateConfig{}, root, env)
+	if dbURL == "" {
+		P.Info("⏭ ", "未配置 DATABASE_URL，跳过迁移检查")
+		return nil
+	}
+
+	// 连接 DB
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		P.Info("⏭ ", fmt.Sprintf("数据库连接失败，跳过迁移检查: %v", err))
+		return nil
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		P.Info("⏭ ", "数据库不可达，跳过迁移检查")
+		return nil
+	}
+
+	// 获取当前版本
+	_, versionStr, err := detectMigrationVersion(db, "auto")
+	if err != nil || versionStr == "" {
+		P.Info("⏭ ", "未检测到迁移表，跳过迁移检查")
+		return nil
+	}
+	clean := strings.TrimSpace(strings.Split(versionStr, " ")[0])
+	currentVersion, _ := strconv.ParseInt(clean, 10, 64)
+
+	// 找迁移目录
+	migDir := findMigrationsDir(root)
+	if migDir == "" {
+		return nil
+	}
+
+	// 扫描待执行文件
+	files, err := scanMigrationFiles(migDir, currentVersion, -1)
+	if err != nil || len(files) == 0 {
+		return nil
+	}
+
+	// 分析风险
+	P.Info("🔍", fmt.Sprintf("检测到 %d 个待执行迁移，正在分析风险...", len(files)))
+	var destructive []string
+	var potential []string
+
+	for i := range files {
+		files[i].Operations = analyzeSQLFile(files[i].Path)
+		for _, op := range files[i].Operations {
+			msg := fmt.Sprintf("版本 %d | %s", files[i].Version, op.Statement)
+			if op.Risk == RiskDestructive {
+				destructive = append(destructive, msg)
+			} else if op.Risk == RiskPotential {
+				potential = append(potential, msg)
+			}
+		}
+	}
+
+	if len(destructive) > 0 {
+		P.Fail("检测到破坏性数据库变更，部署已阻断")
+		for _, s := range destructive {
+			fmt.Printf("    %s %s\n", colorize(colorRed, "❌"), s)
+		}
+		if len(potential) > 0 {
+			for _, s := range potential {
+				fmt.Printf("    %s %s\n", colorize(colorYellow, "⚠️ "), s)
+			}
+		}
+		fmt.Printf("\n%s 确认风险后使用 kp deploy --force-migrate 强制部署\n",
+			colorize(colorYellow, "💡"))
+		return fmt.Errorf("数据库迁移存在破坏性变更，部署终止")
+	}
+
+	if len(potential) > 0 {
+		P.Info("⚠️ ", fmt.Sprintf("检测到 %d 个潜在风险变更，请确认后继续", len(potential)))
+		for _, s := range potential {
+			fmt.Printf("    %s %s\n", colorize(colorYellow, "⚠️ "), s)
+		}
+	}
+
+	return nil
 }
