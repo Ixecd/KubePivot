@@ -7,18 +7,34 @@
 
 ---
 
+## 🟡 v1.x 前置必清任务（v1.4.0 开始前必须全部完成）
+
+### v1.2.0 剩余
+- [ ] cosign 镜像签名校验（`--sign` flag，默认关闭）
+- [ ] SBOM 物料清单自动生成（`trivy image --format cyclonedx`）
+
+### v1.1.0 剩余
+- [ ] `REGISTRY_PREFIX` 支持阿里云 ACR 格式
+- [ ] 统一进度输出带颜色（终端支持时）
+- [ ] 灰度发布支持
+
+---
+
 ## 🚨 v1.4.0 — 跨版本迁移（配得上乾枢的第一块硬骨头）
 
+> 前置：完成 v1.1.0 / v1.2.0 所有剩余任务（ACR、颜色输出、灰度、cosign、SBOM）
 > 目标：让多服务版本协同升级不再是噩梦
 
 ### 数据库迁移感知
 - [ ] `kp migrate status` — 展示每个服务的 DB 迁移版本和 K8s 版本是否对齐
+  （明确使用 go-migrate 或 Atlas 做 schema diff，scaffold 已预留 migrations 目录）
 - [ ] `kp migrate plan` — 分析升级路径，检测 schema 破坏性变更（删列/改类型）
 - [ ] 部署前自动检查：新版本的迁移文件是否和当前 DB 状态兼容
 - [ ] 迁移失败自动回滚到上一个 DB 版本 + helm rollback 联动
 
 ### API 版本协同
 - [ ] `kp compat check` — 检测服务间 API 不兼容变更（基于 swagger/openapi diff）
+  （引入 oasdiff 工具，同步加入 `kp doctor` 检查项和 `tools.mk` install target）
 - [ ] `components.yaml` 支持 `api_version` 字段，声明服务对外 API 版本
 - [ ] 部署时检查依赖服务的 API 版本是否满足当前服务要求，不满足则警告
 
@@ -47,7 +63,10 @@
 ### etcd 集群状态
 - [ ] etcd 从单节点 Deployment 升级到 3 节点集群的迁移 SOP
 - [ ] etcd 数据健康检查（碎片整理、压缩、告警阈值）
-- [ ] `kp doctor` 加 etcd 健康项：`etcdctl endpoint health` + 磁盘使用率
+- [ ] `kp doctor` 加 etcd 健康项：
+  - `etcdctl endpoint health` 连通性
+  - `raftAppliedIndex` vs `raftIndex` 差值监控（差值过大预示脑裂风险）
+  - 磁盘使用率告警
 
 ---
 
@@ -93,19 +112,6 @@
 
 ---
 
-## 🟡 v1.2.0（剩余）
-
-- [ ] cosign 镜像签名校验（`--sign` flag，默认关闭）
-- [ ] SBOM 物料清单自动生成
-
-## 🟡 v1.1.0（剩余）
-
-- [ ] `REGISTRY_PREFIX` 支持阿里云 ACR 格式
-- [ ] 统一进度输出带颜色
-- [ ] 灰度发布支持
-
----
-
 ## 🟢 v2.0.0 — 企业级扩展插件
 
 > 不内置，做插件，控制核心工具复杂度
@@ -121,7 +127,11 @@
 ## 🟢 P2 — 长期愿景
 
 - [ ] 服务级 FSM（v2.0，目前是项目级）
-- [ ] `kp ai-plan` 接入私有化 LLM
+- [ ] `kp ai-plan` 规则专家系统优先于大模型
+  - 第一阶段：静态分析规则（扫 Dockerfile/go.mod/main.go，确定性输出）
+  - 发现 postgres 依赖 → 自动声明 statefulset；发现 etcd client → 自动添加 etcd 组件
+  - 第二阶段：大模型作为"建议层"，在规则结果基础上补充说明，不直接写配置
+  - 确定性（Deterministic）永远比概率（Probabilistic）更重要，尤其在基础设施层
 - [ ] Web UI：部署状态可视化大盘
 - [ ] Terraform provider：用 IaC 管理 KubePivot 项目配置
 
