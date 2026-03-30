@@ -16,7 +16,6 @@ func runRelease(args []string) {
 	flags := flag.NewFlagSet("release", flag.ExitOnError)
 	version := flags.String("version", "", "版本号，格式：v{major}.{minor}.{patch}，例如 v1.2.3")
 	deploy := flags.Bool("deploy", false, "打完 tag 后自动触发 dtk deploy")
-	push := flags.Bool("push", true, "是否推送 commit 和 tag 到远端")
 
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "解析参数失败:", err)
@@ -80,17 +79,16 @@ func runRelease(args []string) {
 	fmt.Printf("✅ 已打 tag：%s\n", *version)
 
 	// 6. git push
-	if *push {
-		if err := runInProject(root, "git", "push"); err != nil {
-			fmt.Fprintln(os.Stderr, "git push 失败:", err)
-			os.Exit(1)
-		}
-		if err := runInProject(root, "git", "push", "--tags"); err != nil {
-			fmt.Fprintln(os.Stderr, "git push --tags 失败:", err)
-			os.Exit(1)
-		}
-		fmt.Println("✅ 已推送 commit 和 tag 到远端")
+
+	if err := runInProject(root, "git", "push"); err != nil {
+		fmt.Fprintln(os.Stderr, "git push 失败:", err)
+		os.Exit(1)
 	}
+	if err := runInProject(root, "git", "push", "--tags"); err != nil {
+		fmt.Fprintln(os.Stderr, "git push --tags 失败:", err)
+		os.Exit(1)
+	}
+	fmt.Println("✅ 已推送 commit 和 tag 到远端")
 
 	fmt.Printf("\n🎉 发布完成：%s\n", *version)
 
