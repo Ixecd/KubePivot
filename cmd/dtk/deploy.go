@@ -165,7 +165,15 @@ func runResume(args []string) {
 			os.Exit(1)
 		}
 		P.Info("🔄", "服务不存在，从头重新部署")
-		executeDeploy(sm, cfg, env, plan, root)
+		// 先强制重置状态为 IDLE，再重新部署
+		if err := sm.ForceState(state.StateIdle, "resume: 服务不存在，重置状态"); err != nil {
+			fmt.Fprintln(os.Stderr, "重置状态失败:", err)
+			os.Exit(1)
+		}
+		if err := executeDeploy(sm, cfg, env, plan, root); err != nil {
+			fmt.Fprintln(os.Stderr, "重新部署失败:", err)
+			os.Exit(1)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "无法自动恢复状态 %s，请手动处理\n", actual)
 		os.Exit(1)
