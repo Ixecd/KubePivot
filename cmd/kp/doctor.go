@@ -210,16 +210,16 @@ func checkRegistryPrefix(root string) checkResult {
 
 func printResult(r checkResult) {
 	if r.ok {
-		fmt.Printf("  ✓ %-16s %s\n", r.name, r.detail)
+		fmt.Printf("  %s %-16s %s\n", colorize(colorGreen, "✓"), r.name, r.detail)
 		return
 	}
-	symbol := "⚠"
+	symbol := colorize(colorYellow, "⚠")
 	if r.isError {
-		symbol = "✗"
+		symbol = colorize(colorRed, "✗")
 	}
 	fmt.Printf("  %s %-16s %s\n", symbol, r.name, r.detail)
 	if r.fix != "" {
-		fmt.Printf("    %s%s\n", strings.Repeat(" ", 18), r.fix)
+		fmt.Printf("    %s%s\n", strings.Repeat(" ", 18), colorize(colorYellow, r.fix))
 	}
 }
 
