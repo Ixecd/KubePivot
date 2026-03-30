@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"strings"
 
 	"github.com/Ixecd/dev-toolkit/internal/state"
 )
@@ -61,14 +62,89 @@ func (r *Reconciler) healRecreate(res Resource) error {
 
 	slog.Info("执行 helm rollback", "release", releaseName, "from", latest, "to", target)
 	if err := r.helm.Rollback(releaseName, res.Namespace, target); err != nil {
-		slog.Error("rollback 执行失败", "err", err)
-		return fmt.Errorf("自愈失败: %w", err)
+		// SSA 冲突：清除 managedFields 后重试一次
+		if isSSAConflict(err.Error()) {
+			slog.Warn("检测到 SSA 冲突，清除 managedFields 后重试", "release", releaseName)
+			if clearErr := clearNamespaceManagedFields(res.Namespace); clearErr != nil {
+				slog.Error("清除 managedFields 失败", "err", clearErr)
+				return fmt.Errorf("SSA 修复失败: %w", clearErr)
+			}
+			if retryErr := r.helm.Rollback(releaseName, res.Namespace, target); retryErr != nil {
+				slog.Error("SSA 修复后重试 rollback 失败", "err", retryErr)
+				return fmt.Errorf("自愈失败: %w", retryErr)
+			}
+		} else {
+			slog.Error("rollback 执行失败", "err", err)
+			return fmt.Errorf("自愈失败: %w", err)
+		}
 	}
+
+	slog.Info("自愈成功", "release", releaseName)
 
 	// 只有不在 RUNNING 时才需要同步
 	if r.sm.State() != state.StateRunning {
 		if err := r.sm.Transition(state.StateRunning, "controller: rollback 自愈成功"); err != nil {
 			slog.Error("状态机同步失败", "err", err)
+		}
+	}
+	return nil
+}
+
+// isSSAConflict 检测是否是 SSA managedFields 冲突
+func isSSAConflict(errMsg string) bool {
+	keywords := []string{
+		"Apply failed",
+		"conflict:",
+		"another manager",
+		"field manager",
+		"UPGRADE FAILED: rendered manifests contain a new resource",
+	}
+	for _, kw := range keywords {
+		if strings.Contains(errMsg, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// clearNamespaceManagedFields 清除 namespace 下所有 helm 管理资源的 managedFields
+func clearNamespaceManagedFields(namespace string) error {
+	kinds := []string{
+		"deployment", "statefulset", "service",
+		"configmap", "serviceaccount",
+		"role", "rolebinding", "ingress",
+	}
+	for _, kind := range kinds {
+		if err := clearManagedFieldsByKind(namespace, kind); err != nil {
+			slog.Warn("清除 managedFields 失败，跳过", "kind", kind, "err", err)
+		}
+	}
+	return nil
+}
+
+// clearManagedFieldsByKind 清除某种资源类型下所有资源的 managedFields
+func clearManagedFieldsByKind(namespace, kind string) error {
+	out, err := exec.Command("kubectl", "get", kind,
+		"--namespace", namespace,
+		"--no-headers",
+		"-o", "custom-columns=NAME:.metadata.name",
+	).Output()
+	if err != nil {
+		return nil // 该类型不存在，跳过
+	}
+
+	names := strings.Fields(strings.TrimSpace(string(out)))
+	for _, name := range names {
+		args := []string{
+			"patch", kind, name,
+			"--namespace", namespace,
+			"--type=merge",
+			"--patch", `{"metadata":{"managedFields":null}}`,
+		}
+		if out, err := exec.Command("kubectl", args...).CombinedOutput(); err != nil {
+			slog.Warn("清除 managedFields 失败", "kind", kind, "name", name, "err", string(out))
+		} else {
+			slog.Info("已清除 managedFields", "kind", kind, "name", name)
 		}
 	}
 	return nil
