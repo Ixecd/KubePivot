@@ -53,6 +53,6 @@ jobs:
       - name: Docker build
         run: |
           docker build \
-            -f build/docker/dtk/Dockerfile \
-            -t dtk:ci \
+            -f build/docker/kp/Dockerfile \
+            -t kp:ci \
             .
