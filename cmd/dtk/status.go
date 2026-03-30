@@ -10,6 +10,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/Ixecd/dev-toolkit/internal/planner"
 	"github.com/Ixecd/dev-toolkit/internal/state"
 )
 
@@ -70,9 +71,16 @@ func runStatus(args []string) {
 	printPodStatus(cfg)
 	fmt.Println()
 
-	// ── Helm Release 信息 ─────────────────────────────────────
+	// ── Helm Release 信息 ─────────────────────────────────────────
 	fmt.Println("Helm:")
-	printHelmStatus(cfg, projectName)
+	componentsPath := filepath.Join(root, "configs", "components.yaml")
+	components, err := planner.LoadComponents(componentsPath)
+	if err != nil || len(components) == 0 {
+		// 降级：单 release 模式
+		printHelmStatus(cfg, projectName)
+	} else {
+		printHelmStatusMulti(cfg, projectName, components)
+	}
 
 	// ── 历史记录（--history）─────────────────────────────────
 	if *showHistory {
@@ -208,4 +216,66 @@ func printHistory(record *state.DeployRecord) {
 	w.Flush()
 
 	_ = time.Now() // 保留 time import
+}
+
+func printHelmStatusMulti(cfg *deployConfig, projectName string, components []planner.Component) {
+	w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+	fmt.Fprintf(w, "  %-40s\t%-10s\t%-12s\t%s\n", "Release", "Revision", "Status", "Updated")
+	fmt.Fprintf(w, "  %-40s\t%-10s\t%-12s\t%s\n",
+		strings.Repeat("-", 40), strings.Repeat("-", 8),
+		strings.Repeat("-", 12), strings.Repeat("-", 19))
+
+	for _, c := range components {
+		releaseName := projectName + "-" + c.Name
+		info := helmReleaseInfo(cfg, releaseName)
+		fmt.Fprintf(w, "  %-40s\t%-10s\t%-12s\t%s\n",
+			releaseName, info.revision, info.status, info.updated)
+	}
+	w.Flush()
+}
+
+type releaseInfo struct {
+	revision string
+	status   string
+	updated  string
+}
+
+func helmReleaseInfo(cfg *deployConfig, releaseName string) releaseInfo {
+	helmArgs := []string{"helm", "status", releaseName,
+		"--namespace", cfg.namespace,
+		"--output", "json",
+	}
+	if cfg.kubeconfig != "" {
+		helmArgs = append(helmArgs, "--kubeconfig", cfg.kubeconfig)
+	}
+	if cfg.context != "" {
+		helmArgs = append(helmArgs, "--kube-context", cfg.context)
+	}
+
+	out, err := runOutput(helmArgs...)
+	if err != nil {
+		return releaseInfo{revision: "-", status: "not found", updated: "-"}
+	}
+
+	var result struct {
+		Info struct {
+			Status       string `json:"status"`
+			LastDeployed string `json:"last_deployed"`
+		} `json:"info"`
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return releaseInfo{revision: "-", status: "parse error", updated: "-"}
+	}
+
+	updated := result.Info.LastDeployed
+	if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
+		updated = t.Local().Format("2006-01-02 15:04:05")
+	}
+
+	return releaseInfo{
+		revision: fmt.Sprintf("%d", result.Version),
+		status:   result.Info.Status,
+		updated:  updated,
+	}
 }
