@@ -1,18 +1,13 @@
 # TODO — dev-toolkit 路线图
 
 > 从"自用脚手架"走向"真正可推广的 Go 云原生工具"。
-> 按优先级排列，持续更新。当前：v1.0.0
+> 按优先级排列，持续更新。当前：v1.1.0（进行中）
 
 ---
 
-## 🟡 v1.1.0
+## 🟡 v1.1.0（剩余）
 
-- [ ] `dtk status` 展示每个 helm release 独立状态和 revision
-- [ ] `dtk rollback` 打印每步拓扑逆序进度
-- [ ] controller SSA 冲突处理（CLI 层已处理，controller 层待补）
-- [ ] 构建 `dev-toolkit-controller` 镜像并推送，验证 controller 自愈 e2e
 - [ ] `REGISTRY_PREFIX` 支持阿里云 ACR 格式
-- [ ] `dtk init --dry-run`
 - [ ] 统一进度输出带颜色（终端支持时）
 - [ ] 灰度发布支持（豆包建议）
 
@@ -28,6 +23,18 @@
 ---
 
 ## ✅ 已完成
+
+### v1.1.0（进行中）
+
+- [x] 构建 `dev-toolkit-controller` 镜像（`qingchun22/dev-toolkit-controller:v1.0.0`）并推送
+- [x] web3-blitz controller chart 迁移到独立 chart（`web3-blitz-controller/`）
+- [x] controller 自愈 e2e 验证（web3-blitz，wallet-service 删除后 ~13s 恢复）
+- [x] controller SSA 冲突处理（检测冲突 → 清除 managedFields → 重试 rollback）
+- [x] `dtk status` 展示每个 helm release 独立状态和 revision
+- [x] `dtk rollback` 按拓扑逆序逐层并行打印进度
+- [x] `dtk init --dry-run` 打印目录结构，不执行文件写入
+- [x] gotchas.md 补充 controller 章节（on-missing 格式、nil pointer、release 命名）
+- [x] 修复 controller 三个 bug（RealHelmClient 未注入、release 命名错误、策略字段不匹配）
 
 ### v1.0.0 封神 🏆
 
@@ -76,4 +83,4 @@
 ---
 
 > v1.0.0 已封神 🏆
-> v1.1.0 重点：controller 自愈 e2e 验证 + dtk status 多 release 展示
+> v1.1.0 主体完成，剩余：ACR 格式 / 颜色输出 / 灰度发布
