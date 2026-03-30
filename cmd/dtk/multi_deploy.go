@@ -14,6 +14,9 @@ import (
 // 同层并行，层间串行
 // 失败时：重试 3 次 → 级联 rollback → 整组 rollback → dtk down
 func deployLayers(sm *state.Machine, cfg *deployConfig, env map[string]string, layers []planner.Layer, root string) error {
+	// secret 存在性检查（只警告，不阻断）
+	checkRequiredSecrets(cfg, root)
+
 	projectName := envOrDefault(env, "PROJECT_NAME", filepath.Base(root))
 	version := envOrDefault(env, "VERSION", "v0.1.0")
 
