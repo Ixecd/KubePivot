@@ -28,6 +28,8 @@ func runMigrate(args []string) {
 		runMigrateStatus(args[1:])
 	case "plan":
 		runMigratePlan(args[1:])
+	case "run":
+		runMigrateRun(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "未知子命令: %s\n", args[0])
 		os.Exit(1)
