@@ -73,6 +73,8 @@ func main() {
 		runRelease(os.Args[2:])
 	case "scan":
 		runScan(os.Args[2:])
+	case "promote":
+		runPromote(os.Args[2:])
 	case "controller":
 		if len(os.Args) > 2 && os.Args[2] == "start" {
 			controller.Start()
@@ -142,8 +144,9 @@ func printUsage() {
   kp down     [--namespace] [--context] [--kubeconfig]   彻底下线服务
   kp resume   [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
   kp rollback [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
-  kp release  --version <v1.2.3> [--deploy] [--no-push]
+  kp release  --version <v1.2.3> [--deploy] [--no-push] 
   kp scan     [--severity CRITICAL,HIGH] [--image img:tag]   扫描镜像 CVE
+  kp promote  [--service <name>] [--namespace <ns>]   切换蓝绿流量到新版本
   kp controller start   （在 controller pod 内部运行，启动 Reconciliation Loop）
 
 示例:

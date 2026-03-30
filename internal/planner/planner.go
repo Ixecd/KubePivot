@@ -18,6 +18,7 @@ type Component struct {
 	Memory    string
 	Storage   string
 	DependsOn []string // 依赖的服务名列表
+	Strategy  string   // rolling（默认）/ blue-green / canary
 }
 
 // Plan 单个组件的部署计划
@@ -31,6 +32,7 @@ type Plan struct {
 	Image     string
 	Port      int
 	DependsOn []string
+	Strategy  string
 }
 
 // Layer 拓扑排序后的一层（同层可并行部署）
@@ -48,6 +50,7 @@ type yamlComponents struct {
 		Memory    string   `yaml:"memory"`
 		Storage   string   `yaml:"storage"`
 		DependsOn []string `yaml:"depends_on"`
+		Strategy  string   `yaml:"strategy"`
 	} `yaml:"components"`
 }
 
@@ -78,6 +81,7 @@ func LoadComponents(path string) ([]Component, error) {
 			Memory:    c.Memory,
 			Storage:   c.Storage,
 			DependsOn: c.DependsOn,
+			Strategy:  c.Strategy,
 		})
 	}
 	return components, nil
@@ -141,6 +145,7 @@ func BuildLayers(path string) ([]Layer, error) {
 			Image:     c.Image,
 			Port:      c.Port,
 			DependsOn: c.DependsOn,
+			Strategy:  c.Strategy,
 		}
 	}
 

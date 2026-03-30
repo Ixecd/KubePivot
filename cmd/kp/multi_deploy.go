@@ -154,6 +154,17 @@ func deployService(cfg *deployConfig, env map[string]string, plan planner.Plan, 
 		return fmt.Errorf("chart 目录不存在：%s\n请运行 kp init 重新生成项目结构，或手动创建 %s", chartPath, chartPath)
 	}
 
+	// ── 蓝绿发布分支 ──────────────────────────────────────────────────────────
+	if plan.Strategy == "blue-green" {
+		return deployBlueGreen(cfg, env, plan, root, projectName, version, chartPath)
+	}
+
+	// ── canary 提示（用户自实现） ─────────────────────────────────────────────
+	if plan.Strategy == "canary" {
+		P.Info("⚠️ ", fmt.Sprintf("%s 使用 canary 策略，请参考 docs/design/canary.md 自定义实现", plan.Name))
+		P.Info("💡", "KubePivot 提供 scripts/canary-hook.sh 接入点，继续走 rolling 部署")
+	}
+
 	// ── build + push 只做一次 ─────────────────────────────────────────────────
 	if plan.Image != "" {
 		makeEnv := buildMakeEnvForService(env, cfg, plan)
