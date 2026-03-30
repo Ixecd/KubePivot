@@ -59,6 +59,8 @@ func main() {
 		runAIPlan(os.Args[2:])
 	case "doctor":
 		runDoctor(os.Args[2:])
+	case "upgrade":
+		runUpgrade(os.Args[2:])
 	case "history":
 		runHistory(os.Args[2:])
 	case "diff":
@@ -142,6 +144,7 @@ func printUsage() {
   kp ai-plan  [--suggest-only] [--desc "描述"]   AI 扫描仓库，自动规划组件配置
   kp doctor   检查环境依赖
   kp deploy   [--components <path>] [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>] [--dry-run]
+  kp upgrade  [--target v1.4.0] [--service <name>] [--dry-run] [--force]  跨版本全链路升级
   kp status   [--namespace] [--context] [--kubeconfig] [--history]  查看部署状态
   kp history  [-n 20] [--namespace] [--context]   查看部署历史
   kp diff     [--from N] [--to M] [--namespace] [--context]   对比两个版本的配置差异
