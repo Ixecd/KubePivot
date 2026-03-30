@@ -23,7 +23,6 @@ func runDoctor(_ []string) {
 	fmt.Println()
 
 	var results []checkResult
-
 	results = append(results, checkGo())
 	results = append(results, checkDocker())
 	results = append(results, checkKubectl())
@@ -40,7 +39,6 @@ func runDoctor(_ []string) {
 	for _, r := range results[:min(5, len(results))] {
 		printResult(r)
 	}
-
 	if len(results) > 5 {
 		fmt.Println("\n项目配置：")
 		for _, r := range results[5:] {
@@ -48,6 +46,22 @@ func runDoctor(_ []string) {
 		}
 	}
 
+	// 安全检查（在项目根目录下才跑）—— 必须在统计之前
+	if err == nil {
+		secResults := []checkResult{
+			checkPlaintextSecrets(root),
+			checkPodSecurityContext(root),
+			checkRBACWildcard(root),
+			checkNetworkPolicy(root),
+		}
+		fmt.Println("\n安全检查：")
+		for _, r := range secResults {
+			printResult(r)
+		}
+		results = append(results, secResults...)
+	}
+
+	// 统计
 	var errors, warns int
 	for _, r := range results {
 		if !r.ok {
@@ -73,7 +87,6 @@ func runDoctor(_ []string) {
 		parts = append(parts, fmt.Sprintf("%d 个警告", warns))
 	}
 	fmt.Println(strings.Join(parts, "，"))
-
 	if errors > 0 {
 		os.Exit(1)
 	}
