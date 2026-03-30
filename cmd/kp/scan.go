@@ -75,7 +75,7 @@ func runScan(args []string) {
 			if c.Image == "" {
 				continue
 			}
-			images = append(images, fmt.Sprintf("%s/%s-%s:%s", registryPrefix, c.Image, arch, version))
+			images = append(images, buildImageName(registryPrefix, c.Image, arch, version))
 		}
 	}
 

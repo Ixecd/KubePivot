@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/Ixecd/kubepivot/internal/planner"
@@ -176,7 +177,7 @@ func deployService(cfg *deployConfig, env map[string]string, plan planner.Plan, 
 		if cfg.sign {
 			registryPrefix := envOrDefault(env, "REGISTRY_PREFIX", "")
 			arch := envOrDefault(env, "ARCH", "amd64")
-			fullImage := fmt.Sprintf("%s/%s-%s:%s", registryPrefix, plan.Image, arch, version)
+			fullImage := buildImageName(registryPrefix, plan.Image, arch, version)
 			signImage(fullImage)
 		}
 	}
@@ -250,7 +251,7 @@ func buildHelmArgs(cfg *deployConfig, release, chartPath string, env map[string]
 	}
 	if plan.Image != "" {
 		args = append(args,
-			"--set", fmt.Sprintf("image.repository=%s/%s-%s", registryPrefix, plan.Image, arch),
+			"--set", fmt.Sprintf("image.repository=%s", imageRepo(registryPrefix, plan.Image, arch)),
 			"--set", fmt.Sprintf("image.tag=%s", version),
 			"--set", fmt.Sprintf("replicaCount=%d", plan.Replicas),
 			"--set", fmt.Sprintf("service.port=%d", plan.Port),
@@ -310,4 +311,21 @@ func collectAffected(failed []string, layers []planner.Layer) []string {
 		}
 	}
 	return result
+}
+
+// buildImageName 根据 registry 类型构建镜像名
+// ACR 格式：registry.cn-*.aliyuncs.com/ns/image:tag（不拼 arch）
+// 其他格式：prefix/image-arch:tag
+func buildImageName(registryPrefix, image, arch, version string) string {
+	if strings.Contains(registryPrefix, ".aliyuncs.com") {
+		return fmt.Sprintf("%s/%s:%s", registryPrefix, image, version)
+	}
+	return fmt.Sprintf("%s/%s-%s:%s", registryPrefix, image, arch, version)
+}
+
+func imageRepo(registryPrefix, image, arch string) string {
+	if strings.Contains(registryPrefix, ".aliyuncs.com") {
+		return fmt.Sprintf("%s/%s", registryPrefix, image)
+	}
+	return fmt.Sprintf("%s/%s-%s", registryPrefix, image, arch)
 }
