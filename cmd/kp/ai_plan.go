@@ -33,8 +33,8 @@ func runAIPlan(args []string) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "初始化 LLM 客户端失败:", err)
 		fmt.Fprintln(os.Stderr, "\n配置方式：")
-		fmt.Fprintln(os.Stderr, "  export DTK_LLM_API_KEY=your-api-key")
-		fmt.Fprintln(os.Stderr, "  export DTK_LLM_PROVIDER=grok  # grok / claude / openai / doubao")
+		fmt.Fprintln(os.Stderr, "  export KP_LLM_API_KEY=your-api-key")
+		fmt.Fprintln(os.Stderr, "  export KP_LLM_PROVIDER=grok  # grok / claude / openai / doubao")
 		os.Exit(1)
 	}
 

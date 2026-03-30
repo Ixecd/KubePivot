@@ -16,12 +16,12 @@
 
 | Provider | 环境变量 | 默认模型 |
 |----------|---------|---------|
-| Grok（xAI） | `DTK_LLM_PROVIDER=grok` | `grok-3` |
-| Claude | `DTK_LLM_PROVIDER=claude` | `claude-sonnet-4-20250514` |
-| OpenAI | `DTK_LLM_PROVIDER=openai` | `gpt-4o` |
-| 豆包 | `DTK_LLM_PROVIDER=doubao` | `doubao-pro-32k` |
+| Grok（xAI） | `KP_LLM_PROVIDER=grok` | `grok-3` |
+| Claude | `KP_LLM_PROVIDER=claude` | `claude-sonnet-4-20250514` |
+| OpenAI | `KP_LLM_PROVIDER=openai` | `gpt-4o` |
+| 豆包 | `KP_LLM_PROVIDER=doubao` | `doubao-pro-32k` |
 
-支持 `DTK_LLM_ENDPOINT` 覆盖 API 地址，私有化部署直接接入。
+支持 `KP_LLM_ENDPOINT` 覆盖 API 地址，私有化部署直接接入。
 
 **扫描内容**：目录结构（depth 3）、go.mod、cmd/ 服务 main.go（前 50 行）、Dockerfile、README、用户补充描述（`--desc`）
 
