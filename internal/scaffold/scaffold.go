@@ -124,6 +124,9 @@ func InitProject(opts InitOptions) (err error) {
 	if err := writeTestScript(filepath.Join(outputDir, "scripts", "test_api.sh"), name); err != nil {
 		return err
 	}
+	if err := writeSecretScript(outputDir, name); err != nil {
+		return err
+	}
 	if err := writeInternalSkeleton(outputDir, name, module); err != nil {
 		return err
 	}
@@ -676,6 +679,8 @@ func printDryRun(opts InitOptions) {
 		"├── monitoring/",
 		"├── build/docker/" + n + "/",
 		"├── test/",
+		"├── scripts/",
+		"│   └── create-secret.sh",
 		"├── handoff/",
 		"└── snapshots/",
 	}
