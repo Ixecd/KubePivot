@@ -1,11 +1,13 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -17,6 +19,8 @@ func runDiff(args []string) {
 	kubeconfig := flags.String("kubeconfig", "", "kubeconfig 文件路径")
 	from := flags.Int("from", 0, "起始 revision（默认 latest-1）")
 	to := flags.Int("to", 0, "目标 revision（默认 latest）")
+	migrate := flags.Bool("migrate", false, "同时分析迁移建议（需要 DATABASE_URL）")
+	service := flags.String("service", "", "指定服务名（多服务模式下必填）")
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "解析参数失败:", err)
 		os.Exit(1)
@@ -37,6 +41,10 @@ func runDiff(args []string) {
 	}
 	resolveDeployConfig(cfg, env, root)
 	releaseName := envOrDefault(env, "PROJECT_NAME", filepath.Base(root))
+
+	if *service != "" {
+		releaseName = releaseName + "-" + *service
+	}
 
 	// 查 helm history 确定 revision 范围
 	history, err := getHelmHistory(cfg, releaseName)
@@ -81,6 +89,11 @@ func runDiff(args []string) {
 	}
 	for _, d := range diffs {
 		fmt.Println(d)
+	}
+
+	if *migrate {
+		fmt.Println()
+		printMigrateSuggestions(root, env)
 	}
 }
 
@@ -199,4 +212,78 @@ func formatDiffSymbol(symbol string) string {
 		return "  \033[33m~\033[0m"
 	}
 	return "  " + symbol
+}
+
+// printMigrateSuggestions 分析待执行迁移并给出升级建议
+func printMigrateSuggestions(root string, env map[string]string) {
+	fmt.Printf("── 迁移建议 %s\n\n", strings.Repeat("─", 50))
+
+	// 连接 DB
+	dbURL := resolveDatabaseURL(&migrateConfig{}, root, env)
+	if dbURL == "" {
+		P.Info("⏭ ", "未配置 DATABASE_URL，跳过迁移建议")
+		return
+	}
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil || db.Ping() != nil {
+		P.Info("⏭ ", "数据库不可达，跳过迁移建议")
+		return
+	}
+	defer db.Close()
+
+	_, versionStr, err := detectMigrationVersion(db, "auto")
+	if err != nil || versionStr == "" {
+		P.Info("⏭ ", "未检测到迁移表，跳过迁移建议")
+		return
+	}
+	var currentVersion int64
+	clean := strings.TrimSpace(strings.Split(versionStr, " ")[0])
+	fmt.Sscanf(clean, "%d", &currentVersion)
+
+	migDir := findMigrationsDir(root)
+	if migDir == "" {
+		P.Info("⏭ ", "未找到迁移目录，跳过迁移建议")
+		return
+	}
+
+	files, err := scanMigrationFiles(migDir, currentVersion, -1)
+	if err != nil || len(files) == 0 {
+		P.Info("✅", "无待执行迁移")
+		return
+	}
+
+	fmt.Printf("  发现 %d 个待执行迁移（版本 %d 之后）：\n\n", len(files), currentVersion)
+
+	hasDestructive := false
+	for _, f := range files {
+		f.Operations = analyzeSQLFile(f.Path)
+		for _, op := range f.Operations {
+			if op.Risk > f.MaxRisk {
+				f.MaxRisk = op.Risk
+			}
+		}
+		riskStr := colorize(colorGreen, "✅ 安全")
+		if f.MaxRisk == RiskPotential {
+			riskStr = colorize(colorYellow, "⚠️  潜在风险")
+		} else if f.MaxRisk == RiskDestructive {
+			riskStr = colorize(colorRed, "❌ 破坏性")
+			hasDestructive = true
+		}
+		fmt.Printf("  %s  版本 %-6d  %s\n", riskStr, f.Version, filepath.Base(f.Path))
+		for _, op := range f.Operations {
+			if op.Advice != "" {
+				fmt.Printf("    %s %s\n", colorize(colorYellow, "💡"), op.Advice)
+			}
+		}
+	}
+
+	fmt.Println()
+	if hasDestructive {
+		fmt.Printf("%s 包含破坏性迁移，建议先运行 kp migrate plan 确认风险\n",
+			colorize(colorRed, "❌"))
+		fmt.Printf("%s 确认无误后运行 kp migrate run --dry-run 预览，再执行 kp migrate run\n",
+			colorize(colorYellow, "💡"))
+	} else {
+		fmt.Printf("%s 可以安全执行：kp migrate run\n", colorize(colorGreen, "✅"))
+	}
 }
