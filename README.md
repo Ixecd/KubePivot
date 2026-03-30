@@ -69,6 +69,9 @@ kp deploy
 | `kp down` | 彻底下线，删除所有集群资源 |
 | `kp history` | 查看状态转换历史 |
 | `kp diff` | 对比两个 revision 的 helm values |
+| `kp migrate` | 数据库迁移状态检查 + 破坏性变更分析 |
+| `kp compat`  | API 兼容性检测（oasdiff） |
+| `kp promote` | 蓝绿发布流量切换 |
 
 ---
 

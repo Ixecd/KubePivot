@@ -434,3 +434,112 @@ json.dump(d,open(p,'w'),indent=2)
 ```
 
 重置前先确认 K8s 实际状态与设置的值一致。
+
+---
+
+### kp migrate
+
+数据库迁移状态检查与升级计划分析。
+
+```bash
+kp migrate status                                    # 查看当前迁移状态
+kp migrate status --database-url postgres://...      # 显式指定数据库连接
+kp migrate status --migration-tool golang-migrate    # 强制指定迁移工具
+
+kp migrate plan                                      # 分析待执行迁移的风险
+kp migrate plan --target 5                           # 只计划到版本 5
+kp migrate plan --migrations-dir ./db/migrations     # 自定义迁移目录
+kp migrate plan --force                              # 忽略破坏性警告
+kp migrate plan --output-json                        # JSON 输出（CI/CD）
+```
+
+**DATABASE_URL 优先级**：
+
+```
+--database-url flag
+    ↓
+KP_DATABASE_URL 环境变量
+    ↓
+.env 文件里的 DATABASE_URL
+    ↓
+configs/project.env 里的 DATABASE_URL
+```
+
+**迁移工具支持**：
+
+| 工具           | 文件格式                  | 版本表                   |
+| -------------- | ------------------------- | ------------------------ |
+| golang-migrate | `000001_name.up.sql`      | `schema_migrations`      |
+| Atlas          | `20240330120000_name.sql` | `atlas_schema_revisions` |
+| auto（默认）   | 自动探测                  | 自动探测                 |
+
+**风险分级**：
+
+| 操作                      | 风险级别   | 说明                |
+| ------------------------- | ---------- | ------------------- |
+| CREATE TABLE / ADD COLUMN | ✅ 安全     | 向后兼容            |
+| CREATE INDEX              | ✅ 安全     | 建议加 CONCURRENTLY |
+| ALTER COLUMN TYPE（扩容） | ✅ 安全     | int→bigint 等       |
+| ALTER COLUMN SET NOT NULL | ⚠️ 潜在风险 | 存量 NULL 会失败    |
+| ALTER COLUMN TYPE（缩容） | ❌ 破坏性   | 可能丢数据          |
+| DROP COLUMN / DROP TABLE  | ❌ 破坏性   | 不可逆              |
+
+---
+
+### kp compat
+
+API 兼容性检测，基于 [oasdiff](https://github.com/oasdiff/oasdiff)。
+
+**前置依赖**：
+
+```bash
+brew install oasdiff   # macOS
+# 或参考 https://github.com/oasdiff/oasdiff 其他平台安装方式
+```
+
+```bash
+kp compat check --base old/swagger.yaml --revision docs/swagger.yaml
+kp compat check --base v1.yaml --revision v2.yaml --output-json
+```
+
+检测内容：
+
+- endpoint 删除
+- 参数类型变更
+- required 字段新增
+- response schema 变更
+
+> **注意**：oasdiff 对 OpenAPI 3.0 的检测覆盖比 Swagger 2.0 更完整，建议将 API spec 升级到 OpenAPI 3.0 格式。
+
+---
+
+### kp promote
+
+蓝绿发布流量切换。将 Service selector 从当前活跃 slot 切换到新版本 slot。
+
+```bash
+kp promote                           # promote 所有蓝绿服务
+kp promote --service wallet-service  # 只 promote 指定服务
+kp promote --namespace web3-blitz
+```
+
+**蓝绿发布完整流程**：
+
+```bash
+# 1. components.yaml 里声明策略
+#    strategy: blue-green
+
+# 2. 部署新版本到非活跃 slot（不影响线上流量）
+kp deploy
+
+# 3. 验证新版本
+kubectl port-forward deployment/wallet-service-green 2113:2113
+
+# 4. 切换流量
+kp promote
+
+# 5. 回滚（如有问题）
+kp rollback
+```
+
+---

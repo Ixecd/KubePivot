@@ -115,6 +115,36 @@ Helm SSA 会遇到 field manager 冲突。`--force-conflicts` 强制接管这些
 
 ---
 
+### 部署前自动检查
+
+`kp deploy` 在实际部署前会自动执行以下检查，有问题时阻断部署：
+
+| 检查项        | 阻断条件                        | 跳过方式                            |
+| ------------- | ------------------------------- | ----------------------------------- |
+| Secret 存在性 | 缺少 secretKeyRef 引用的 Secret | 先运行 `./scripts/create-secret.sh` |
+| CVE 扫描      | 发现 CRITICAL/HIGH 漏洞         | `--severity LOW` 降低阻断级别       |
+| 迁移兼容性    | 待执行迁移含破坏性变更          | `--force-migrate`（不推荐）         |
+
+### 蓝绿发布
+
+在 `configs/components.yaml` 里声明：
+
+```yaml
+components:
+  - name: wallet-service
+    strategy: blue-green   # rolling（默认）/ blue-green / canary
+    image: wallet-service
+    port: 2113
+```
+
+支持的策略：
+
+- `rolling`（默认）：K8s 原生滚动更新
+- `blue-green`：内置蓝绿，`kp deploy` + `kp promote` 两步完成
+- `canary`：打印提示并调用 `scripts/canary-hook.sh`（用户自实现）
+
+---
+
 ## 部署到国内 / 生产环境
 
 **镜像仓库换阿里云 ACR：**
