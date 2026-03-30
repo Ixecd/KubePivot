@@ -1,7 +1,7 @@
 # 已知坑和注意事项
 
 > 这里记录使用 dtk 和开发过程中踩到的所有坑，遇到问题先查这里。
-> 最后更新：2026-03-28 / v0.8.0
+> 最后更新：2026-03-30 / v1.1.0
 
 ---
 
@@ -559,4 +559,74 @@ v1.0.0 之前的项目 postgres/etcd 都在老的单 chart 里，迁移到多 ch
 ```bash
    helm uninstall {old-release} -n {namespace}
    dtk deploy
+```
+
+---
+
+## 九、Controller
+
+### resources.yaml 字段名和策略值必须用连字符格式
+
+controller 代码解析的字段名是 `on-missing`（连字符），策略值是 `auto-heal`。
+早期文档和示例里写的是 `on_missing`（下划线）和 `recreate`，不匹配会导致策略永远走 default 分支，自愈不触发。
+
+**症状**：
+```
+level=WARN msg="未知 on_missing 策略，跳过" strategy=""
+```
+
+**正确格式**：
+```yaml
+resources:
+  - kind: Deployment
+    name: wallet-service
+    namespace: web3-blitz
+    on-missing: auto-heal    # ← 连字符，不是下划线
+    max_retry: 3
+    fallback: rollback
+
+  - kind: StatefulSet
+    name: postgres
+    namespace: web3-blitz
+    on-missing: alert        # ← 只告警，不自动处理
+    max_retry: 0
+    fallback: ""
+```
+
+支持的策略值：`auto-heal`（触发 helm rollback）、`alert`（只打日志）。
+
+---
+
+### controller panic：RealHelmClient 未注入
+
+**v1.0.0**：`NewReconciler` 初始化时漏掉 `helm: &RealHelmClient{}`，触发自愈时 nil pointer panic：
+```
+panic: runtime error: invalid memory address or nil pointer dereference
+github.com/Ixecd/dev-toolkit/internal/controller.(*Reconciler).healRecreate
+```
+
+**v1.1.0 修复**：`NewReconciler` 补上 `helm: &RealHelmClient{}`。
+
+---
+
+### controller 自愈用的 release 名不对
+
+**v1.0.0**：`healRecreate` 直接用 `PROJECT_NAME` 环境变量作为 release 名，但 v1.0.0 的命名规则是 `{project}-{service}`。
+
+**症状**：
+```
+level=WARN msg="查不到 helm release，无法自愈" release=web3-blitz
+```
+
+**v1.1.0 修复**：release 名改为 `PROJECT_NAME + "-" + res.Name`，如 `web3-blitz-wallet-service`。
+
+---
+
+### ConfigMap 更新后 controller pod 不自动重启
+
+修改 `resources.yaml` 并重新 `dtk deploy` 后，ConfigMap 内容已更新，但 controller pod 仍挂载旧内容（K8s ConfigMap 热更新有延迟，且 controller 启动时一次性读取配置）。
+
+**解法**：手动触发重启：
+```bash
+kubectl rollout restart deployment/dev-toolkit-controller -n <namespace>
 ```
