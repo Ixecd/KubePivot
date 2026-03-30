@@ -34,6 +34,8 @@ func runScan(args []string) {
 	flags := flag.NewFlagSet("scan", flag.ExitOnError)
 	severityFlag := flags.String("severity", "CRITICAL,HIGH", "阻断的严重级别，逗号分隔（CRITICAL/HIGH/MEDIUM/LOW）")
 	imageFlag := flags.String("image", "", "指定单个镜像扫描，留空则扫描所有服务镜像")
+	sbom := flags.Bool("sbom", false, "生成 SBOM 物料清单（CycloneDX 格式）")
+
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "解析参数失败:", err)
 		os.Exit(1)
@@ -97,6 +99,16 @@ func runScan(args []string) {
 		P.Fail(fmt.Sprintf("发现高危漏洞（%s），部署已阻断", *severityFlag))
 		os.Exit(1)
 	}
+
+	// SBOM 生成
+	if *sbom {
+		fmt.Println()
+		P.Info("📋", "生成 SBOM 物料清单（CycloneDX）")
+		for _, image := range images {
+			generateSBOM(image)
+		}
+	}
+
 	P.Info("✅", "镜像扫描通过，未发现阻断级别漏洞")
 }
 
@@ -111,7 +123,7 @@ func scanImage(image string, blockSeverities map[string]bool) bool {
 	)
 	if err != nil {
 		P.Info("⏭ ", fmt.Sprintf("跳过 %s（镜像不存在或扫描失败）", image))
-		return false  // 不阻断，但也不算通过
+		return false // 不阻断，但也不算通过
 	}
 
 	var report TrivyReport
@@ -162,4 +174,24 @@ func parseSeverities(s string) map[string]bool {
 		result[strings.TrimSpace(strings.ToUpper(sev))] = true
 	}
 	return result
+}
+
+// generateSBOM 生成 CycloneDX 格式的 SBOM 物料清单
+func generateSBOM(image string) {
+	// 文件名：镜像名里的 / 和 : 替换成 -
+	safe := strings.NewReplacer("/", "-", ":", "-").Replace(image)
+	outFile := fmt.Sprintf("sbom-%s.json", safe)
+
+	P.Start("📋", fmt.Sprintf("生成 %s 的 SBOM", image))
+	_, err := runOutput("trivy", "image",
+		"--format", "cyclonedx",
+		"--output", outFile,
+		"--quiet",
+		image,
+	)
+	if err != nil {
+		P.Fail(fmt.Sprintf("SBOM 生成失败: %v", err))
+		return
+	}
+	P.Done(fmt.Sprintf("已输出到 %s", outFile))
 }
