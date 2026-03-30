@@ -82,6 +82,9 @@ build:
 install:
 	@echo "===========> Installing kp"
 	@$(GO) install ./cmd/kp
+	@ln -sf $(shell go env GOPATH)/bin/kp $(shell go env GOPATH)/bin/kpivot
+	@ln -sf $(shell go env GOPATH)/bin/kp $(shell go env GOPATH)/bin/kubepivot
+	@$(GO) install ./cmd/kp
 
 ## build.multiarch: Build source code for multiple platforms.
 .PHONY: build.multiarch
