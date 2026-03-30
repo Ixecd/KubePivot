@@ -493,7 +493,13 @@ func writeComponentsConfig(path, name string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	content := fmt.Sprintf("components:\n  - name: %s\n    port: 8080\n    image: %s\n", name, name)
+	content := fmt.Sprintf(`components:
+  - name: %s
+    port: 8080
+    image: %s
+    # strategy: rolling       # rolling（默认）/ blue-green / canary
+    # api_version: v1         # 对外 API 版本，用于 kp compat 依赖检查
+`, name, name)
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 

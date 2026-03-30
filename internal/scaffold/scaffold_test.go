@@ -206,10 +206,10 @@ func TestRenderHandoff_WithFrontend(t *testing.T) {
 func TestRenderHandoff_ContainsCommands(t *testing.T) {
 	result := renderHandoff("myapp", "github.com/me/myapp", false)
 
-	assert.Contains(t, result, "dtk deploy")
-	assert.Contains(t, result, "dtk resume")
-	assert.Contains(t, result, "dtk rollback")
-	assert.Contains(t, result, "dtk release")
+	assert.Contains(t, result, "kp deploy")
+	assert.Contains(t, result, "kp resume")
+	assert.Contains(t, result, "kp rollback")
+	assert.Contains(t, result, "kp release")
 }
 
 func TestRenderHandoff_ContainsDirTree(t *testing.T) {

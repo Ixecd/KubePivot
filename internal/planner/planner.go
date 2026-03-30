@@ -9,30 +9,32 @@ import (
 
 // Component 组件定义
 type Component struct {
-	Name      string
-	Type      string   // deployment（默认）/ statefulset
-	Image     string
-	Port      int
-	Replicas  int
-	CPU       string
-	Memory    string
-	Storage   string
-	DependsOn []string // 依赖的服务名列表
-	Strategy  string   // rolling（默认）/ blue-green / canary
+	Name       string
+	Type       string   // deployment（默认）/ statefulset
+	Image      string
+	Port       int
+	Replicas   int
+	CPU        string
+	Memory     string
+	Storage    string
+	DependsOn  []string // 依赖的服务名列表
+	Strategy   string   // rolling（默认）/ blue-green / canary
+	APIVersion string   // 服务对外 API 版本，用于 kp compat 依赖检查
 }
 
 // Plan 单个组件的部署计划
 type Plan struct {
-	Name      string
-	Type      string
-	Replicas  int
-	CPU       string
-	Memory    string
-	Storage   string
-	Image     string
-	Port      int
-	DependsOn []string
-	Strategy  string
+	Name       string
+	Type       string
+	Replicas   int
+	CPU        string
+	Memory     string
+	Storage    string
+	Image      string
+	Port       int
+	DependsOn  []string
+	Strategy   string
+	APIVersion string
 }
 
 // Layer 拓扑排序后的一层（同层可并行部署）
@@ -41,16 +43,17 @@ type Layer []Plan
 // yamlComponents 对应 components.yaml 的结构
 type yamlComponents struct {
 	Components []struct {
-		Name      string   `yaml:"name"`
-		Type      string   `yaml:"type"`
-		Image     string   `yaml:"image"`
-		Port      int      `yaml:"port"`
-		Replicas  int      `yaml:"replicas"`
-		CPU       string   `yaml:"cpu"`
-		Memory    string   `yaml:"memory"`
-		Storage   string   `yaml:"storage"`
-		DependsOn []string `yaml:"depends_on"`
-		Strategy  string   `yaml:"strategy"`
+		Name       string   `yaml:"name"`
+		Type       string   `yaml:"type"`
+		Image      string   `yaml:"image"`
+		Port       int      `yaml:"port"`
+		Replicas   int      `yaml:"replicas"`
+		CPU        string   `yaml:"cpu"`
+		Memory     string   `yaml:"memory"`
+		Storage    string   `yaml:"storage"`
+		DependsOn  []string `yaml:"depends_on"`
+		Strategy   string   `yaml:"strategy"`
+		APIVersion string `yaml:"api_version"`
 	} `yaml:"components"`
 }
 
@@ -136,16 +139,17 @@ func BuildLayers(path string) ([]Layer, error) {
 	for _, c := range components {
 		cpu, memory, storage := EstimateResources(c)
 		planMap[c.Name] = Plan{
-			Name:      c.Name,
-			Type:      c.Type,
-			Replicas:  EstimateReplicas(c),
-			CPU:       cpu,
-			Memory:    memory,
-			Storage:   storage,
-			Image:     c.Image,
-			Port:      c.Port,
-			DependsOn: c.DependsOn,
-			Strategy:  c.Strategy,
+			Name:       c.Name,
+			Type:       c.Type,
+			Replicas:   EstimateReplicas(c),
+			CPU:        cpu,
+			Memory:     memory,
+			Storage:    storage,
+			Image:      c.Image,
+			Port:       c.Port,
+			DependsOn:  c.DependsOn,
+			Strategy:   c.Strategy,
+			APIVersion: c.APIVersion,
 		}
 	}
 

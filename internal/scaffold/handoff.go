@@ -112,7 +112,7 @@ func buildDirTree(name string, withFrontend bool) string {
 	b.WriteString("├── internal/                # 业务逻辑（按模块拆分）\n")
 	b.WriteString("├── configs/\n")
 	b.WriteString("│   ├── project.env          # 项目配置（VERSION、KUBE_*、ETCD_ENDPOINTS 等）\n")
-	b.WriteString("│   ├── components.yaml      # dtk 部署组件声明\n")
+	b.WriteString("│   ├── components.yaml      # kp 部署组件声明\n")
 	b.WriteString("│   └── resources.yaml       # controller 监控的 K8s 资源列表\n")
 	b.WriteString("├── deployments/\n")
 	b.WriteString("│   └── " + name + "/        # 自包含 Helm chart\n")
@@ -137,11 +137,11 @@ func buildDirTree(name string, withFrontend bool) string {
 func buildCommands(name string, withFrontend bool) string {
 	var b strings.Builder
 	b.WriteString("```\n")
-	b.WriteString("dtk init       --name " + name + " --module <module> [--with-frontend]\n")
-	b.WriteString("dtk deploy     [--namespace] [--context] [--kubeconfig] [--dry-run]\n")
-	b.WriteString("dtk resume     # 从中断点恢复\n")
-	b.WriteString("dtk rollback   # 手动触发 helm rollback\n")
-	b.WriteString("dtk release    --version vX.Y.Z [--deploy]\n")
+	b.WriteString("kp init       --name " + name + " --module <module> [--with-frontend]\n")
+	b.WriteString("kp deploy     [--namespace] [--context] [--kubeconfig] [--dry-run]\n")
+	b.WriteString("kp resume     # 从中断点恢复\n")
+	b.WriteString("kp rollback   # 手动触发 helm rollback\n")
+	b.WriteString("kp release    --version vX.Y.Z [--deploy]\n")
 	b.WriteString("```")
 	return b.String()
 }
@@ -150,7 +150,7 @@ func buildQuickRef(name string, withFrontend bool) string {
 	var b strings.Builder
 	b.WriteString("```bash\n")
 	b.WriteString("# 部署\n")
-	b.WriteString("dtk deploy\n\n")
+	b.WriteString("kp deploy\n\n")
 	b.WriteString("# 查看 pods\n")
 	b.WriteString("kubectl get pods -n " + name + "\n\n")
 	b.WriteString("# 查看服务日志\n")

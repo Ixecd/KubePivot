@@ -8,7 +8,7 @@ import (
 )
 
 // writeAICodingGuide 生成 handoff/AI-CODING-GUIDE.md
-// 帮助 AI 在 dtk 框架内正确填充业务逻辑，不破坏脚手架约束
+// 帮助 AI 在 kp 框架内正确填充业务逻辑，不破坏脚手架约束
 func writeAICodingGuide(outputDir, name, module string) error {
 	dir := filepath.Join(outputDir, "handoff")
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -27,7 +27,7 @@ func renderAICodingGuide(name, module string) string {
 
 	b.WriteString("# AI 编码指南\n\n")
 	b.WriteString("> 本文档写给协助开发的 AI。\n")
-	b.WriteString("> 项目骨架由 `dtk init` 生成，请严格在框架内填充业务逻辑，不要重构脚手架结构。\n\n")
+	b.WriteString("> 项目骨架由 `kp init` 生成，请严格在框架内填充业务逻辑，不要重构脚手架结构。\n\n")
 	b.WriteString("---\n\n")
 
 	// 一、项目框架总览
@@ -53,7 +53,7 @@ func renderAICodingGuide(name, module string) string {
 	b.WriteString("│       └── code/            # 业务错误码\n")
 	b.WriteString("├── configs/\n")
 	b.WriteString("│   ├── project.env          # 部署配置（VERSION、KUBE_* 等）\n")
-	b.WriteString("│   ├── components.yaml      # dtk AI 规划依据\n")
+	b.WriteString("│   ├── components.yaml      # kp AI 规划依据\n")
 	b.WriteString("│   └── resources.yaml       # controller 监控的 K8s 资源\n")
 	b.WriteString("├── deployments/" + name + "/  # Helm chart，含 postgres、etcd、业务服务\n")
 	b.WriteString("├── migrations/              # SQL 迁移文件（golang-migrate 格式）\n")
@@ -115,14 +115,14 @@ func renderAICodingGuide(name, module string) string {
 
 	// 三、不要动的地方
 	b.WriteString("## 三、不要动的地方\n\n")
-	b.WriteString("以下文件和目录由 dtk 框架管理，**不要修改**，否则会破坏部署流程：\n\n")
+	b.WriteString("以下文件和目录由 kp 框架管理，**不要修改**，否则会破坏部署流程：\n\n")
 	b.WriteString("| 文件/目录 | 原因 |\n")
 	b.WriteString("|---|---|\n")
-	b.WriteString("| `configs/project.env` | dtk deploy 读取，手动改会导致部署参数错乱 |\n")
+	b.WriteString("| `configs/project.env` | kp deploy 读取，手动改会导致部署参数错乱 |\n")
 	b.WriteString("| `configs/components.yaml` | AI 规划依据，改了会影响资源估算 |\n")
 	b.WriteString("| `configs/resources.yaml` | controller 监控配置，改了需要重新 deploy |\n")
 	b.WriteString("| `deployments/` 目录结构 | Helm chart 骨架，新增配置只改 `values.yaml` |\n")
-	b.WriteString("| `scripts/make-rules/deploy.mk` | dtk 部署流程，不要改 helm upgrade 参数 |\n")
+	b.WriteString("| `scripts/make-rules/deploy.mk` | kp 部署流程，不要改 helm upgrade 参数 |\n")
 	b.WriteString("| `internal/db/migrations/` | embed.FS 挂载点，目录不能改名 |\n")
 	b.WriteString("| `cmd/" + name + "/main.go` | 只做初始化，业务逻辑不要写在这里 |\n\n")
 	b.WriteString("---\n\n")
@@ -208,9 +208,9 @@ func renderAICodingGuide(name, module string) string {
 	b.WriteString("|---|---|\n")
 	b.WriteString("| 新增环境变量 | `deployments/" + name + "/values.yaml` 的 `env` 字段 |\n")
 	b.WriteString("| 改了服务端口 | `values.yaml` 的 `service.port` + liveness/readiness probe 端口 |\n")
-	b.WriteString("| 加了新的 K8s 资源需要监控 | `configs/resources.yaml` 加一行，然后 `dtk deploy` |\n")
+	b.WriteString("| 加了新的 K8s 资源需要监控 | `configs/resources.yaml` 加一行，然后 `kp deploy` |\n")
 	b.WriteString("| 改了数据库表结构 | 新增迁移文件，不要修改已有迁移文件 |\n")
-	b.WriteString("| 要发布新版本 | 运行 `dtk release --version vX.Y.Z`，不要手动改 VERSION |\n\n")
+	b.WriteString("| 要发布新版本 | 运行 `kp release --version vX.Y.Z`，不要手动改 VERSION |\n\n")
 
 	b.WriteString("---\n\n")
 	b.WriteString("> 遇到不确定的地方，先看 `handoff/HANDOFF.md` 了解项目背景，再动手。\n")
