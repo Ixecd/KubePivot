@@ -317,7 +317,7 @@ func TestHealRecreate_Success(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, helm.rollbackCall)
-	assert.Equal(t, "myapp", helm.rollbackCall.release)
+	assert.Equal(t, "myapp-myapp", helm.rollbackCall.release)
 	assert.Equal(t, "test-ns", helm.rollbackCall.namespace)
 	assert.Equal(t, 2, helm.rollbackCall.revision)
 	assert.Equal(t, state.StateRunning, sm.State())

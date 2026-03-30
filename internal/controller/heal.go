@@ -48,7 +48,7 @@ func (r *Reconciler) checkAndHeal(res Resource) error {
 
 // healRecreate 改为用 --reuse-values 重新安装
 func (r *Reconciler) healRecreate(res Resource) error {
-	releaseName := getenv("PROJECT_NAME", res.Name)
+	releaseName := getenv("PROJECT_NAME", "") + "-" + res.Name
 
 	history, err := r.helm.History(releaseName, res.Namespace)
 	if err != nil || len(history) == 0 {

@@ -29,7 +29,8 @@ func NewReconciler(sm *state.Machine, kubeconfig string) *Reconciler {
 		sm:         sm,
 		kubeconfig: kubeconfig,
 		resources:  resources,
-		detector: NewKubectlDetector(kubeconfig),
+		detector:   NewKubectlDetector(kubeconfig),
+		helm:       &RealHelmClient{},
 	}
 }
 
