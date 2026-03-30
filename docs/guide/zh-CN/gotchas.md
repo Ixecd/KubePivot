@@ -119,6 +119,30 @@ helm rollback 失败: 当前是第一个版本（revision=1），无法回滚
 
 ---
 
+### dtk resume 检测到 IDLE 后未触发重新部署（已修复）
+
+**v1.1.0 及之前**：`dtk resume` 检测到 K8s 实际状态为 IDLE 后，打印"从头重新部署"但实际没有执行，状态机仍停留在 DEPLOYING，导致后续 `dtk deploy` 被拒绝：
+```
+当前部署状态为 DEPLOYING，不能发起新部署
+如需继续，请运行: dtk resume
+```
+
+根因：`executeDeploy` 开头会做 `IDLE → INITIALIZING → DEPLOYING` 状态转换，但 resume 时状态机已是 DEPLOYING，转换失败被忽略，部署逻辑实际没跑。同时代码里还有一个裸的 `executeDeploy` 调用没有错误处理，导致部署跑两遍。
+
+**临时解法**（修复版本之前）：
+```bash
+dtk rollback   # 或
+dtk down && dtk deploy
+```
+
+**v1.2.0 修复**：resume 检测到 IDLE 时先 `ForceState(IDLE)` 重置状态机，再调用 `executeDeploy`；删除多余的裸调用。
+
+另外注意：`dtk down` 会删除整个 namespace，**K8s Secret 也会一并删除**。重新部署前需要先重建：
+```bash
+./scripts/create-secret.sh
+dtk deploy
+```
+
 ## 三、环境
 
 ### /healthz 路由缺失导致 VALIDATING 卡死
