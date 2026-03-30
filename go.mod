@@ -3,6 +3,7 @@ module github.com/Ixecd/kubepivot
 go 1.25.0
 
 require (
+	github.com/lib/pq v1.12.1
 	github.com/stretchr/testify v1.11.1
 	go.etcd.io/etcd/client/v3 v3.6.9
 	golang.org/x/tools v0.41.0
@@ -10,6 +11,7 @@ require (
 )
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2 // indirect
 	github.com/coreos/go-semver v0.3.1 // indirect
 	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
