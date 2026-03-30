@@ -1,6 +1,6 @@
 # 已知坑和注意事项
 
-> 这里记录使用 dtk 和开发过程中踩到的所有坑，遇到问题先查这里。
+> 这里记录使用 kp 和开发过程中踩到的所有坑，遇到问题先查这里。
 > 最后更新：2026-03-30 / v1.1.0
 
 ---
@@ -9,27 +9,27 @@
 
 ### 部署中不能再发起新部署
 
-dtk 状态机在 `DEPLOYING` / `VALIDATING` / `ROLLING_BACK` 状态时会拒绝新部署：
+kp 状态机在 `DEPLOYING` / `VALIDATING` / `ROLLING_BACK` 状态时会拒绝新部署：
 
 ```
 当前部署状态为 DEPLOYING，不能发起新部署
-如需继续，请运行: dtk resume
+如需继续，请运行: kp resume
 ```
 
 这是故意的，并发部署会导致 helm 状态混乱。如果上次部署卡住了：
 
 ```bash
-dtk resume    # 尝试从中断点恢复
-dtk rollback  # 或者放弃当前版本，回滚到上一个
+kp resume    # 尝试从中断点恢复
+kp rollback  # 或者放弃当前版本，回滚到上一个
 ```
 
 不要手动重置状态机，除非上面两个都失败了。
 
 ---
 
-### controller 和 dtk deploy 并发触发 pending-rollback 死锁
+### controller 和 kp deploy 并发触发 pending-rollback 死锁
 
-controller 检测到资源缺失并触发 `helm rollback` 的同时，用户手动跑 `dtk deploy`，两个 helm 操作冲突，release 卡在 `pending-rollback`。
+controller 检测到资源缺失并触发 `helm rollback` 的同时，用户手动跑 `kp deploy`，两个 helm 操作冲突，release 卡在 `pending-rollback`。
 
 **症状**：
 
@@ -37,7 +37,7 @@ controller 检测到资源缺失并触发 `helm rollback` 的同时，用户手�
 helm upgrade failed: UPGRADE FAILED: release: not in a deployable state
 ```
 
-**dtk deploy 会自动检测并提示处理**（v0.5.1+），按提示操作即可。
+**kp deploy 会自动检测并提示处理**（v0.5.1+），按提示操作即可。
 
 手动处理步骤：
 
@@ -46,7 +46,7 @@ kubectl scale deployment/myapp-controller -n myapp --replicas=0
 kubectl delete secret -n myapp \
   $(kubectl get secret -n myapp -l owner=helm,name=myapp \
     -o jsonpath='{.items[?(@.metadata.labels.status=="pending-rollback")].metadata.name}')
-dtk deploy
+kp deploy
 ```
 
 ---
@@ -61,12 +61,12 @@ etcd Watch 断线后，controller 会指数退避重连（1s → 2s → 4s ... �
 
 ### 状态卡住时手动重置
 
-只有在 `dtk resume` 和 `dtk rollback` 都无法解决时，才手动重置：
+只有在 `kp resume` 和 `kp rollback` 都无法解决时，才手动重置：
 
 ```bash
 python3 -c "
 import json, os
-p=os.path.expanduser('~/.dtk/state/myapp/myapp.json')
+p=os.path.expanduser('~/.kp/state/myapp/myapp.json')
 d=json.load(open(p))
 d['state']='IDLE'   # 或 RUNNING，按实际情况
 d['reason']='手动重置'
@@ -85,19 +85,19 @@ helm status myapp -n myapp
 
 ### revision=1 时无法 rollback
 
-第一次部署（helm revision=1）没有上一个版本，`dtk rollback` 会报：
+第一次部署（helm revision=1）没有上一个版本，`kp rollback` 会报：
 
 ```
 helm rollback 失败: 当前是第一个版本（revision=1），无法回滚
 ```
 
-这是正确行为，不是 bug。要回到"没有部署"的状态，用 `dtk down`。
+这是正确行为，不是 bug。要回到"没有部署"的状态，用 `kp down`。
 
 ---
 
 ### rollback 失败后状态变成 CLEANING（已修复）
 
-**v0.5.1 之前**：`dtk rollback` 失败时错误地将状态转为 CLEANING，导致后续无法操作。
+**v0.5.1 之前**：`kp rollback` 失败时错误地将状态转为 CLEANING，导致后续无法操作。
 
 **v0.5.1 修复**：rollback 失败时状态机保持 RUNNING，允许用户重试。
 
@@ -105,7 +105,7 @@ helm rollback 失败: 当前是第一个版本（revision=1），无法回滚
 
 ### RUNNING → ROLLING_BACK 非法转换（已修复）
 
-**v0.5.1 之前**：`dtk rollback` 报"非法状态转换 RUNNING → ROLLING_BACK"。
+**v0.5.1 之前**：`kp rollback` 报"非法状态转换 RUNNING → ROLLING_BACK"。
 
 **v0.5.1 修复**：将 `ROLLING_BACK` 加入 RUNNING 的合法转换目标。
 
@@ -119,35 +119,35 @@ helm rollback 失败: 当前是第一个版本（revision=1），无法回滚
 
 ---
 
-### dtk resume 检测到 IDLE 后未触发重新部署（已修复）
+### kp resume 检测到 IDLE 后未触发重新部署（已修复）
 
-**v1.1.0 及之前**：`dtk resume` 检测到 K8s 实际状态为 IDLE 后，打印"从头重新部署"但实际没有执行，状态机仍停留在 DEPLOYING，导致后续 `dtk deploy` 被拒绝：
+**v1.1.0 及之前**：`kp resume` 检测到 K8s 实际状态为 IDLE 后，打印"从头重新部署"但实际没有执行，状态机仍停留在 DEPLOYING，导致后续 `kp deploy` 被拒绝：
 ```
 当前部署状态为 DEPLOYING，不能发起新部署
-如需继续，请运行: dtk resume
+如需继续，请运行: kp resume
 ```
 
 根因：`executeDeploy` 开头会做 `IDLE → INITIALIZING → DEPLOYING` 状态转换，但 resume 时状态机已是 DEPLOYING，转换失败被忽略，部署逻辑实际没跑。同时代码里还有一个裸的 `executeDeploy` 调用没有错误处理，导致部署跑两遍。
 
 **临时解法**（修复版本之前）：
 ```bash
-dtk rollback   # 或
-dtk down && dtk deploy
+kp rollback   # 或
+kp down && kp deploy
 ```
 
 **v1.2.0 修复**：resume 检测到 IDLE 时先 `ForceState(IDLE)` 重置状态机，再调用 `executeDeploy`；删除多余的裸调用。
 
-另外注意：`dtk down` 会删除整个 namespace，**K8s Secret 也会一并删除**。重新部署前需要先重建：
+另外注意：`kp down` 会删除整个 namespace，**K8s Secret 也会一并删除**。重新部署前需要先重建：
 ```bash
 ./scripts/create-secret.sh
-dtk deploy
+kp deploy
 ```
 
 ## 三、环境
 
 ### /healthz 路由缺失导致 VALIDATING 卡死
 
-dtk 在 VALIDATING 阶段会检查服务的 `/healthz` 路由是否返回 200。如果路由不存在，超时后自动回滚。
+kp 在 VALIDATING 阶段会检查服务的 `/healthz` 路由是否返回 200。如果路由不存在，超时后自动回滚。
 
 **必须在业务服务里实现**：
 
@@ -167,7 +167,7 @@ kubectl exec -n myapp deployment/myapp -- wget -qO- http://localhost:8080/health
 
 ### Docker 镜像架构不匹配
 
-`configs/project.env` 里的 `ARCH` 必须和本机架构一致，`dtk init` 会自动检测，但升级 dtk 前生成的老项目需要手动确认：
+`configs/project.env` 里的 `ARCH` 必须和本机架构一致，`kp init` 会自动检测，但升级 kp 前生成的老项目需要手动确认：
 
 ```bash
 go env GOARCH   # 查看本机架构
@@ -179,7 +179,7 @@ go env GOARCH   # 查看本机架构
 
 ### kubectl context 切错集群
 
-`dtk deploy` 会操作当前 kubectl context 指向的集群。建议在 `configs/project.env` 里明确写 `KUBE_CONTEXT`，不依赖默认 context：
+`kp deploy` 会操作当前 kubectl context 指向的集群。建议在 `configs/project.env` 里明确写 `KUBE_CONTEXT`，不依赖默认 context：
 
 ```ini
 KUBE_CONTEXT=orbstack
@@ -223,7 +223,7 @@ kubectl config current-context
 Error: UPGRADE FAILED: field is immutable / another manager owns field
 ```
 
-`dtk deploy` 会自动检测 SSA 冲突，清除 namespace 下所有资源的 managedFields 后重试一次（v0.6.0+）。
+`kp deploy` 会自动检测 SSA 冲突，清除 namespace 下所有资源的 managedFields 后重试一次（v0.6.0+）。
 
 手动处理：
 
@@ -242,7 +242,7 @@ kubectl scale deployment/myapp-controller -n myapp --replicas=0
 kubectl delete secret -n myapp \
   $(kubectl get secret -n myapp -l owner=helm,name=myapp \
     -o jsonpath='{.items[?(@.metadata.labels.status=="pending-rollback")].metadata.name}')
-dtk deploy
+kp deploy
 ```
 
 ---
@@ -253,16 +253,16 @@ dtk deploy
 
 ```bash
 helm delete myapp -n myapp
-dtk deploy
+kp deploy
 ```
 
-`dtk deploy` 会自动检测并提示（v0.7.0+）。
+`kp deploy` 会自动检测并提示（v0.7.0+）。
 
 ---
 
-### values.yaml 改动后必须 dtk deploy 才能生效
+### values.yaml 改动后必须 kp deploy 才能生效
 
-修改 `deployments/myapp/values.yaml` 或 `configs/resources.yaml` 后，必须重新跑 `dtk deploy` 才会同步到集群。`configs/resources.yaml` 通过 `--set-file` 注入到 helm，改了文件不 deploy，controller ConfigMap 不会更新。
+修改 `deployments/myapp/values.yaml` 或 `configs/resources.yaml` 后，必须重新跑 `kp deploy` 才会同步到集群。`configs/resources.yaml` 通过 `--set-file` 注入到 helm，改了文件不 deploy，controller ConfigMap 不会更新。
 
 ---
 
@@ -323,7 +323,7 @@ postgres://user:pass@localhost:5432/myapp?sslmode=disable&search_path=public
 **标准姿势**：
 
 ```bash
-dtk release --version v0.2.0 --deploy
+kp release --version v0.2.0 --deploy
 ```
 
 ---
@@ -334,14 +334,14 @@ dtk release --version v0.2.0 --deploy
 
 启用 controller 前必须：
 
-1. 构建包含 dtk + kubectl + helm 的镜像
+1. 构建包含 kp + kubectl + helm 的镜像
 2. 填写 `values.yaml` 里的 `controller.image.repository` 和 `tag`
 
 ---
 
 ### REGISTRY_PREFIX 未填
 
-留空会导致 push 失败，运行 `dtk doctor` 可以提前检查。
+留空会导致 push 失败，运行 `kp doctor` 可以提前检查。
 
 ---
 
@@ -401,7 +401,7 @@ solo 开发时这是正常配置（CI 只用于提醒），如果需要强制阻
 
 ### 单个服务出问题，不要单独回滚
 
-dtk 不支持 `dtk rollback --service`，这是故意的设计决策。
+kp 不支持 `kp rollback --service`，这是故意的设计决策。
 
 单独回滚某个服务会导致版本割裂：
 - `wallet-service` 回滚到 v1.1，但 `postgres` 已经 migrate 到 v1.5 的表结构
@@ -413,14 +413,14 @@ dtk 不支持 `dtk rollback --service`，这是故意的设计决策。
 vim internal/wallet/handler.go
 
 # 2. 整体重新发布（其他服务镜像 tag 不变，只有修复的服务会重新 build/push）
-dtk release --version v0.2.1 --deploy
+kp release --version v0.2.1 --deploy
 ```
 
-dtk 会检测哪些服务的镜像已经存在（VERSION 没变则跳过 build/push），只重新部署有变化的服务，其他服务 helm upgrade 但 pod 不会重启。版本号统一，历史可追溯。
+kp 会检测哪些服务的镜像已经存在（VERSION 没变则跳过 build/push），只重新部署有变化的服务，其他服务 helm upgrade 但 pod 不会重启。版本号统一，历史可追溯。
 
 ### 整体回滚的日志
 
-`dtk rollback` 会按拓扑逆序回滚所有服务，打印每步进度：
+`kp rollback` 会按拓扑逆序回滚所有服务，打印每步进度：
 ```
 正在回滚 admin-service...     ✓
 正在回滚 wallet-service...    ✓
@@ -453,8 +453,8 @@ rm wallet-service-deployment.yaml service.yaml serviceaccount.yaml hpa.yaml
 helm uninstall web3-blitz -n web3-blitz
 helm upgrade --install web3-blitz-infra ./deployments/web3-blitz -n web3-blitz --create-namespace
 
-# 再 dtk deploy（wallet-service 走新独立 release）
-dtk deploy
+# 再 kp deploy（wallet-service 走新独立 release）
+kp deploy
 ```
 
 **解法 B（临时）**：修改 annotation 让新 release 接管：
@@ -472,7 +472,7 @@ kubectl label deployment wallet-service -n web3-blitz \
 
 ### 多 chart 项目：service name 必须和 chart 内一致
 
-`dtk init` 生成的 chart 里 service name 是 `{name}-postgres`、`{name}-etcd`。
+`kp init` 生成的 chart 里 service name 是 `{name}-postgres`、`{name}-etcd`。
 
 老项目里 service name 可能是裸的 `postgres`、`etcd`，需要手动对齐：
 
@@ -491,13 +491,13 @@ sed -i '' 's/{name}-postgres/postgres/g' \
 
 ### chart 目录不存在时 helm upgrade 立即失败
 
-多服务模式下，`dtk deploy` 会查找 `deployments/{project}/{service}/` 作为 chart 路径。
+多服务模式下，`kp deploy` 会查找 `deployments/{project}/{service}/` 作为 chart 路径。
 
 如果目录不存在，会直接报错，不进入重试：
 
 ```
 错误：chart 目录不存在：deployments/web3-blitz/chain-miner
-请运行 dtk init 重新生成项目结构，或手动创建该目录
+请运行 kp init 重新生成项目结构，或手动创建该目录
 ```
 
 CLI 工具（image 为空且无 chart）会自动跳过，不报错。
@@ -506,9 +506,9 @@ CLI 工具（image 为空且无 chart）会自动跳过，不报错。
 
 ### 多服务部署时基础设施必须先就绪
 
-`dtk deploy` 按 `depends_on` 拓扑顺序部署，但如果 `components.yaml` 没有列 postgres/etcd（只列业务服务），而 postgres/etcd 还没起来，业务服务的 initContainers 会一直 pending，触发 helm `--wait` 超时。
+`kp deploy` 按 `depends_on` 拓扑顺序部署，但如果 `components.yaml` 没有列 postgres/etcd（只列业务服务），而 postgres/etcd 还没起来，业务服务的 initContainers 会一直 pending，触发 helm `--wait` 超时。
 
-**解法**：在 `components.yaml` 把 postgres/etcd 也列进去，让 dtk 负责顺序：
+**解法**：在 `components.yaml` 把 postgres/etcd 也列进去，让 kp 负责顺序：
 
 ```yaml
 components:
@@ -537,7 +537,7 @@ components:
 
 如果某个服务 helm upgrade 失败（首次安装失败，release 从未创建成功），rollback 会找不到 release。
 
-dtk 在 rollback 前会用 `helm history --max 1` 检查 release 是否存在，不存在时跳过，不会误触发 dtk down：
+kp 在 rollback 前会用 `helm history --max 1` 检查 release 是否存在，不存在时跳过，不会误触发 kp down：
 
 ```
 [17:20:43] ⏭  跳过 rollback web3-blitz-wallet-service（未安装）
@@ -579,10 +579,10 @@ v1.0.0 之前的项目 postgres/etcd 都在老的单 chart 里，迁移到多 ch
          - web3-blitz-etcd
 ```
 
-4. 删掉老的单 chart release，重新 dtk deploy：
+4. 删掉老的单 chart release，重新 kp deploy：
 ```bash
    helm uninstall {old-release} -n {namespace}
-   dtk deploy
+   kp deploy
 ```
 
 ---
@@ -648,9 +648,9 @@ level=WARN msg="查不到 helm release，无法自愈" release=web3-blitz
 
 ### ConfigMap 更新后 controller pod 不自动重启
 
-修改 `resources.yaml` 并重新 `dtk deploy` 后，ConfigMap 内容已更新，但 controller pod 仍挂载旧内容（K8s ConfigMap 热更新有延迟，且 controller 启动时一次性读取配置）。
+修改 `resources.yaml` 并重新 `kp deploy` 后，ConfigMap 内容已更新，但 controller pod 仍挂载旧内容（K8s ConfigMap 热更新有延迟，且 controller 启动时一次性读取配置）。
 
 **解法**：手动触发重启：
 ```bash
-kubectl rollout restart deployment/dev-toolkit-controller -n <namespace>
+kubectl rollout restart deployment/kubepivot-controller -n <namespace>
 ```

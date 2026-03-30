@@ -1,4 +1,4 @@
-# dtk 命令参考手册
+# kp 命令参考手册
 
 > 适用：dev-toolkit v0.8.0+
 
@@ -6,18 +6,18 @@
 
 ## 全局说明
 
-dtk 命令都在项目根目录下执行（含 `configs/project.env` 的目录）。
+kp 命令都在项目根目录下执行（含 `configs/project.env` 的目录）。
 
 `--namespace`、`--context`、`--kubeconfig` 三个 flag 所有部署类命令通用，优先级高于 `project.env` 里的配置。
 
 ---
 
-## dtk init
+## kp init
 
 生成完整 Go 项目骨架。
 
 ```bash
-dtk init --name <n> --module <module> [flags]
+kp init --name <n> --module <module> [flags]
 ```
 
 | Flag | 说明 | 默认值 |
@@ -60,12 +60,12 @@ dtk init --name <n> --module <module> [flags]
 
 ---
 
-## dtk deploy
+## kp deploy
 
 AI 规划资源 → build → push → helm upgrade → 状态追踪。
 
 ```bash
-dtk deploy [flags]
+kp deploy [flags]
 ```
 
 | Flag | 说明 | 默认值 |
@@ -80,7 +80,7 @@ dtk deploy [flags]
 
 ```
 IDLE / RUNNING
-      │ dtk deploy
+      │ kp deploy
       ▼
 前置检查（helm release 状态 / 依赖检查）
       ↓
@@ -98,12 +98,12 @@ INITIALIZING → DEPLOYING → VALIDATING → RUNNING
 
 ---
 
-## dtk resume
+## kp resume
 
 检查 K8s 实际状态，从中断点恢复。
 
 ```bash
-dtk resume [flags]
+kp resume [flags]
 ```
 
 适用于：进程意外终止、网络中断导致状态机停在中间状态。
@@ -114,12 +114,12 @@ dtk resume [flags]
 
 ---
 
-## dtk rollback
+## kp rollback
 
 手动触发 helm rollback，回到上一个版本。
 
 ```bash
-dtk rollback [flags]
+kp rollback [flags]
 ```
 
 **注意**：
@@ -128,18 +128,18 @@ dtk rollback [flags]
 
 ---
 
-## dtk release
+## kp release
 
 打版本 tag，更新 VERSION，可选触发部署。
 
 ```bash
-dtk release --version v1.0.0 [flags]
+kp release --version v1.0.0 [flags]
 ```
 
 | Flag | 说明 | 默认值 |
 |------|------|--------|
 | `--version` | 版本号，格式 `v{major}.{minor}.{patch}` | 必填 |
-| `--deploy` | 打完 tag 后触发 dtk deploy | false |
+| `--deploy` | 打完 tag 后触发 kp deploy | false |
 | `--push` | 是否推送 commit 和 tag 到远端 | true |
 
 **完整流程**：校验格式 → 检查工作区干净 → 更新 project.env → git commit + tag + push → 可选 deploy
@@ -151,29 +151,29 @@ git commit -m 'feat!: breaking change'
 
 ---
 
-## dtk down
+## kp down
 
 彻底下线服务，删除所有集群资源和本地状态文件。
 
 ```bash
-dtk down [flags]
+kp down [flags]
 ```
 
 **执行内容**（二次确认后）：
 1. 删除 ClusterRole / ClusterRoleBinding
 2. 删除 namespace（含所有资源）
-3. 删除本地状态文件 `~/.dtk/state/<project>/<ns>.json`
+3. 删除本地状态文件 `~/.kp/state/<project>/<ns>.json`
 
 ⚠️ 此操作不可逆，PVC 数据会丢失。
 
 ---
 
-## dtk status
+## kp status
 
 查看当前部署状态，三层信息一屏看清。
 
 ```bash
-dtk status [flags]
+kp status [flags]
 ```
 
 | Flag | 说明 |
@@ -203,12 +203,12 @@ Helm:
 
 ---
 
-## dtk history
+## kp history
 
 查看部署状态转换历史。
 
 ```bash
-dtk history [-n N] [flags]
+kp history [-n N] [flags]
 ```
 
 | Flag | 说明 | 默认值 |
@@ -230,12 +230,12 @@ dtk history [-n N] [flags]
 
 ---
 
-## dtk diff
+## kp diff
 
 对比两个版本的 helm values 差异。
 
 ```bash
-dtk diff [flags]
+kp diff [flags]
 ```
 
 | Flag | 说明 | 默认值 |
@@ -257,12 +257,12 @@ dtk diff [flags]
 
 ---
 
-## dtk doctor
+## kp doctor
 
 检查环境依赖，出问题前先诊断。
 
 ```bash
-dtk doctor
+kp doctor
 ```
 
 **检查项**：
@@ -281,12 +281,12 @@ exit code：有 error 时返回 1，只有 warn 时返回 0。
 
 ---
 
-## dtk controller start
+## kp controller start
 
 在 controller pod 内部运行，不需要手动调用。
 
 ```bash
-dtk controller start
+kp controller start
 ```
 
 启动 Reconciliation Controller：etcd Watch（指数退避重连）+ 8s 周期 Reconcile。
@@ -306,7 +306,7 @@ dtk controller start
 | `CLEANING` | 清理中（首次失败） | - |
 | `TERMINATED` | 已下线 | deploy |
 
-非 `IDLE / RUNNING / TERMINATED` 状态时，`dtk deploy` 会被拒绝，用 `dtk resume` 恢复。
+非 `IDLE / RUNNING / TERMINATED` 状态时，`kp deploy` 会被拒绝，用 `kp resume` 恢复。
 
 ---
 
@@ -317,7 +317,7 @@ dtk controller start
 ```bash
 python3 -c "
 import json, os
-p=os.path.expanduser('~/.dtk/state/<project>/<ns>.json')
+p=os.path.expanduser('~/.kp/state/<project>/<ns>.json')
 d=json.load(open(p))
 d['state']='IDLE'   # 或 RUNNING
 d['reason']='手动重置'
@@ -330,7 +330,7 @@ json.dump(d,open(p,'w'),indent=2)
 ---
 ## 多服务部署
 
-v1.0.0 起，`dtk deploy` 自动检测 `components.yaml` 里的服务数量和依赖关系，决定走单服务还是多服务路径。
+v1.0.0 起，`kp deploy` 自动检测 `components.yaml` 里的服务数量和依赖关系，决定走单服务还是多服务路径。
 
 **触发条件**：多层依赖 或 同层多个服务时自动进入多服务模式：
 
@@ -362,17 +362,17 @@ v1.0.0 起，`dtk deploy` 自动检测 `components.yaml` 里的服务数量和�
     ↓ 级联也失败
 整组 rollback（所有已部署 release，逆序）
     ↓ 整组也失败
-dtk down（清理 namespace）
+kp down（清理 namespace）
 
 ```
 ---
 
-## dtk ai-plan
+## kp ai-plan
 
 AI 扫描仓库，自动生成 `configs/components.yaml`。
 
 ```bash
-dtk ai-plan [flags]
+kp ai-plan [flags]
 ```
 
 | Flag             | 说明                          | 默认值 |
@@ -392,9 +392,9 @@ export DTK_LLM_ENDPOINT=          # 可选，私有化部署时覆盖
 **示例**：
 
 ```bash
-dtk ai-plan --suggest-only
-dtk ai-plan --desc "BTC/ETH 充提币系统，wallet-service 是核心，基础设施不要列进来"
-dtk ai-plan && dtk deploy
+kp ai-plan --suggest-only
+kp ai-plan --desc "BTC/ETH 充提币系统，wallet-service 是核心，基础设施不要列进来"
+kp ai-plan && kp deploy
 ```
 
 详见 [AI 使用手册](ai.md)。
@@ -414,7 +414,7 @@ dtk ai-plan && dtk deploy
 | `CLEANING`     | 清理中（首次失败） | -                        |
 | `TERMINATED`   | 已下线             | deploy                   |
 
-非 `IDLE / RUNNING / TERMINATED` 状态时，`dtk deploy` 会被拒绝，用 `dtk resume` 恢复。
+非 `IDLE / RUNNING / TERMINATED` 状态时，`kp deploy` 会被拒绝，用 `kp resume` 恢复。
 
 ---
 
@@ -425,7 +425,7 @@ dtk ai-plan && dtk deploy
 ```bash
 python3 -c "
 import json, os
-p=os.path.expanduser('~/.dtk/state/<project>/<ns>.json')
+p=os.path.expanduser('~/.kp/state/<project>/<ns>.json')
 d=json.load(open(p))
 d['state']='IDLE'   # 或 RUNNING
 d['reason']='手动重置'

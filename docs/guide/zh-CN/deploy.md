@@ -1,19 +1,19 @@
 # 部署指南
 
-`dtk deploy` 是 dev-toolkit 的核心命令，封装了从构建镜像到 K8s 滚动更新的完整流程。
+`kp deploy` 是 dev-toolkit 的核心命令，封装了从构建镜像到 K8s 滚动更新的完整流程。
 
 ---
 
 ## 完整流程
 
 ```
-dtk deploy
+kp deploy
   │
   ├── 1. 读取 configs/components.yaml     解析组件列表
   ├── 2. 读取 configs/project.env         读取 VERSION / ARCH / REGISTRY_PREFIX
   ├── 3. AI 规划资源                       replicas / cpu / memory / storage
   ├── 4. 过滤 image="" 的组件             CLI 工具不部署，只部署有 image 的服务
-  ├── 5. 组装 IMAGES 环境变量传给 make    dtk 负责过滤，make 只管构建
+  ├── 5. 组装 IMAGES 环境变量传给 make    kp 负责过滤，make 只管构建
   │
   └── make deploy.full
         ├── deploy.build                  docker build（VERSION 不变则跳过）
@@ -43,7 +43,7 @@ VERSION 变了 → 重新 build → push → helm 更新 image tag → 滚动更
 VERSION=v0.2.0
 
 # 重新部署
-dtk deploy
+kp deploy
 ```
 
 ---
@@ -60,12 +60,12 @@ components:
 
 **`image` 为空的使用场景：**
 
-CLI 工具（如 `dtk` 本身）不应部署到 K8s。CLI 启动后打印 usage 立刻退出，
+CLI 工具（如 `kp` 本身）不应部署到 K8s。CLI 启动后打印 usage 立刻退出，
 K8s 会认为进程崩溃，导致 CrashLoopBackOff 无限重启。
 
 ```yaml
 components:
-  - name: dtk
+  - name: kp
     port: 0
     image: ""    # CLI 工具，跳过部署
 ```
@@ -111,7 +111,7 @@ Helm SSA 会遇到 field manager 冲突。`--force-conflicts` 强制接管这些
 后续 `kubectl set image` 就会报 `deployments.apps "x" not found`。
 
 **`$(firstword $(BINS))`**：镜像名取自 `cmd/` 目录扫描结果，
-不用 `$(PROJECT_NAME)` 是因为两者可能不同（如 `PROJECT_NAME=dev-toolkit`，binary 是 `dtk`）。
+不用 `$(PROJECT_NAME)` 是因为两者可能不同（如 `PROJECT_NAME=kubepivot`，binary 是 `kp`）。
 
 ---
 
@@ -176,7 +176,7 @@ components:
     type: statefulset    # deployment（默认）/ statefulset
     port: 5432
     image: ""
-    depends_on: []       # 依赖的服务名，dtk 按依赖顺序部署
+    depends_on: []       # 依赖的服务名，kp 按依赖顺序部署
 ```
 ```
 

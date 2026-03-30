@@ -2,9 +2,9 @@
 
 ---
 
-## dtk deploy 方式（推荐）
+## kp deploy 方式（推荐）
 
-从 v1.0 开始，推荐使用 `dtk deploy` 替代手动 kubectl apply 流程。
+从 v1.0 开始，推荐使用 `kp deploy` 替代手动 kubectl apply 流程。
 
 ### 本地 K8s（OrbStack / Rancher Desktop）
 
@@ -20,7 +20,7 @@ vim configs/project.env
 # VERSION=v0.1.0
 
 # 部署
-dtk deploy
+kp deploy
 ```
 
 ### 云上 K8s（阿里云 / 腾讯云 / 华为云）
@@ -38,7 +38,7 @@ vim configs/project.env
 # VERSION=v0.1.0
 
 # 3. 部署
-dtk deploy
+kp deploy
 ```
 
 ### 镜像仓库推荐
@@ -53,7 +53,7 @@ dtk deploy
 
 ## Makefile 手动部署方式
 
-如果不想用 `dtk deploy`，也可以直接调用 make targets：
+如果不想用 `kp deploy`，也可以直接调用 make targets：
 
 ```bash
 # 构建镜像
@@ -85,7 +85,7 @@ make push.multiarch PLATFORMS="linux_amd64 linux_arm64" VERSION=v0.1.0
 
 ## 手动 kubectl 方式（历史参考）
 
-> 以下为旧版手动流程，仅供参考，不推荐在使用 dtk 的项目中采用。
+> 以下为旧版手动流程，仅供参考，不推荐在使用 kp 的项目中采用。
 
 1. 创建 namespace：`kubectl create namespace <project>`
 2. 创建 docker-registry secret
@@ -93,14 +93,14 @@ make push.multiarch PLATFORMS="linux_amd64 linux_arm64" VERSION=v0.1.0
 4. `helm upgrade --install` 或 `kubectl apply -f deployments/`
 5. `kubectl rollout status deployment/<n>`
 
-dtk deploy 封装了以上所有步骤，并加入了 VERSION 跳过、SSA 冲突处理、资源规划等增强。
+kp deploy 封装了以上所有步骤，并加入了 VERSION 跳过、SSA 冲突处理、资源规划等增强。
 
 ---
 
 ## 回滚
 ```bash
-# dtk 整组回滚（推荐，按拓扑逆序）
-dtk rollback
+# kp 整组回滚（推荐，按拓扑逆序）
+kp rollback
 
 # 手动回滚某个 release
 helm history web3-blitz-wallet-service -n web3-blitz

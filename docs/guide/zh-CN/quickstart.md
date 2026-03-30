@@ -20,16 +20,16 @@ K8s 集群可以是本地的（OrbStack、Docker Desktop、minikube）或远程�
 
 ---
 
-## 第一步：安装 dtk
+## 第一步：安装 kp
 
 ```bash
-go install github.com/Ixecd/dev-toolkit/cmd/dtk@latest
+go install github.com/Ixecd/kubepivot/cmd/kp@latest
 ```
 
 验证安装：
 
 ```bash
-dtk --help
+kp --help
 ```
 
 ---
@@ -37,7 +37,7 @@ dtk --help
 ## 第二步：生成项目
 
 ```bash
-dtk init --name myapp --module github.com/me/myapp
+kp init --name myapp --module github.com/me/myapp
 ```
 
 你会看到：
@@ -99,14 +99,14 @@ mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 })
 ```
 
-这是 K8s liveness/readiness probe 和 dtk VALIDATING 阶段的依赖，缺了部署会卡住。
+这是 K8s liveness/readiness probe 和 kp VALIDATING 阶段的依赖，缺了部署会卡住。
 
 ---
 
 ## 第五步：部署
 
 ```bash
-dtk deploy
+kp deploy
 ```
 
 完整输出示例：
@@ -194,7 +194,7 @@ migrations/               # 加 SQL 迁移文件
 业务逻辑写完后，发布新版本：
 
 ```bash
-dtk release --version v0.2.0 --deploy
+kp release --version v0.2.0 --deploy
 ```
 
 这会自动更新 VERSION、打 git tag、重新 build + push + deploy。
@@ -209,23 +209,23 @@ kubectl get pods -n myapp
 helm history myapp -n myapp
 
 # 部署中断后恢复
-dtk resume
+kp resume
 
 # 手动回滚
-dtk rollback
+kp rollback
 
 # 彻底下线（删除所有资源）
-dtk down
+kp down
 
 # 只看规划，不执行
-dtk deploy --dry-run
+kp deploy --dry-run
 ```
 
 ---
 
 ## 遇到问题？
 
-**`dtk deploy` 报 image not found**
+**`kp deploy` 报 image not found**
 
 检查 `REGISTRY_PREFIX` 是否填写，Docker Hub 是否已登录（`docker login`）。
 
@@ -240,7 +240,7 @@ kubectl exec -n myapp deployment/myapp -- wget -qO- http://localhost:8080/health
 **当前状态为 DEPLOYING，不能发起新部署**
 
 ```bash
-dtk resume
+kp resume
 ```
 
 **helm upgrade 报 pending-rollback**
@@ -250,7 +250,7 @@ kubectl scale deployment/myapp-controller -n myapp --replicas=0
 kubectl delete secret -n myapp \
   $(kubectl get secret -n myapp -l owner=helm,name=myapp \
     -o jsonpath='{.items[?(@.metadata.labels.status=="pending-rollback")].metadata.name}')
-dtk deploy
+kp deploy
 ```
 
 **状态机卡住，需要手动重置**
@@ -258,7 +258,7 @@ dtk deploy
 ```bash
 python3 -c "
 import json
-p=os.path.expanduser('~/.dtk/state/myapp/myapp.json')
+p=os.path.expanduser('~/.kp/state/myapp/myapp.json')
 d=json.load(open(p))
 d['state']='IDLE'
 json.dump(d,open(p,'w'),indent=2)

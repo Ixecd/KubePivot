@@ -1,4 +1,4 @@
-# dtk release 设计文档
+# kp release 设计文档
 
 > 适用：dev-toolkit v0.4.0+
 
@@ -16,7 +16,7 @@ git tag -a v1.0.0 -m "release v1.0.0"
 git push && git push --tags
 ```
 
-容易忘步骤、版本号写错、tag 和 commit 不一致。`dtk release` 把这些全部自动化。
+容易忘步骤、版本号写错、tag 和 commit 不一致。`kp release` 把这些全部自动化。
 
 ---
 
@@ -24,13 +24,13 @@ git push && git push --tags
 
 ```bash
 # 基本用法：打 tag 发布
-dtk release --version v1.0.0
+kp release --version v1.0.0
 
 # 打完 tag 直接触发部署
-dtk release --version v1.0.0 --deploy
+kp release --version v1.0.0 --deploy
 
 # 只打本地 tag，不推送到远端
-dtk release --version v1.0.0 --push=false
+kp release --version v1.0.0 --push=false
 ```
 
 ---
@@ -38,7 +38,7 @@ dtk release --version v1.0.0 --push=false
 ## 完整流程
 
 ```
-dtk release --version v1.0.0
+kp release --version v1.0.0
   │
   ├── 1. 校验版本号格式（v{major}.{minor}.{patch}）
   ├── 2. 检查工作区干净（git status --porcelain）
@@ -49,7 +49,7 @@ dtk release --version v1.0.0
   ├── 7. git tag -a v1.0.0 -m "release v1.0.0"
   ├── 8. git push（--push=false 时跳过）
   ├── 9. git push --tags（--push=false 时跳过）
-  └── 10. dtk deploy（仅 --deploy 时）
+  └── 10. kp deploy（仅 --deploy 时）
 ```
 
 ---
@@ -114,8 +114,8 @@ ARCH=arm64            ARCH=arm64
 
 ```bash
 # 等价于：
-dtk release --version v1.0.0
-dtk deploy
+kp release --version v1.0.0
+kp deploy
 ```
 
 ---
@@ -138,7 +138,7 @@ git commit -m 'feat!: breaking change'
 ## 测试覆盖
 
 ```
-cmd/dtk/release_test.go — 8 个测试
+cmd/kp/release_test.go — 8 个测试
 
 TestSemverPattern                版本号格式校验（合法 + 非法）
 TestUpdateVersion_ExistingKey    已有 VERSION 行时原地替换
@@ -155,7 +155,7 @@ TestCheckCleanWorkspace_Dirty    有未提交改动时返回错误
 ## 文件结构
 
 ```
-cmd/dtk/
+cmd/kp/
 └── release.go
     ├── semverPattern        版本号正则
     ├── checkCleanWorkspace  检查工作区

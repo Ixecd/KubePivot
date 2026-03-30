@@ -7,7 +7,7 @@
 
 ## 一、设计动机
 
-v1.0.0 之前 dtk 每个项目只支持一个 helm release，所有组件打包在一个 chart 里：
+v1.0.0 之前 kp 每个项目只支持一个 helm release，所有组件打包在一个 chart 里：
 
 1. **无法独立回滚单个服务**：wallet-service 出问题，整个 chart 一起回滚，postgres 数据也受影响
 2. **无法按依赖顺序部署**：helm 一次性创建所有资源，只能靠 initContainers 控制启动顺序
@@ -65,7 +65,7 @@ components:
 
 ## 三、目录结构
 
-`dtk init` 生成多个独立 chart 目录：
+`kp init` 生成多个独立 chart 目录：
 
 ```
 deployments/{name}/
@@ -191,10 +191,10 @@ for each affected：
     ↓ 全部成功
 状态机 → RUNNING，返回错误
     ↓ 整组也失败
-状态机 → CLEANING → dtk down → IDLE
+状态机 → CLEANING → kp down → IDLE
 ```
 
-**关键设计**：`helmReleaseExists` 用 `helm history --max 1` 检查，防止 rollback 从未安装的 release 导致误触发 dtk down。
+**关键设计**：`helmReleaseExists` 用 `helm history --max 1` 检查，防止 rollback 从未安装的 release 导致误触发 kp down。
 
 ### 重试策略
 
@@ -225,7 +225,7 @@ reason 字段记录详细信息，服务级状态留 v2.0 实现。
 
 ## 八、initContainers 双重保障
 
-`depends_on` 控制**部署顺序**（dtk 层面），initContainers 控制**启动顺序**（K8s 层面），两者配合：
+`depends_on` 控制**部署顺序**（kp 层面），initContainers 控制**启动顺序**（K8s 层面），两者配合：
 
 ```yaml
 initContainers:
@@ -243,14 +243,14 @@ initContainers:
 
 ## 九、rollback 设计说明
 
-**不支持 `dtk rollback --service`**，强制统一版本发布回滚。
+**不支持 `kp rollback --service`**，强制统一版本发布回滚。
 
 原因：
 - 各服务版本之间有隐式契约（API 接口、数据库字段），单服务回滚容易造成版本割裂
-- 整组回滚保证版本一致性，配合 `dtk release --version` 统一发版
+- 整组回滚保证版本一致性，配合 `kp release --version` 统一发版
 - 简化实现，复用现有拓扑逆序逻辑
 
-热修复场景：修复代码 → `dtk release --version v0.2.1 --deploy`，其他服务镜像 tag 不变跳过 build/push，只有修复的服务重新部署。
+热修复场景：修复代码 → `kp release --version v0.2.1 --deploy`，其他服务镜像 tag 不变跳过 build/push，只有修复的服务重新部署。
 
 ---
 
@@ -259,7 +259,7 @@ initContainers:
 | # | 限制 | 状态 |
 |---|------|------|
 | 1 | 状态机仍是项目级 | v2.0 实现服务级 FSM |
-| 2 | dtk status 未展示每个 release 状态 | v1.1.0 |
+| 2 | kp status 未展示每个 release 状态 | v1.1.0 |
 | 3 | 跨 namespace 依赖不支持 | 暂无计划 |
 | 4 | 老项目迁移到多 chart 需手动操作 | 见 gotchas.md |
 

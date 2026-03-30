@@ -1,6 +1,6 @@
 # Helm Chart 指南
 
-`dtk init` 生成的项目自带**零外部依赖**的 Helm chart，每个服务独立一个 chart 目录，`dtk deploy` 按依赖顺序全部拉起。
+`kp init` 生成的项目自带**零外部依赖**的 Helm chart，每个服务独立一个 chart 目录，`kp deploy` 按依赖顺序全部拉起。
 
 ---
 
@@ -45,7 +45,7 @@ deployments/<n>/
 
 ## 启动顺序
 
-`depends_on`（dtk 层面）控制**部署顺序**，`initContainers`（K8s 层面）控制**启动顺序**，双重保障：
+`depends_on`（kp 层面）控制**部署顺序**，`initContainers`（K8s 层面）控制**启动顺序**，双重保障：
 
 ```
 <n>-postgres（先部署）
@@ -130,7 +130,7 @@ replicaCount: 1
 image:
   repository: qingchun22/<n>-arm64
   pullPolicy: IfNotPresent
-  tag: ""           # dtk deploy 会通过 --set image.tag=VERSION 覆盖
+  tag: ""           # kp deploy 会通过 --set image.tag=VERSION 覆盖
 
 service:
   type: ClusterIP

@@ -21,10 +21,10 @@
 
 ## 流程记录
 
-### 1. dtk init
+### 1. kp init
 
 ```bash
-dtk init --name e2e --module github.com/Ixecd/e2e
+kp init --name e2e --module github.com/Ixecd/e2e
 ```
 
 **结果**：✅
@@ -52,10 +52,10 @@ configs/
 
 ---
 
-### 2. dtk deploy（v0.1.0）
+### 2. kp deploy（v0.1.0）
 
 ```bash
-dtk deploy
+kp deploy
 ```
 
 **结果**：✅
@@ -89,10 +89,10 @@ e2e-postgres-0                1/1     Running   0          30s
 
 ---
 
-### 3. dtk status
+### 3. kp status
 
 ```bash
-dtk status
+kp status
 ```
 
 **结果**：✅
@@ -117,10 +117,10 @@ Helm:
 
 ---
 
-### 4. dtk status --history
+### 4. kp status --history
 
 ```bash
-dtk status --history
+kp status --history
 ```
 
 **结果**：✅
@@ -137,10 +137,10 @@ dtk status --history
 
 ---
 
-### 5. dtk doctor
+### 5. kp doctor
 
 ```bash
-dtk doctor
+kp doctor
 ```
 
 **结果**：✅
@@ -159,26 +159,26 @@ dtk doctor
   ✓ project.env      存在
   ✓ REGISTRY_PREFIX  qingchun22
 
-✅ 环境检查通过，可以开始使用 dtk
+✅ 环境检查通过，可以开始使用 kp
 ```
 
 ---
 
-### 6. dtk deploy（v0.2.0）
+### 6. kp deploy（v0.2.0）
 
 ```bash
 sed -i '' 's/VERSION=v0.1.0/VERSION=v0.2.0/' configs/project.env
-dtk deploy
+kp deploy
 ```
 
 **结果**：✅，REVISION: 2
 
 ---
 
-### 7. dtk rollback
+### 7. kp rollback
 
 ```bash
-dtk rollback
+kp rollback
 ```
 
 **结果**：✅，回滚到 REVISION: 1
@@ -199,11 +199,11 @@ dtk rollback
 
 ---
 
-### 8. dtk release --deploy
+### 8. kp release --deploy
 
 ```bash
 git add . && git commit -m "chore: update to v0.2.0"
-dtk release --version v0.3.1 --push=false --deploy
+kp release --version v0.3.1 --push=false --deploy
 ```
 
 **结果**：✅，REVISION: 4
@@ -219,10 +219,10 @@ dtk release --version v0.3.1 --push=false --deploy
 
 ---
 
-### 9. dtk down
+### 9. kp down
 
 ```bash
-dtk down
+kp down
 ```
 
 **结果**：✅
@@ -232,7 +232,7 @@ dtk down
   namespace          : e2e
   ClusterRole        : e2e-controller
   ClusterRoleBinding : e2e-controller
-  本地状态文件       : /Users/qc/.dtk/state/e2e/e2e.json
+  本地状态文件       : /Users/qc/.kp/state/e2e/e2e.json
 
 确认删除？(y/N): y
 ✓ ClusterRole e2e-controller 已删除
@@ -256,15 +256,15 @@ kubectl get ns | grep e2e
 
 | 步骤 | 命令 | 结果 |
 |---|---|---|
-| 1 | `dtk init` | ✅ |
-| 2 | `dtk deploy` | ✅ |
-| 3 | `dtk status` | ✅ |
-| 4 | `dtk status --history` | ✅ |
-| 5 | `dtk doctor` | ✅ |
-| 6 | `dtk deploy`（版本升级） | ✅ |
-| 7 | `dtk rollback` | ✅ |
-| 8 | `dtk release --deploy` | ✅ |
-| 9 | `dtk down` | ✅ |
+| 1 | `kp init` | ✅ |
+| 2 | `kp deploy` | ✅ |
+| 3 | `kp status` | ✅ |
+| 4 | `kp status --history` | ✅ |
+| 5 | `kp doctor` | ✅ |
+| 6 | `kp deploy`（版本升级） | ✅ |
+| 7 | `kp rollback` | ✅ |
+| 8 | `kp release --deploy` | ✅ |
+| 9 | `kp down` | ✅ |
 | - | controller 自愈 | ⏭️ 跳过（待 P1） |
 
 ---
@@ -273,6 +273,6 @@ kubectl get ns | grep e2e
 
 | # | 问题 | 优先级 |
 |---|------|--------|
-| 1 | `dtk status` Helm Status 字段为空（yaml 嵌套层级解析问题） | P1 |
-| 2 | `dtk status` pod 名字前多一个空格（tabwriter 对齐问题） | P2 |
+| 1 | `kp status` Helm Status 字段为空（yaml 嵌套层级解析问题） | P1 |
+| 2 | `kp status` pod 名字前多一个空格（tabwriter 对齐问题） | P2 |
 | 3 | controller 自愈流程未验证 | P1 |

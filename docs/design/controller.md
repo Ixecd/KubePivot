@@ -10,7 +10,7 @@ A1 方案（Loop 和 CLI 进程绑定）的问题：
 
 | 问题 | 表现 |
 |------|------|
-| 进程绑定 | `dtk deploy` 阻塞终端，进程退出则自愈停止 |
+| 进程绑定 | `kp deploy` 阻塞终端，进程退出则自愈停止 |
 | 无法处理运行时故障 | 部署成功后服务挂掉，无人感知 |
 | 扩展性差 | 每次加新资源都要改代码 |
 
@@ -21,13 +21,13 @@ A2 方案：controller 作为独立 Deployment 运行在 K8s 里，生命周期�
 ## 架构
 
 ```
-dtk deploy（CLI）
+kp deploy（CLI）
     │ 写状态到 etcd
     ↓
-etcd: dtk/{project}/{ns}/state
+etcd: kp/{project}/{ns}/state
 
     ↓ Watch / 8s 定时
-dev-toolkit-controller（K8s Deployment，常驻，部署在项目 namespace）
+kubepivot-controller（K8s Deployment，常驻，部署在项目 namespace）
     ├── etcd Watcher（事件驱动）
     │     断线 → 指数退避重连（1s → 2s → 4s ... 最大 30s）
     │     重连成功 → delay 重置为 1s
@@ -44,7 +44,7 @@ dev-toolkit-controller（K8s Deployment，常驻，部署在项目 namespace）
                 └── alert    → 只记日志
 ```
 
-**命名规范**：所有项目的 controller pod 统一命名为 `dev-toolkit-controller`，部署在各自项目的 namespace 里，互不影响。镜像也统一为 `dev-toolkit-controller`，所有项目共用，不需要每个项目单独构建。
+**命名规范**：所有项目的 controller pod 统一命名为 `kubepivot-controller`，部署在各自项目的 namespace 里，互不影响。镜像也统一为 `kubepivot-controller`，所有项目共用，不需要每个项目单独构建。
 
 ---
 
@@ -54,7 +54,7 @@ dev-toolkit-controller（K8s Deployment，常驻，部署在项目 namespace）
 |---|---|
 | `internal/state` | 纯 FSM，零 K8s 依赖 |
 | `internal/controller` | K8s 检测 + 自愈逻辑 |
-| `cmd/dtk` | CLI 入口，引用两个包 |
+| `cmd/kp` | CLI 入口，引用两个包 |
 
 ---
 
@@ -155,14 +155,14 @@ wg.Wait()  // 等当前 reconcile 跑完再退出
 
 ## 镜像构建
 
-controller 镜像统一命名为 `dev-toolkit-controller`，包含三个二进制：`dtk`、`kubectl`、`helm`。**所有项目共用同一镜像，不需要每个项目单独构建。**
+controller 镜像统一命名为 `kubepivot-controller`，包含三个二进制：`kp`、`kubectl`、`helm`。**所有项目共用同一镜像，不需要每个项目单独构建。**
 
 ```bash
 cd ~/dev-toolkit
 docker build --no-cache \
   -f build/docker/controller/Dockerfile \
-  -t your-registry/dev-toolkit-controller:latest .
-docker push your-registry/dev-toolkit-controller:latest
+  -t your-registry/kubepivot-controller:latest .
+docker push your-registry/kubepivot-controller:latest
 ```
 
 ⚠️ 必须加 `--no-cache`，否则代码改动不会进镜像。
@@ -176,10 +176,10 @@ docker push your-registry/dev-toolkit-controller:latest
    ```yaml
    enabled: true
    image:
-     repository: your-registry/dev-toolkit-controller
+     repository: your-registry/kubepivot-controller
      tag: latest
    ```
-3. `dtk deploy`
+3. `kp deploy`
 
 ---
 
@@ -227,5 +227,5 @@ rules:
 | # | 问题 | 状态 |
 |---|------|------|
 | 1 | etcd 断线恢复后重连 | ✅ 已实现指数退避重连 |
-| 2 | controller 和 dtk deploy 并发触发 pending-rollback | ✅ dtk deploy 前置检查自动处理 |
+| 2 | controller 和 kp deploy 并发触发 pending-rollback | ✅ kp deploy 前置检查自动处理 |
 | 3 | controller 层 helm rollback 受 SSA 冲突影响 | 🚧 待补 |

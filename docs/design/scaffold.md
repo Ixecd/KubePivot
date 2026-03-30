@@ -1,13 +1,13 @@
 # 脚手架设计
 
-`dtk init` 的核心是 `internal/scaffold/`，本文说明生成逻辑和关键设计决策。
+`kp init` 的核心是 `internal/scaffold/`，本文说明生成逻辑和关键设计决策。
 
 ---
 
 ## 整体流程
 
 ```
-dtk init --name myapp --module github.com/me/myapp
+kp init --name myapp --module github.com/me/myapp
   │
   ├── 1. 参数校验（name 必须匹配 ^[a-z0-9-]+$）
   ├── 2. resolveTemplateRoot（DTK_TEMPLATE_ROOT 或当前目录）
@@ -125,7 +125,7 @@ sort.Slice(keys, func(i, j int) bool {
 
 ## handoff 目录
 
-`dtk init` 会在 `handoff/` 下生成两个文件：
+`kp init` 会在 `handoff/` 下生成两个文件：
 
 **HANDOFF.md**：写给下一个接手的 Claude，自动填充：当前日期、仓库模块路径、项目名、目录结构、dtk 命令速查、快速访问命令。需要开发者手动填写：架构设计、已知问题、下一步计划。
 

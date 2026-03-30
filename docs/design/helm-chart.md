@@ -1,6 +1,6 @@
-# dtk Helm Chart 设计文档
+# kp Helm Chart 设计文档
 
-> 适用：所有通过 `dtk init` 生成的项目（v1.0.0+）
+> 适用：所有通过 `kp init` 生成的项目（v1.0.0+）
 
 ---
 
@@ -33,7 +33,7 @@ v1.0.0 起从单 chart 改为多 chart，每个服务有独立 release：
 
 ## 目录结构
 
-`dtk init` 生成四个独立 chart 目录：
+`kp init` 生成四个独立 chart 目录：
 
 ```
 deployments/{name}/
@@ -79,13 +79,13 @@ deployments/{name}/
 | `{n}` | `{project}` | Deployment | 用户自定义 | 无 | 8080 |
 | `{n}-controller` | `{project}-controller` | Deployment | 用户自定义 | 无 | - |
 
-**etcd 为什么用 emptyDir**：dtk 场景里 etcd 主要用于分布式锁和状态持久化，重启后业务服务会重新注册，代价可接受。生产环境如需持久化改为 PVC 即可。
+**etcd 为什么用 emptyDir**：kp 场景里 etcd 主要用于分布式锁和状态持久化，重启后业务服务会重新注册，代价可接受。生产环境如需持久化改为 PVC 即可。
 
 ---
 
 ## 启动顺序与依赖
 
-`depends_on`（dtk 层面）控制**部署顺序**，initContainers（K8s 层面）控制**启动顺序**，双重保障：
+`depends_on`（kp 层面）控制**部署顺序**，initContainers（K8s 层面）控制**启动顺序**，双重保障：
 
 ```
 {n}-postgres（先部署）
@@ -142,7 +142,7 @@ readinessProbe:
   periodSeconds: 5
 ```
 
-**业务服务必须实现 `/healthz` 路由**，dtk VALIDATING 阶段依赖此接口，缺少会触发自动回滚。
+**业务服务必须实现 `/healthz` 路由**，kp VALIDATING 阶段依赖此接口，缺少会触发自动回滚。
 
 ---
 
@@ -173,9 +173,9 @@ readinessProbe:
 - `configmap.yaml`：`configs/resources.yaml` 内容通过 `--set-file` 注入
 
 启用步骤：
-1. 构建 controller 镜像（含 dtk + kubectl + helm）
+1. 构建 controller 镜像（含 kp + kubectl + helm）
 2. 填写 `deployments/{n}/{n}-controller/values.yaml` 里的 image 信息
-3. `enabled: true`，`dtk deploy`
+3. `enabled: true`，`kp deploy`
 
 ---
 

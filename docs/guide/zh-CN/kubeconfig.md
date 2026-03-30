@@ -1,6 +1,6 @@
 # 多集群部署指南
 
-`dtk deploy` 支持通过 `--kubeconfig` 和 `--context` 指定目标集群，满足本地开发、staging、生产等多环境部署需求。
+`kp deploy` 支持通过 `--kubeconfig` 和 `--context` 指定目标集群，满足本地开发、staging、生产等多环境部署需求。
 
 ---
 
@@ -37,13 +37,13 @@ current-context: staging
 
 ```bash
 # 用默认 kubeconfig（~/.kube/config），切换到 prod context
-dtk deploy --context prod
+kp deploy --context prod
 
 # 用另一个 kubeconfig 文件，使用它的默认 context
-dtk deploy --kubeconfig ~/.kube/prod.yaml
+kp deploy --kubeconfig ~/.kube/prod.yaml
 
 # 用另一个 kubeconfig 文件，并指定其中某个 context
-dtk deploy --kubeconfig ~/.kube/multi.yaml --context staging
+kp deploy --kubeconfig ~/.kube/multi.yaml --context staging
 ```
 
 ### 写入 project.env（推荐，不用每次带参数）
@@ -56,7 +56,7 @@ KUBE_CONTEXT=prod               # 留空=当前 context
 KUBE_CONFIG=~/.kube/prod.yaml   # 留空=默认 ~/.kube/config
 ```
 
-配置好之后直接 `dtk deploy` 即可，不需要额外参数。
+配置好之后直接 `kp deploy` 即可，不需要额外参数。
 
 ### 优先级
 
@@ -76,10 +76,10 @@ KUBE_CONFIG=~/.kube/prod.yaml   # 留空=默认 ~/.kube/config
 kubectl config get-contexts
 
 # 部署到 prod
-dtk deploy --context prod
+kp deploy --context prod
 
 # 部署到 staging
-dtk deploy --context staging
+kp deploy --context staging
 ```
 
 或者写到 `project.env`，不同环境维护不同的 `project.env`：
@@ -95,10 +95,10 @@ configs/
 
 ```bash
 # staging
-dtk deploy --kubeconfig ~/.kube/staging.yaml
+kp deploy --kubeconfig ~/.kube/staging.yaml
 
 # prod
-dtk deploy --kubeconfig ~/.kube/prod.yaml
+kp deploy --kubeconfig ~/.kube/prod.yaml
 ```
 
 ### 场景三：CI/CD 环境
@@ -130,7 +130,7 @@ KUBE_CONTEXT=""
 **`KUBE_CONFIG` 支持 `~` 展开**
 
 ```ini
-KUBE_CONFIG=~/.kube/prod.yaml  # ✅ dtk 会自动展开为绝对路径
+KUBE_CONFIG=~/.kube/prod.yaml  # ✅ kp 会自动展开为绝对路径
 ```
 
 **切换集群后记得同步 `KUBE_NAMESPACE`**

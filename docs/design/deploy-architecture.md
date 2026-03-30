@@ -1,6 +1,6 @@
 # 部署架构设计
 
-本文说明 `dtk deploy` 的内部设计，以及若干关键决策的原因。
+本文说明 `kp deploy` 的内部设计，以及若干关键决策的原因。
 
 ---
 
@@ -8,7 +8,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│                      dtk deploy                          │  Go CLI
+│                      kp deploy                          │  Go CLI
 │  读配置 → 前置检查 → 状态机 → 拓扑排序 → 逐层部署          │
 └──────────────────┬───────────────────────────────────────┘
                    │
@@ -35,7 +35,7 @@ isMultiService := len(layers) > 1 || (len(layers) == 1 && len(layers[0]) > 1)
 
 ## 前置检查
 
-`dtk deploy` 在执行之前检查：
+`kp deploy` 在执行之前检查：
 
 ```
 1. 依赖检查（docker / kubectl / helm 是否可用）
@@ -52,7 +52,7 @@ isMultiService := len(layers) > 1 || (len(layers) == 1 && len(layers[0]) > 1)
 
 ```
 IDLE / RUNNING / TERMINATED
-      │ dtk deploy
+      │ kp deploy
       ▼
 INITIALIZING → DEPLOYING → VALIDATING → RUNNING
                    ↓              ↓
@@ -61,7 +61,7 @@ INITIALIZING → DEPLOYING → VALIDATING → RUNNING
                CLEANING → IDLE      （首次部署失败，清理 namespace）
 ```
 
-状态持久化到 etcd（优先）或 `~/.dtk/state/<project>/<ns>.json`（降级）。
+状态持久化到 etcd（优先）或 `~/.kp/state/<project>/<ns>.json`（降级）。
 
 ---
 
@@ -87,7 +87,7 @@ for each 层级（同层 goroutine 并行，层间串行）：
     ↓ 级联 rollback 也失败
     整组逆序 rollback（所有已成功部署的 release）
     ↓ 整组也失败
-    dtk down（清理 namespace）
+    kp down（清理 namespace）
 ```
 
 **build/push 只做一次**：失败直接返回，不随 helm 重试而重复执行。
@@ -126,7 +126,7 @@ deploy 失败时检查是否是镜像问题，输出可操作的排查提示：
 
 ## IMAGES 变量的传递（单服务路径）
 
-`dtk deploy` 从 plan 中过滤出有 image 的组件，构建 `IMAGES` 环境变量传给 Makefile：
+`kp deploy` 从 plan 中过滤出有 image 的组件，构建 `IMAGES` 环境变量传给 Makefile：
 
 ```go
 for _, item := range plan {
@@ -176,7 +176,7 @@ deploy.build:
 
 ## components.yaml 与 AI 规划
 
-`internal/planner` 读取 `configs/components.yaml`，`dtk ai-plan` 自动生成：
+`internal/planner` 读取 `configs/components.yaml`，`kp ai-plan` 自动生成：
 
 ```yaml
 components:
@@ -192,7 +192,7 @@ components:
       - etcd
 ```
 
-`dtk ai-plan` 支持 Grok / Claude / OpenAI / 豆包四个 provider，通过 `DTK_LLM_PROVIDER` 和 `DTK_LLM_API_KEY` 配置。详见 [AI 使用手册](../guide/zh-CN/ai.md)。
+`kp ai-plan` 支持 Grok / Claude / OpenAI / 豆包四个 provider，通过 `DTK_LLM_PROVIDER` 和 `DTK_LLM_API_KEY` 配置。详见 [AI 使用手册](../guide/zh-CN/ai.md)。
 
 ---
 
@@ -216,10 +216,10 @@ components:
 
 ## A2 Reconciliation Controller
 
-`dtk deploy` 完成后，controller pod 接管后续自愈：
+`kp deploy` 完成后，controller pod 接管后续自愈：
 
 ```
-dtk deploy（CLI）→ 写状态到 etcd → 返回
+kp deploy（CLI）→ 写状态到 etcd → 返回
                         ↓
 controller（K8s pod，常驻）
     ├── etcd Watch（事件驱动，指数退避重连）

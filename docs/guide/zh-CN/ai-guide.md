@@ -1,4 +1,4 @@
-# dtk AI 使用手册
+# kp AI 使用手册
 
 > 适用：dev-toolkit v0.9.0+
 
@@ -6,12 +6,12 @@
 
 ## 概览
 
-`dtk ai-plan` 扫描你的代码仓库，调用 LLM 分析项目结构，自动生成 `configs/components.yaml`，省去手动填写服务配置的步骤。
+`kp ai-plan` 扫描你的代码仓库，调用 LLM 分析项目结构，自动生成 `configs/components.yaml`，省去手动填写服务配置的步骤。
 
 ```
 代码仓库
   ├── cmd/wallet-service/main.go   ─┐
-  ├── cmd/chain-miner/main.go       ├─→ LLM 分析 → components.yaml → dtk deploy
+  ├── cmd/chain-miner/main.go       ├─→ LLM 分析 → components.yaml → kp deploy
   ├── go.mod                        │
   └── ...                          ─┘
 ```
@@ -26,13 +26,13 @@ export DTK_LLM_PROVIDER=grok
 export DTK_LLM_API_KEY=xai-your-key
 
 # 2. 先看建议，不写入文件
-dtk ai-plan --suggest-only
+kp ai-plan --suggest-only
 
 # 3. 确认无误后写入
-dtk ai-plan
+kp ai-plan
 
 # 4. 部署
-dtk deploy
+kp deploy
 ```
 
 ---
@@ -116,7 +116,7 @@ export DTK_LLM_MODEL=your-model-name
 ## 命令参考
 
 ```bash
-dtk ai-plan [flags]
+kp ai-plan [flags]
 ```
 
 | Flag | 说明 | 默认值 |
@@ -131,7 +131,7 @@ dtk ai-plan [flags]
 
 ## LLM 扫描的内容
 
-`dtk ai-plan` 会自动收集以下信息发给 LLM：
+`kp ai-plan` 会自动收集以下信息发给 LLM：
 
 ```
 项目目录结构（depth 3）
@@ -149,7 +149,7 @@ README.md（前 50 行）
 
 ## LLM 分析输出格式
 
-LLM 输出 JSON，dtk 解析后渲染成 components.yaml：
+LLM 输出 JSON，kp 解析后渲染成 components.yaml：
 
 ```json
 {
@@ -177,7 +177,7 @@ LLM 输出 JSON，dtk 解析后渲染成 components.yaml：
 }
 ```
 
-**image 为空**：LLM 判断为纯 CLI 工具，dtk 会跳过 build/push，只作为规划参考。
+**image 为空**：LLM 判断为纯 CLI 工具，kp 会跳过 build/push，只作为规划参考。
 
 ---
 
@@ -205,7 +205,7 @@ export DTK_LLM_PROVIDER=grok
 export DTK_LLM_API_KEY=xai-xxx
 
 cd ~/web3-blitz
-dtk ai-plan --desc "BTC/ETH 充提币系统，wallet-service 是核心 HTTP 服务，bitcoind 和 geth-rpc 是基础设施不要列进来"
+kp ai-plan --desc "BTC/ETH 充提币系统，wallet-service 是核心 HTTP 服务，bitcoind 和 geth-rpc 是基础设施不要列进来"
 ```
 
 输出：
@@ -233,7 +233,7 @@ dtk ai-plan --desc "BTC/ETH 充提币系统，wallet-service 是核心 HTTP 服�
 
 **LLM 返回的 JSON 解析失败**
 
-LLM 偶尔会在 JSON 外面包 markdown 代码块，dtk 会自动清理。如果还是失败，加 `--suggest-only` 看原始输出，或者换个模型重试。
+LLM 偶尔会在 JSON 外面包 markdown 代码块，kp 会自动清理。如果还是失败，加 `--suggest-only` 看原始输出，或者换个模型重试。
 
 **扫描不到服务**
 
@@ -244,30 +244,30 @@ LLM 偶尔会在 JSON 外面包 markdown 代码块，dtk 会自动清理。如�
 用 `--desc` 明确告诉 LLM：
 
 ```bash
-dtk ai-plan --desc "不要把 postgres、etcd、bitcoind、geth-rpc 列进来，只列业务服务"
+kp ai-plan --desc "不要把 postgres、etcd、bitcoind、geth-rpc 列进来，只列业务服务"
 ```
 
 **port 识别错误**
 
-LLM 是从代码推断端口的，如果识别错了，直接编辑生成的 `configs/components.yaml` 手动修正，然后 `dtk deploy`。
+LLM 是从代码推断端口的，如果识别错了，直接编辑生成的 `configs/components.yaml` 手动修正，然后 `kp deploy`。
 
 ---
 
-## 与 dtk deploy 的关系
+## 与 kp deploy 的关系
 
-`dtk ai-plan` 和 `dtk deploy` 是独立的命令，配合使用：
+`kp ai-plan` 和 `kp deploy` 是独立的命令，配合使用：
 
 ```bash
 # 方式一：先 AI 规划，再部署
-dtk ai-plan
-dtk deploy
+kp ai-plan
+kp deploy
 
 # 方式二：跳过 AI，手动维护 components.yaml
 vim configs/components.yaml
-dtk deploy
+kp deploy
 
 # 方式三：AI 规划完直接部署（写入后立即 deploy）
-dtk ai-plan && dtk deploy
+kp ai-plan && kp deploy
 ```
 
-`dtk deploy` 始终读取 `configs/components.yaml`，不管这个文件是 AI 生成的还是手写的。
+`kp deploy` 始终读取 `configs/components.yaml`，不管这个文件是 AI 生成的还是手写的。

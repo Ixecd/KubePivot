@@ -1,4 +1,4 @@
-# dtk 状态机设计文档
+# kp 状态机设计文档
 
 > 适用：dev-toolkit v0.4.0+
 > 状态：A2 独立 Controller Pod 方案已落地
@@ -7,7 +7,7 @@
 
 ## 设计动机
 
-`dtk deploy` 是一个多步骤、有副作用的长流程操作。任意一步失败或进程被中断，都会留下不确定的中间状态。传统命令式部署难以处理以下场景：
+`kp deploy` 是一个多步骤、有副作用的长流程操作。任意一步失败或进程被中断，都会留下不确定的中间状态。传统命令式部署难以处理以下场景：
 
 - 首次部署失败后 namespace 残留
 - 更新失败后没有自动回滚
@@ -23,7 +23,7 @@
 
 ## 架构（A2 方案）
 
-**核心**：独立 `*-controller` Deployment，运行在集群内部，不依赖 dtk CLI（dtk CLI 执行完即退出）。通过 etcd Watch + 定期 Reconcile 驱动，配置化资源列表。
+**核心**：独立 `*-controller` Deployment，运行在集群内部，不依赖 kp CLI（kp CLI 执行完即退出）。通过 etcd Watch + 定期 Reconcile 驱动，配置化资源列表。
 
 ---
 
@@ -115,9 +115,9 @@ DEPLOYING/VALIDATING → ROLLING_BACK → RUNNING
 
 ## 持久化
 
-**etcd 优先**，key 格式：`dtk/<project>/<namespace>/state`
+**etcd 优先**，key 格式：`kp/<project>/<namespace>/state`
 
-**本地文件降级**：无 etcd 时自动降级到 `~/.dtk/state/<project>/<namespace>.json`
+**本地文件降级**：无 etcd 时自动降级到 `~/.kp/state/<project>/<namespace>.json`
 
 **自动选择**：
 
@@ -180,15 +180,15 @@ mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 
 ## 命令说明
 
-### dtk deploy
+### kp deploy
 
 状态必须为 `IDLE`、`RUNNING` 或 `TERMINATED` 才能发起新部署。内部按拓扑排序多 helm release 部署（多服务），或走 make deploy.full（单服务）。
 
-### dtk resume
+### kp resume
 
 先检查 K8s 实际状态，再决定从哪里继续：服务正常 → 同步 RUNNING；服务不存在 → 从头部署。
 
-### dtk rollback
+### kp rollback
 
 手动触发整组 helm rollback，按拓扑逆序回滚所有 release，状态回到 RUNNING。
 
@@ -196,9 +196,9 @@ mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 
 ## 并发保护
 
-当前状态为 `INITIALIZING`、`DEPLOYING`、`VALIDATING`、`ROLLING_BACK`、`CLEANING` 时，`dtk deploy` 会拒绝执行：
+当前状态为 `INITIALIZING`、`DEPLOYING`、`VALIDATING`、`ROLLING_BACK`、`CLEANING` 时，`kp deploy` 会拒绝执行：
 
 ```
 当前部署状态为 DEPLOYING，不能发起新部署
-如需继续，请运行: dtk resume
+如需继续，请运行: kp resume
 ```
