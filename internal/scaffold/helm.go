@@ -13,7 +13,7 @@ import (
 //
 //	deployments/{name}/
 //	├── {name}-postgres/     # 独立 chart（StatefulSet）
-//	├── {name}-etcd/         # 独立 chart（Deployment）
+//	├── {name}-etcd/         # 独立 chart（StatefulSet）
 //	├── {name}/              # 业务服务 chart（含 initContainers）
 //	└── {name}-controller/   # controller chart
 //
@@ -140,8 +140,7 @@ spec:
 	})
 }
 
-// ── etcd 独立 chart ───────────────────────────────────────────────────────────
-
+// ── etcd 独立 chart（StatefulSet + PVC）────────────────────────────────────────
 func writeEtcdChart(deploymentsDir, name string) error {
 	dir := filepath.Join(deploymentsDir, name+"-etcd", "templates")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -150,21 +149,22 @@ func writeEtcdChart(deploymentsDir, name string) error {
 
 	chartYAML := fmt.Sprintf(`apiVersion: v2
 name: %s-etcd
-description: etcd Deployment for %s
+description: etcd StatefulSet for %s
 type: application
 version: 0.1.0
 appVersion: "v3.5.14"
 dependencies: []
 `, name, name)
 
-	deployment := fmt.Sprintf(`apiVersion: apps/v1
-kind: Deployment
+	statefulset := fmt.Sprintf(`apiVersion: apps/v1
+kind: StatefulSet
 metadata:
   name: %s-etcd
   namespace: {{ .Release.Namespace }}
   labels:
     app: %s-etcd
 spec:
+  serviceName: %s-etcd
   replicas: 1
   selector:
     matchLabels:
@@ -205,10 +205,15 @@ spec:
           volumeMounts:
             - name: etcd-data
               mountPath: /etcd-data
-      volumes:
-        - name: etcd-data
-          emptyDir: {}
-`, name, name, name, name, name)
+  volumeClaimTemplates:
+    - metadata:
+        name: etcd-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.storage }}
+`, name, name, name, name, name, name)
 
 	svc := fmt.Sprintf(`apiVersion: v1
 kind: Service
@@ -228,9 +233,10 @@ spec:
 `, name, name)
 
 	return writeFiles(map[string]string{
-		filepath.Join(deploymentsDir, name+"-etcd", "Chart.yaml"): chartYAML,
-		filepath.Join(dir, "deployment.yaml"):                     deployment,
-		filepath.Join(dir, "service.yaml"):                        svc,
+		filepath.Join(deploymentsDir, name+"-etcd", "Chart.yaml"):  chartYAML,
+		filepath.Join(deploymentsDir, name+"-etcd", "values.yaml"): "storage: 1Gi\n",
+		filepath.Join(dir, "statefulset.yaml"):                     statefulset,
+		filepath.Join(dir, "service.yaml"):                         svc,
 	})
 }
 
@@ -298,6 +304,13 @@ spec:
             - name: http
               containerPort: {{ .Values.service.port }}
               protocol: TCP
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            readOnlyRootFilesystem: {{ .Values.securityContext.readOnlyRootFilesystem }}
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           {{- with .Values.env }}
           env:
             {{- toYaml . | nindent 12 }}
@@ -314,10 +327,8 @@ spec:
               port: {{ .Values.service.port }}
             initialDelaySeconds: 5
             periodSeconds: 5
-          {{- with .Values.resources }}
           resources:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
+            {{- toYaml .Values.resources | nindent 12 }}
 `, name, name, name, name, name, name, name, name)
 
 	svc := fmt.Sprintf(`apiVersion: v1
@@ -342,6 +353,27 @@ metadata:
   namespace: {{ .Release.Namespace }}
 `, name)
 
+	networkPolicy := fmt.Sprintf(`apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: %s
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: %s
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+      ports:
+        - port: {{ .Values.service.port }}
+          protocol: TCP
+`, name, name)
+
 	var vb strings.Builder
 	vb.WriteString("replicaCount: 1\n\n")
 	vb.WriteString("image:\n")
@@ -351,7 +383,15 @@ metadata:
 	vb.WriteString("service:\n")
 	vb.WriteString("  type: ClusterIP\n")
 	vb.WriteString("  port: 8080\n\n")
-	vb.WriteString("resources: {}\n\n")
+	vb.WriteString("resources:\n")
+	vb.WriteString("  requests:\n")
+	vb.WriteString("    cpu: 100m\n")
+	vb.WriteString("    memory: 128Mi\n")
+	vb.WriteString("  limits:\n")
+	vb.WriteString("    cpu: 500m\n")
+	vb.WriteString("    memory: 512Mi\n\n")
+	vb.WriteString("securityContext:\n")
+	vb.WriteString("  readOnlyRootFilesystem: false  # 改为 true 可加强安全，但需确保服务不写本地文件\n\n")
 	vb.WriteString("env:\n")
 	vb.WriteString("  - name: DATABASE_URL\n")
 	vb.WriteString("    value: \"postgres://user:pass@" + name + "-postgres:5432/" + name + "?sslmode=disable&search_path=public\"\n")
@@ -365,6 +405,7 @@ metadata:
 		filepath.Join(dir, "deployment.yaml"):              deployment,
 		filepath.Join(dir, "service.yaml"):                 svc,
 		filepath.Join(dir, "serviceaccount.yaml"):          sa,
+		filepath.Join(dir, "networkpolicy.yaml"):           networkPolicy,
 	})
 }
 
@@ -428,7 +469,7 @@ subjects:
 {{- end }}
 `
 
-	configmap := fmt.Sprintf(`{{- if .Values.enabled }}
+	configmap := `{{- if .Values.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -438,7 +479,7 @@ data:
   resources.yaml: |
 {{ .Values.resourcesConfig | indent 4 }}
 {{- end }}
-`, )
+`
 
 	deployment := fmt.Sprintf(`{{- if .Values.enabled }}
 apiVersion: apps/v1
@@ -493,7 +534,6 @@ spec:
 		filepath.Join(dir, "deployment.yaml"):                            deployment,
 	})
 }
-
 
 // ── 工具函数 ──────────────────────────────────────────────────────────────────
 
