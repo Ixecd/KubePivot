@@ -1,4 +1,4 @@
-# SNAPSHOT — dev-toolkit
+# SNAPSHOT — kubepivot
 
 **里程碑**：今日全部 P0 收官 + CI 修复
 **日期**：2026-03-24

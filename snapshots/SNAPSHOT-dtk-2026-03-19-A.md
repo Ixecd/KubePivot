@@ -1,4 +1,4 @@
-# dev-toolkit 项目快照
+# kubepivot 项目快照
 
 > 用途：新会话开始时直接把这个文件扔给 Claude，5秒对齐，继续工作。
 > 最后更新：2026-03-19
@@ -85,7 +85,7 @@ dtk deploy
 15. **replaceInDir** — 全局替换模块路径+项目名
 16. **replaceInDir(deployments/)** — 单独替换 "project"→name（修复 Helm chart）
 17. **fixChartYAMLs** — 清理 Chart.yaml 的 dependencies 字段
-18. **renameDir** — dev-toolkit→name，（二次兜底）
+18. **renameDir** — kubepivot→name，（二次兜底）
 19. **git init + add + commit** — chore: init project by dtk
 20. **go get** — testify@latest + jwt/v5 + crypto/bcrypt（固定版本避免go版本冲突）
 21. **go mod tidy**

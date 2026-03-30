@@ -1,4 +1,4 @@
-# SNAPSHOT — dev-toolkit
+# SNAPSHOT — kubepivot
 
 **里程碑**：v0.6.0 稳定性全面提升 + 大测试通过
 **日期**：2026-03-27

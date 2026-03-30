@@ -1,4 +1,4 @@
-# SNAPSHOT — dev-toolkit
+# SNAPSHOT — kubepivot
 
 **里程碑**：kubeconfig 支持 + scaffold 拆分 + internal 目录优化
 **日期**：2026-03-24

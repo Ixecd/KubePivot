@@ -1,4 +1,4 @@
-# SNAPSHOT — dev-toolkit
+# SNAPSHOT — kubepivot
 
 **里程碑**：部署状态机完成，15 个单元测试全绿
 **日期**：2026-03-24

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Ixecd/dev-toolkit/internal/ai"
+	"github.com/Ixecd/kubepivot/internal/ai"
 )
 
 func runAIPlan(args []string) {
@@ -129,6 +129,6 @@ func runAIPlan(args []string) {
 	P.Info("✅", "已写入 configs/components.yaml")
 	fmt.Println()
 	P.Info("💡", "下一步：")
-	fmt.Println("  dtk deploy            # 直接用 AI 规划部署")
-	fmt.Println("  dtk deploy --dry-run  # 先预览规划再部署")
+	fmt.Println("  kp deploy            # 直接用 AI 规划部署")
+	fmt.Println("  kp deploy --dry-run  # 先预览规划再部署")
 }

@@ -6,13 +6,13 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/Ixecd/dev-toolkit/internal/planner"
-	"github.com/Ixecd/dev-toolkit/internal/state"
+	"github.com/Ixecd/kubepivot/internal/planner"
+	"github.com/Ixecd/kubepivot/internal/state"
 )
 
 // deployLayers 按拓扑层级部署所有服务
 // 同层并行，层间串行
-// 失败时：重试 3 次 → 级联 rollback → 整组 rollback → dtk down
+// 失败时：重试 3 次 → 级联 rollback → 整组 rollback → kp down
 func deployLayers(sm *state.Machine, cfg *deployConfig, env map[string]string, layers []planner.Layer, root string) error {
 	// secret 存在性检查（只警告，不阻断）
 	checkRequiredSecrets(cfg, root)
@@ -121,12 +121,12 @@ func deployLayers(sm *state.Machine, cfg *deployConfig, env map[string]string, l
 			return fmt.Errorf("部署失败，已整组回滚")
 		}
 
-		// 整组 rollback 也失败 → dtk down
-		P.Info("🧹", "整组回滚失败，执行 dtk down")
+		// 整组 rollback 也失败 → kp down
+		P.Info("🧹", "整组回滚失败，执行 kp down")
 		sm.Transition(state.StateCleaning, "整组回滚失败，执行 down")
 		deleteNamespace(cfg.kubeconfig, cfg.context, cfg.namespace)
 		sm.Transition(state.StateIdle, "已下线")
-		return fmt.Errorf("部署失败且回滚失败，已执行 dtk down")
+		return fmt.Errorf("部署失败且回滚失败，已执行 kp down")
 	}
 
 	return nil
@@ -150,7 +150,7 @@ func deployService(cfg *deployConfig, env map[string]string, plan planner.Plan, 
 
 	// chart 必须存在才能继续
 	if _, err := os.Stat(chartPath); err != nil {
-		return fmt.Errorf("chart 目录不存在：%s\n请运行 dtk init 重新生成项目结构，或手动创建 %s", chartPath, chartPath)
+		return fmt.Errorf("chart 目录不存在：%s\n请运行 kp init 重新生成项目结构，或手动创建 %s", chartPath, chartPath)
 	}
 
 	// ── build + push 只做一次 ─────────────────────────────────────────────────

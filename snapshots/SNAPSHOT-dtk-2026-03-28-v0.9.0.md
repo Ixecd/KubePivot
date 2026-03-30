@@ -1,4 +1,4 @@
-# SNAPSHOT — dev-toolkit
+# SNAPSHOT — kubepivot
 
 **里程碑**：v0.9.0 AI + 体验拉满
 **日期**：2026-03-28

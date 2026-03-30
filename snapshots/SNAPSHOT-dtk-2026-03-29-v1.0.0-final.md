@@ -1,4 +1,4 @@
-# SNAPSHOT — dev-toolkit
+# SNAPSHOT — kubepivot
 
 **里程碑**：v1.0.0 封神 🏆（最终版）
 **日期**：2026-03-29
@@ -17,7 +17,7 @@ deployments/{name}/
 ├── {name}-postgres/     StatefulSet 独立 chart
 ├── {name}-etcd/         Deployment 独立 chart
 ├── {name}/              业务服务 chart
-└── {name}-controller/   controller chart（dev-toolkit-controller）
+└── {name}-controller/   controller chart（kubepivot-controller）
 ```
 
 helm release 命名：`{project}-{service}`
@@ -39,7 +39,7 @@ BuildLayers（Kahn 算法）→ []Layer
 
 ### controller 统一命名
 
-所有项目 controller pod 统一命名 `dev-toolkit-controller`，部署在各自 namespace，共用同一镜像，不需要每个项目单独构建。
+所有项目 controller pod 统一命名 `kubepivot-controller`，部署在各自 namespace，共用同一镜像，不需要每个项目单独构建。
 
 ### e2e 验证
 
@@ -99,7 +99,7 @@ v1.0.0  多服务独立 release + 拓扑排序 + 级联 rollback + 文档  🏆
 
 | # | 任务 |
 |---|------|
-| 1 | 构建 dev-toolkit-controller 镜像，controller 自愈 e2e 验证 |
+| 1 | 构建 kubepivot-controller 镜像，controller 自愈 e2e 验证 |
 | 2 | dtk status 展示每个 release 独立状态 |
 | 3 | controller SSA 冲突处理 |
 | 4 | dtk rollback 打印拓扑逆序进度 |

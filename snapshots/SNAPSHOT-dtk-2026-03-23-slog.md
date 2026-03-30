@@ -1,4 +1,4 @@
-# SNAPSHOT — dev-toolkit
+# SNAPSHOT — kubepivot
 
 **里程碑**：引入 slog 结构化日志
 **日期**：2026-03-23
@@ -16,7 +16,7 @@
 ### 修改
 - `cmd/dtk/main.go`
   - 加 `logger.Init()` 到 `main()` 最顶部
-  - import 加 `github.com/Ixecd/dev-toolkit/internal/logger`
+  - import 加 `github.com/Ixecd/kubepivot/internal/logger`
 
 - `internal/scaffold/init.go`
   - import 加 `"log/slog"`
@@ -27,7 +27,7 @@
 
 ## 设计决策
 
-| 项目 | web3-blitz | dev-toolkit（本次）|
+| 项目 | web3-blitz | kubepivot（本次）|
 |------|-----------|-------------------|
 | 默认格式 | JSON | Text |
 | 写入目标 | stdout | **stderr** |

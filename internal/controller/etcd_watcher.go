@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Ixecd/dev-toolkit/internal/state"
+	"github.com/Ixecd/kubepivot/internal/state"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 

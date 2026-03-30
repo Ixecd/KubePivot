@@ -1,4 +1,4 @@
-# SNAPSHOT — dev-toolkit
+# SNAPSHOT — kubepivot
 
 **里程碑**：v1.3.0 供应链安全 + 镜像防护
 **日期**：2026-03-30

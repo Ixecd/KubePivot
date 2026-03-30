@@ -1,4 +1,4 @@
-# SNAPSHOT — dev-toolkit
+# SNAPSHOT — kubepivot
 
 **里程碑**：体验拉满 + 稳定性修复 + 端到端验证通过
 **日期**：2026-03-27

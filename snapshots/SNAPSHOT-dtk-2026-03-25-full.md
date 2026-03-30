@@ -1,4 +1,4 @@
-# SNAPSHOT — dev-toolkit
+# SNAPSHOT — kubepivot
 
 **里程碑**：今日全部工作汇总
 **日期**：2026-03-25
@@ -46,7 +46,7 @@ wallet-service v0.1.10 正常启动，`1/1 Running`。
 ## 文件变动清单
 
 ```
-dev-toolkit 修改：
+kubepivot 修改：
 - internal/state/state.go          ← 删 k8s 相关，加 EtcdKey/ResumeFromValidating
 - internal/state/detect.go         ← 删除
 - internal/state/resources.go      ← 删除

@@ -1,4 +1,4 @@
-# SNAPSHOT — dev-toolkit
+# SNAPSHOT — kubepivot
 
 **里程碑**：A2 Reconciliation Controller 完成，状态机架构全面升级
 **日期**：2026-03-25

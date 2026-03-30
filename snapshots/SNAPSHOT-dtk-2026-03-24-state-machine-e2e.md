@@ -1,4 +1,4 @@
-# SNAPSHOT — dev-toolkit
+# SNAPSHOT — kubepivot
 
 **里程碑**：部署状态机 e2e 全链路验证通过
 **日期**：2026-03-24
@@ -67,7 +67,7 @@ IDLE → INITIALIZING → DEPLOYING → VALIDATING → ROLLING_BACK → RUNNING
 ## 文件变动清单
 
 ```
-新增（dev-toolkit）：
+新增（kubepivot）：
 - internal/state/state.go
 - internal/state/store.go
 - internal/state/validator.go
@@ -76,7 +76,7 @@ IDLE → INITIALIZING → DEPLOYING → VALIDATING → ROLLING_BACK → RUNNING
 - cmd/dtk/runner.go
 - docs/design/state-machine.md
 
-修改（dev-toolkit）：
+修改（kubepivot）：
 - cmd/dtk/main.go      ← 加 resume/rollback case，printUsage 更新
 - cmd/dtk/main.go      ← scaleDeployment/setDeploymentResources 改用 runOutput
 

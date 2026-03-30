@@ -1,4 +1,4 @@
-# TODO — dev-toolkit 路线图
+# TODO — kubepivot 路线图
 
 > 企业级 Kubernetes 研发脚手架 + 部署运维工具链。
 > 面向：出海业务、中小团队/企业客户、合规强要求场景。
@@ -63,7 +63,7 @@
 
 ### v1.1.0 主体完成
 
-- [x] 构建 `dev-toolkit-controller:v1.0.0` 镜像并推送
+- [x] 构建 `kubepivot-controller:v1.0.0` 镜像并推送
 - [x] web3-blitz controller chart 迁移到独立 chart
 - [x] controller 自愈 e2e 验证（~13s 恢复）
 - [x] controller SSA 冲突处理

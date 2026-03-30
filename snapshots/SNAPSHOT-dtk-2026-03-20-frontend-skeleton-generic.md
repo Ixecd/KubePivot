@@ -1,4 +1,4 @@
-# dev-toolkit 快照 — 前端骨架精简为通用零业务版本
+# kubepivot 快照 — 前端骨架精简为通用零业务版本
 
 > 归档时间：2026-03-20
 > 里程碑：frontend-skeleton-generic — 移除所有业务逻辑，骨架适配任意项目

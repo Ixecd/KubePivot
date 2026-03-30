@@ -1,4 +1,4 @@
-# dev-toolkit 快照 — dtk deploy 端到端打通
+# kubepivot 快照 — dtk deploy 端到端打通
 
 > 归档时间：2026-03-20
 > 里程碑：deploy-e2e — 从一堆 bug 到 `1/1 Running`，血泪史完整记录
@@ -142,7 +142,7 @@ Failed to pull image "nginx:v0.1.0": manifest unknown
 ```
 
 **注意：** 用 `$(firstword $(BINS))` 而不是 `$(PROJECT_NAME)`，
-因为 `PROJECT_NAME=dev-toolkit` 但实际 binary 是 `dtk`，两者可能不同。
+因为 `PROJECT_NAME=kubepivot` 但实际 binary 是 `dtk`，两者可能不同。
 
 ---
 
@@ -150,8 +150,8 @@ Failed to pull image "nginx:v0.1.0": manifest unknown
 
 **现象：**
 ```
-kubectl logs -n dev-toolkit dev-toolkit-xxx
-dtk - dev-toolkit 脚手架
+kubectl logs -n kubepivot kubepivot-xxx
+dtk - kubepivot 脚手架
 
 用法:
   dtk init ...
@@ -232,7 +232,7 @@ KUBE_CONTEXT ?=    # 不能写 ""，真正的空值
 **现象：**
 ```
 NAME                                  READY
-dev-toolkit-project-7f4d9b7dd-57cp2   0/1
+kubepivot-project-7f4d9b7dd-57cp2   0/1
 ```
 
 **原因：** Helm deployment 名由 `{{ .Release.Name }}-{{ .Chart.Name }}` 拼成，
@@ -305,12 +305,12 @@ no required module provides package github.com/Ixecd/web3-blitz/cmd/ok
 ```
 
 **原因：** 模板根 `Makefile` 里 `ROOT_PACKAGE := github.com/Ixecd/web3-blitz`，
-`replaceInDir` 只有 `"github.com/Ixecd/dev-toolkit": module` 这条，
+`replaceInDir` 只有 `"github.com/Ixecd/kubepivot": module` 这条，
 `web3-blitz` 没被替换。
 
 **修法：** 模板 `Makefile` 改成：
 ```makefile
-ROOT_PACKAGE := github.com/Ixecd/dev-toolkit
+ROOT_PACKAGE := github.com/Ixecd/kubepivot
 ```
 `replaceInDir` 就能正确替换了，不需要加额外规则。
 
@@ -327,7 +327,7 @@ KUBECTL_FLAGS := $(if $(strip $(CONTEXT)),--context $(CONTEXT)) --namespace $(NA
 HELM_FLAGS    := $(if $(strip $(CONTEXT)),--kube-context $(CONTEXT))
 
 # image.repository 用 firstword(BINS)，不用 PROJECT_NAME
-# 因为 PROJECT_NAME=dev-toolkit 但 binary 是 dtk，两者可能不同
+# 因为 PROJECT_NAME=kubepivot 但 binary 是 dtk，两者可能不同
 deploy.install:
     $(HELM) upgrade --install $(PROJECT_NAME) $(CHART_DIR) \
         --set image.repository=$(REGISTRY_PREFIX)/$(firstword $(BINS))-$(ARCH) \

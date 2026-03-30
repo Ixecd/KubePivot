@@ -8,7 +8,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/Ixecd/dev-toolkit/internal/state"
+	"github.com/Ixecd/kubepivot/internal/state"
 )
 
 func Start() {

@@ -1,4 +1,4 @@
-# SNAPSHOT — dev-toolkit
+# SNAPSHOT — kubepivot
 
 **里程碑**：v0.8.0 稳到无坑，P0 + P1 全部完成
 **日期**：2026-03-27

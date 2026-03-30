@@ -1,4 +1,4 @@
-# dev-toolkit 快照 — --with-frontend 支持
+# kubepivot 快照 — --with-frontend 支持
 
 > 归档时间：2026-03-20
 > 里程碑：with-frontend — dtk init 支持生成通用前端骨架

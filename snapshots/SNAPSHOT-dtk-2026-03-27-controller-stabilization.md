@@ -1,4 +1,4 @@
-# SNAPSHOT — dev-toolkit
+# SNAPSHOT — kubepivot
 
 **里程碑**：controller 包稳定化 + state 包彻底解耦
 **日期**：2026-03-27

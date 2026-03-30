@@ -485,7 +485,7 @@ func getenv(key, fallback string) string {
 	}
 	return fallback
 }
-`, "github.com/Ixecd/dev-toolkit", name)
+`, "github.com/Ixecd/kubepivot", name)
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 

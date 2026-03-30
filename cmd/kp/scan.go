@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Ixecd/dev-toolkit/internal/planner"
+	"github.com/Ixecd/kubepivot/internal/planner"
 )
 
 // TrivyReport trivy JSON 输出结构

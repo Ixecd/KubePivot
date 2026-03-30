@@ -1,4 +1,4 @@
 components:
-  - name: dtk
+  - name: kp
     port: 8080
     image: ""

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Ixecd/dev-toolkit/internal/planner"
-	"github.com/Ixecd/dev-toolkit/internal/state"
+	"github.com/Ixecd/kubepivot/internal/planner"
+	"github.com/Ixecd/kubepivot/internal/state"
 )
 
 // ── isFirst 判断测试 ──────────────────────────────────────────────────────────

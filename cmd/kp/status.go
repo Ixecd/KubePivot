@@ -10,8 +10,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/Ixecd/dev-toolkit/internal/planner"
-	"github.com/Ixecd/dev-toolkit/internal/state"
+	"github.com/Ixecd/kubepivot/internal/planner"
+	"github.com/Ixecd/kubepivot/internal/state"
 )
 
 func runStatus(args []string) {

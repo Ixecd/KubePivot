@@ -1,4 +1,4 @@
-# SNAPSHOT — dev-toolkit
+# SNAPSHOT — kubepivot
 
 **里程碑**：v1.1.0 主体完成
 **日期**：2026-03-30
@@ -10,12 +10,12 @@
 
 ### controller 镜像统一构建 + e2e 验证
 
-构建 `qingchun22/dev-toolkit-controller:v1.0.0`，所有项目共用：
+构建 `qingchun22/kubepivot-controller:v1.0.0`，所有项目共用：
 
 ```bash
 docker build --no-cache -f build/docker/controller/Dockerfile \
-  -t qingchun22/dev-toolkit-controller:v1.0.0 .
-docker push qingchun22/dev-toolkit-controller:v1.0.0
+  -t qingchun22/kubepivot-controller:v1.0.0 .
+docker push qingchun22/kubepivot-controller:v1.0.0
 ```
 
 web3-blitz 自愈 e2e 验证通过：

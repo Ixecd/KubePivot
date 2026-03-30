@@ -12,7 +12,7 @@ all: tidy gen add-copyright format lint cover build frontend.build
 # ================================================================
 # Build options
 
-ROOT_PACKAGE := github.com/Ixecd/dev-toolkit
+ROOT_PACKAGE := github.com/Ixecd/kubepivot
 
 VERSION_PACKAGE := github.com/Ixecd/component-base/pkg/version
 
@@ -77,11 +77,11 @@ export USAGE_OPTIONS
 build:
 	@$(MAKE) go.build
 
-## install: Install dtk binary to GOPATH/bin or GOBIN.
+## install: Install kp binary to GOPATH/bin or GOBIN.
 .PHONY: install
 install:
-	@echo "===========> Installing dtk"
-	@$(GO) install ./cmd/dtk
+	@echo "===========> Installing kp"
+	@$(GO) install ./cmd/kp
 
 ## build.multiarch: Build source code for multiple platforms.
 .PHONY: build.multiarch

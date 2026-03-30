@@ -1,4 +1,4 @@
-# dev-toolkit 快照 — 监控告警骨架完成
+# kubepivot 快照 — 监控告警骨架完成
 
 > 归档时间：2026-03-20
 > 里程碑：monitoring — metrics + prometheus + alertmanager + grafana 完整骨架

@@ -186,7 +186,7 @@ func checkProjectEnv(root string) checkResult {
 		return checkResult{
 			name: "project.env", ok: false, isError: false,
 			detail: "configs/project.env 不存在",
-			fix:    "运行 dtk init 生成项目，或手动创建 configs/project.env",
+			fix:    "运行 kp init 生成项目，或手动创建 configs/project.env",
 		}
 	}
 	return checkResult{name: "project.env", ok: true, detail: "存在"}
@@ -201,7 +201,7 @@ func checkRegistryPrefix(root string) checkResult {
 	if prefix == "" {
 		return checkResult{
 			name: "REGISTRY_PREFIX", ok: false, isError: true,
-			detail: "未填写，dtk deploy 时 push 镜像会失败",
+			detail: "未填写，kp deploy 时 push 镜像会失败",
 			fix:    "编辑 configs/project.env，填写 REGISTRY_PREFIX=your-dockerhub-username",
 		}
 	}
@@ -272,7 +272,7 @@ func checkTrivy() checkResult {
 			name:    "trivy",
 			ok:      false,
 			isError: false,
-			detail:  "未安装，dtk scan / dtk deploy 扫描功能不可用",
+			detail:  "未安装，kp scan / kp deploy 扫描功能不可用",
 			fix:     "make install.trivy  或  brew install aquasecurity/trivy/trivy",
 		}
 	}

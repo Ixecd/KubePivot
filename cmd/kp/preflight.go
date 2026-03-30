@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/Ixecd/dev-toolkit/internal/state"
+	"github.com/Ixecd/kubepivot/internal/state"
 )
 
 type dep struct {
@@ -16,7 +16,7 @@ type dep struct {
 	installURL string
 }
 
-// deployDeps 是 dtk deploy 依赖的外部工具。
+// deployDeps 是 kp deploy 依赖的外部工具。
 // 按实际调用顺序排列，方便用户一次性看完缺什么。
 var deployDeps = []dep{
 	{"docker", "https://docs.docker.com/engine/install/"},
@@ -92,7 +92,7 @@ func checkHelmReleaseState(cfg *deployConfig, env map[string]string, sm *state.M
 
 func handlePendingRollback(cfg *deployConfig, env map[string]string, sm *state.Machine, releaseName string) error {
 	fmt.Println("⚠️  检测到 helm release 卡在 pending-rollback 状态")
-	fmt.Println("   这通常是 controller 和 dtk deploy 并发操作导致的。")
+	fmt.Println("   这通常是 controller 和 kp deploy 并发操作导致的。")
 	fmt.Println()
 	fmt.Println("   自动清理将执行：")
 	fmt.Println("   1. 删除 pending-rollback secret")

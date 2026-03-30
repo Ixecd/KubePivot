@@ -198,7 +198,7 @@ ETCD_ENDPOINTS=
 	}
 
 	replacements := map[string]string{
-		"github.com/Ixecd/dev-toolkit": module,
+		"github.com/Ixecd/kubepivot": module,
 		"dev-toolkit":                  name,
 	}
 

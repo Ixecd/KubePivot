@@ -11,10 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Ixecd/dev-toolkit/internal/controller"
-	"github.com/Ixecd/dev-toolkit/internal/logger"
-	"github.com/Ixecd/dev-toolkit/internal/planner"
-	"github.com/Ixecd/dev-toolkit/internal/scaffold"
+	"github.com/Ixecd/kubepivot/internal/controller"
+	"github.com/Ixecd/kubepivot/internal/logger"
+	"github.com/Ixecd/kubepivot/internal/planner"
+	"github.com/Ixecd/kubepivot/internal/scaffold"
 )
 
 func expandHome(path string) string {
@@ -77,7 +77,7 @@ func main() {
 		if len(os.Args) > 2 && os.Args[2] == "start" {
 			controller.Start()
 		} else {
-			fmt.Fprintln(os.Stderr, "用法: dtk controller start")
+			fmt.Fprintln(os.Stderr, "用法: kp controller start")
 			os.Exit(1)
 		}
 	default:
@@ -129,29 +129,29 @@ func runInit(args []string) {
 }
 
 func printUsage() {
-	fmt.Fprint(os.Stderr, `dtk - dev-toolkit 脚手架
+	fmt.Fprint(os.Stderr, `kp - kubepivot 脚手架
 
 用法:
-  dtk init     --name <project> --module <module> [--output <dir>] [--template <dir>] [--force]
-  dtk ai-plan  [--suggest-only] [--desc "描述"]   AI 扫描仓库，自动规划组件配置
-  dtk doctor   检查环境依赖
-  dtk deploy   [--components <path>] [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>] [--dry-run]
-  dtk status   [--namespace] [--context] [--kubeconfig] [--history]  查看部署状态
-  dtk history  [-n 20] [--namespace] [--context]   查看部署历史
-  dtk diff     [--from N] [--to M] [--namespace] [--context]   对比两个版本的配置差异
-  dtk down     [--namespace] [--context] [--kubeconfig]   彻底下线服务
-  dtk resume   [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
-  dtk rollback [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
-  dtk release  --version <v1.2.3> [--deploy] [--no-push]
-  dtk scan     [--severity CRITICAL,HIGH] [--image img:tag]   扫描镜像 CVE
-  dtk controller start   （在 controller pod 内部运行，启动 Reconciliation Loop）
+  kp init     --name <project> --module <module> [--output <dir>] [--template <dir>] [--force]
+  kp ai-plan  [--suggest-only] [--desc "描述"]   AI 扫描仓库，自动规划组件配置
+  kp doctor   检查环境依赖
+  kp deploy   [--components <path>] [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>] [--dry-run]
+  kp status   [--namespace] [--context] [--kubeconfig] [--history]  查看部署状态
+  kp history  [-n 20] [--namespace] [--context]   查看部署历史
+  kp diff     [--from N] [--to M] [--namespace] [--context]   对比两个版本的配置差异
+  kp down     [--namespace] [--context] [--kubeconfig]   彻底下线服务
+  kp resume   [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
+  kp rollback [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
+  kp release  --version <v1.2.3> [--deploy] [--no-push]
+  kp scan     [--severity CRITICAL,HIGH] [--image img:tag]   扫描镜像 CVE
+  kp controller start   （在 controller pod 内部运行，启动 Reconciliation Loop）
 
 示例:
-  dtk init --name demo-svc --module github.com/you/demo-svc
-  dtk deploy
-  dtk deploy --kubeconfig ~/.kube/prod.yaml --context prod-cluster
-  dtk resume
-  dtk rollback
+  kp init --name demo-svc --module github.com/you/demo-svc
+  kp deploy
+  kp deploy --kubeconfig ~/.kube/prod.yaml --context prod-cluster
+  kp resume
+  kp rollback
 `)
 }
 

@@ -9,7 +9,7 @@ import (
 	"text/tabwriter"
 	"strings"
 
-	"github.com/Ixecd/dev-toolkit/internal/state"
+	"github.com/Ixecd/kubepivot/internal/state"
 )
 
 func runHistory(args []string) {

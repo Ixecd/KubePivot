@@ -1,4 +1,4 @@
-# SNAPSHOT — dev-toolkit
+# SNAPSHOT — kubepivot
 
 **里程碑**：A2 Controller 代码审查 + state 包解耦重构
 **日期**：2026-03-25

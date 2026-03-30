@@ -1,4 +1,4 @@
-module github.com/Ixecd/dev-toolkit
+module github.com/Ixecd/kubepivot
 
 go 1.25.0
 

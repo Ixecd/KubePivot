@@ -14,10 +14,10 @@ import (
 
 func TestReplaceInDir_SingleReplacement(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "main.go", "package github.com/Ixecd/dev-toolkit")
+	writeFile(t, dir, "main.go", "package github.com/Ixecd/kubepivot")
 
 	err := replaceInDir(dir, map[string]string{
-		"github.com/Ixecd/dev-toolkit": "github.com/me/myapp",
+		"github.com/Ixecd/kubepivot": "github.com/me/myapp",
 	})
 	require.NoError(t, err)
 	assertFileContains(t, dir, "main.go", "github.com/me/myapp")
@@ -26,10 +26,10 @@ func TestReplaceInDir_SingleReplacement(t *testing.T) {
 
 func TestReplaceInDir_MultipleReplacements(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "config.go", "dev-toolkit github.com/Ixecd/dev-toolkit")
+	writeFile(t, dir, "config.go", "dev-toolkit github.com/Ixecd/kubepivot")
 
 	err := replaceInDir(dir, map[string]string{
-		"github.com/Ixecd/dev-toolkit": "github.com/me/myapp",
+		"github.com/Ixecd/kubepivot": "github.com/me/myapp",
 		"dev-toolkit":                  "myapp",
 	})
 	require.NoError(t, err)
@@ -42,10 +42,10 @@ func TestReplaceInDir_MultipleReplacements(t *testing.T) {
 func TestReplaceInDir_NestedFiles(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, filepath.Join("internal", "api", "handler.go"),
-		"import \"github.com/Ixecd/dev-toolkit/internal\"")
+		"import \"github.com/Ixecd/kubepivot/internal\"")
 
 	err := replaceInDir(dir, map[string]string{
-		"github.com/Ixecd/dev-toolkit": "github.com/me/myapp",
+		"github.com/Ixecd/kubepivot": "github.com/me/myapp",
 	})
 	require.NoError(t, err)
 	assertFileContains(t, dir, filepath.Join("internal", "api", "handler.go"),

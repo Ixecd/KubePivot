@@ -1,4 +1,4 @@
-# SNAPSHOT — dev-toolkit
+# SNAPSHOT — kubepivot
 
 **里程碑**：scaffold 完整化 + controller 稳定化 + dtk down + 状态机测试全覆盖
 **日期**：2026-03-27

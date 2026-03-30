@@ -15,7 +15,7 @@ var semverPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
 func runRelease(args []string) {
 	flags := flag.NewFlagSet("release", flag.ExitOnError)
 	version := flags.String("version", "", "版本号，格式：v{major}.{minor}.{patch}，例如 v1.2.3")
-	deploy := flags.Bool("deploy", false, "打完 tag 后自动触发 dtk deploy")
+	deploy := flags.Bool("deploy", false, "打完 tag 后自动触发 kp deploy")
 
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "解析参数失败:", err)

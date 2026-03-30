@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Ixecd/dev-toolkit/internal/controller"
-	"github.com/Ixecd/dev-toolkit/internal/planner"
-	"github.com/Ixecd/dev-toolkit/internal/state"
+	"github.com/Ixecd/kubepivot/internal/controller"
+	"github.com/Ixecd/kubepivot/internal/planner"
+	"github.com/Ixecd/kubepivot/internal/state"
 )
 
 // deployConfig 部署参数
@@ -87,7 +87,7 @@ func runDeploy(args []string) {
 	// 检查当前状态，拒绝重复部署
 	current := sm.State()
 	if current != state.StateIdle && current != state.StateRunning && current != state.StateTerminated {
-		fmt.Fprintf(os.Stderr, "当前部署状态为 %s，不能发起新部署\n如需继续，请运行: dtk resume\n", current)
+		fmt.Fprintf(os.Stderr, "当前部署状态为 %s，不能发起新部署\n如需继续，请运行: kp resume\n", current)
 		os.Exit(1)
 	}
 
