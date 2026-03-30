@@ -35,6 +35,7 @@ func runScan(args []string) {
 	severityFlag := flags.String("severity", "CRITICAL,HIGH", "阻断的严重级别，逗号分隔（CRITICAL/HIGH/MEDIUM/LOW）")
 	imageFlag := flags.String("image", "", "指定单个镜像扫描，留空则扫描所有服务镜像")
 	sbom := flags.Bool("sbom", false, "生成 SBOM 物料清单（CycloneDX 格式）")
+	verify := flags.Bool("verify", false, "验证镜像 cosign 签名（keyless）")
 
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "解析参数失败:", err)
@@ -106,6 +107,14 @@ func runScan(args []string) {
 		P.Info("📋", "生成 SBOM 物料清单（CycloneDX）")
 		for _, image := range images {
 			generateSBOM(image)
+		}
+	}
+
+	if *verify {
+		fmt.Println()
+		P.Info("🔏", "验证镜像签名（keyless）")
+		for _, image := range images {
+			verifySignature(image)
 		}
 	}
 
@@ -194,4 +203,33 @@ func generateSBOM(image string) {
 		return
 	}
 	P.Done(fmt.Sprintf("已输出到 %s", outFile))
+}
+
+func verifySignature(image string) {
+	P.Start("🔏", fmt.Sprintf("验证 %s", image))
+	_, err := runOutput("cosign", "verify",
+		"--certificate-identity-regexp", ".*",
+		"--certificate-oidc-issuer-regexp", ".*",
+		image,
+	)
+	if err != nil {
+		P.Fail(fmt.Sprintf("%s 签名验证失败（未签名或签名无效）", image))
+		return
+	}
+	P.Done(fmt.Sprintf("%s 签名验证通过", image))
+}
+
+func signImage(image string) {
+	if _, err := runOutput("cosign", "version"); err != nil {
+		P.Info("⏭ ", "cosign 未安装，跳过签名")
+		return
+	}
+	P.Start("🔏", fmt.Sprintf("签名 %s（keyless）", image))
+	// keyless 需要交互式 OIDC 登录，CI 环境通过 COSIGN_EXPERIMENTAL=1 自动完成
+	cmd := []string{"cosign", "sign", "--yes", image}
+	if _, err := runOutput(cmd...); err != nil {
+		P.Fail(fmt.Sprintf("签名失败: %v", err))
+		return
+	}
+	P.Done(fmt.Sprintf("%s 签名完成", image))
 }

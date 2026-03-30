@@ -169,7 +169,16 @@ func deployService(cfg *deployConfig, env map[string]string, plan planner.Plan, 
 			P.Fail(fmt.Sprintf("推送 %s 失败", plan.Image))
 			return fmt.Errorf("推送失败: %w", err)
 		}
+
 		P.Done(fmt.Sprintf("推送 %s 完成", plan.Image))
+
+		// cosign 签名
+		if cfg.sign {
+			registryPrefix := envOrDefault(env, "REGISTRY_PREFIX", "")
+			arch := envOrDefault(env, "ARCH", "amd64")
+			fullImage := fmt.Sprintf("%s/%s-%s:%s", registryPrefix, plan.Image, arch, version)
+			signImage(fullImage)
+		}
 	}
 
 	// ── helm upgrade + rollout：最多重试 3 次 ────────────────────────────────

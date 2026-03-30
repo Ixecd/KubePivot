@@ -22,6 +22,7 @@ type deployConfig struct {
 	context    string
 	kubeconfig string
 	dryRun     bool
+	sign       bool
 }
 
 func runDeploy(args []string) {
@@ -37,6 +38,7 @@ func runDeploy(args []string) {
 	flags.StringVar(&cfg.context, "context", "", "kubernetes context")
 	flags.StringVar(&cfg.kubeconfig, "kubeconfig", "", "kubeconfig 文件路径")
 	flags.BoolVar(&cfg.dryRun, "dry-run", false, "print plan only, do not deploy")
+	flags.BoolVar(&cfg.sign, "sign", false, "部署后对镜像进行 cosign keyless 签名")
 
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "解析参数失败:", err)
