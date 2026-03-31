@@ -618,6 +618,72 @@ Step 4/4  升级后健康校验（kubectl rollout status）
 
 ---
 
+### kp pvc
+
+PVC 快照备份与恢复（需要 CSI VolumeSnapshot 支持）。
+
+```bash
+kp pvc backup  --service postgres              # 备份所有 PVC
+kp pvc backup  --service postgres --pvc data-0 # 只备份指定 PVC
+kp pvc backup  --service postgres --snapshot-class csi-hostpath-snapclass
+kp pvc restore --service postgres              # 从最近快照恢复
+kp pvc restore --service postgres --snapshot data-0-snap-1234  # 指定快照
+kp pvc restore --service postgres --force      # 跳过确认
+kp pvc list    --service postgres              # 列出快照
+kp pvc list    --all                           # 所有快照
+```
+
+**前置要求**（运行 `kp doctor` 检查）：
+
+- 集群已安装 VolumeSnapshot CRD
+- 存储类支持 CSI snapshot（`local-path` 不支持）
+- 至少有一个可用的 VolumeSnapshotClass
+
+> **注意**：`kp pvc` 完整功能在 v1.5.1 推出，当前版本已添加环境检查和命令骨架。
+
+---
+
+## kp doctor 新增检查项（v1.5.0）
+
+| 检查项              | 说明                              | 阻断级别                       |
+| ------------------- | --------------------------------- | ------------------------------ |
+| etcdctl             | etcdctl 是否安装                  | warn                           |
+| etcd 连通性         | endpoint health 检查              | error（不可达）                |
+| etcd raft index     | raftIndex - raftAppliedIndex 差值 | warn（>1000），error（>10000） |
+| etcd 磁盘           | DB size / 2GB quota 使用率        | warn（>80%），error（>90%）    |
+| VolumeSnapshot CRD  | CSI snapshot CRD 是否安装         | warn                           |
+| VolumeSnapshotClass | 是否有可用的 snapshot class       | warn                           |
+
+**endpoint 优先级**：`ETCD_ENDPOINTS` 环境变量 > `configs/project.env` 中的 `ETCD_ENDPOINTS`
+
+---
+
+## kp status StatefulSet 详情（v1.5.0）
+
+`kp status` 现在自动展示 `type: statefulset` 组件的 Pod 详情：
+
+```
+StatefulSet 详情：
+  StatefulSet web3-blitz-postgres  期望: 1  就绪: 1  已更新: 1
+  No.   Pod                                OK    Version       Phase
+  ─────────────────────────────────────────────────────────────────
+  0     web3-blitz-postgres-0              Y     16-alpine     Running
+
+  StatefulSet web3-blitz-etcd      期望: 1  就绪: 1  已更新: 1
+  No.   Pod                                OK    Version       Phase
+  ─────────────────────────────────────────────────────────────────
+  0     web3-blitz-etcd-0                  Y     v3.5.14       Running
+```
+
+字段说明：
+
+- `No.`：Pod ordinal（从 pod 名后缀提取）
+- `OK`：Ready condition 是否为 True（Y/N）
+- `Version`：优先从 Pod label `version` 读，其次从镜像 tag 提取；黄色表示旧版本（升级中）
+- `Phase`：Pod 阶段（Running/Pending/Failed）
+
+---
+
 ### kp promote
 
 蓝绿发布流量切换。将 Service selector 从当前活跃 slot 切换到新版本 slot。

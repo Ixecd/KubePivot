@@ -16,13 +16,14 @@
 **KubePivot 把这些全部模板化，并天生内置合规基线。**
 
 `kp init` 一条命令，完整可部署的项目骨架生成完毕，自带：
+
 - Pod Security Context（非 root、只读文件系统）
 - Network Policy（默认拒绝入站）
 - 资源 limits
 - Secret 管理脚本
 - RBAC 最小权限
 
-`kp deploy` 一条命令：CVE 扫描 → AI 规划 → 拓扑排序 → build/push → 多服务独立 helm release → 状态追踪，全自动。
+`kp deploy` 一条命令：迁移兼容性检查 → CVE 扫描 → AI 规划 → 拓扑排序 → build/push → 多服务独立 helm release → 状态追踪，全自动。
 
 ---
 
@@ -43,8 +44,8 @@ cd myapp
 vim configs/project.env   # 填 REGISTRY_PREFIX、KUBE_CONTEXT
 
 # AI 规划服务配置（可选）
-export DTK_LLM_PROVIDER=grok
-export DTK_LLM_API_KEY=xai-xxx
+export KP_LLM_PROVIDER=grok
+export KP_LLM_API_KEY=xai-xxx
 kp ai-plan
 
 # 部署
@@ -55,27 +56,25 @@ kp deploy
 
 ## 命令
 
-| 命令 | 说明 |
-|------|------|
-| `kp init` | 生成完整 Go 项目骨架（含安全基线） |
-| `kp deploy` | CVE 扫描 + 多服务拓扑部署 |
-| `kp scan` | 独立 CVE 扫描（Trivy） |
-| `kp doctor` | 环境检查 + 安全检查 |
-| `kp ai-plan` | AI 扫描仓库，生成 components.yaml |
-| `kp status` | 查看所有 helm release 状态 |
-| `kp rollback` | 拓扑逆序回滚所有服务 |
-| `kp resume` | 从中断点恢复部署 |
-| `kp release` | 打版本 tag，可选触发部署 |
-| `kp down` | 彻底下线，删除所有集群资源 |
-| `kp history` | 查看状态转换历史 |
-| `kp diff` | 对比两个 revision 的 helm values |
-| `kp migrate` | 数据库迁移状态检查 + 破坏性变更分析 |
-| `kp compat`  | API 兼容性检测（oasdiff） |
-| `kp promote` | 蓝绿发布流量切换 |
-| `kp migrate` | DB 迁移状态检查 + 破坏性变更分析 + 执行迁移 |
-| `kp compat`  | API 兼容性检测（oasdiff） |
-| `kp promote` | 蓝绿发布流量切换 |
-| `kp upgrade` | 跨版本全链路升级（DB迁移+部署+健康校验） |
+| 命令          | 说明                                           |
+| ------------- | ---------------------------------------------- |
+| `kp init`     | 生成完整 Go 项目骨架（含安全基线）             |
+| `kp deploy`   | 迁移检查 + CVE 扫描 + 多服务拓扑部署           |
+| `kp upgrade`  | 跨版本全链路升级（DB迁移 + 部署 + 健康校验）   |
+| `kp migrate`  | DB 迁移状态检查 + 破坏性变更分析 + 执行迁移    |
+| `kp compat`   | API 兼容性检测（oasdiff）                      |
+| `kp diff`     | 对比两个 revision 的 helm values（含迁移建议） |
+| `kp promote`  | 蓝绿发布流量切换                               |
+| `kp scan`     | 独立 CVE 扫描（Trivy）                         |
+| `kp doctor`   | 环境检查 + 安全检查 + etcd 健康检查            |
+| `kp ai-plan`  | AI 扫描仓库，生成 components.yaml              |
+| `kp status`   | 查看所有 helm release + StatefulSet pod 详情   |
+| `kp rollback` | 拓扑逆序回滚所有服务                           |
+| `kp resume`   | 从中断点恢复部署                               |
+| `kp release`  | 打版本 tag，可选触发部署                       |
+| `kp down`     | 彻底下线，删除所有集群资源                     |
+| `kp history`  | 查看状态转换历史                               |
+| `kp pvc`      | PVC 快照备份和恢复（需要 CSI，v1.5.1 推出）    |
 
 ---
 
@@ -111,24 +110,27 @@ myapp/
 
 ## 安全基线（开箱即用）
 
-| 特性 | 实现 |
-|------|------|
-| Secret 不进 git | `create-secret.sh` + 部署前自动检查 |
-| Pod 安全 | runAsNonRoot / readOnlyRootFilesystem / allowPrivilegeEscalation=false |
-| 网络隔离 | NetworkPolicy 默认拒绝入站 |
-| 资源限制 | requests + limits 默认值 |
-| RBAC 最小权限 | controller 只授予必要资源 |
-| CVE 扫描 | `kp scan` + `kp deploy` 自动集成 Trivy |
-| 明文密码检测 | `kp doctor` 扫描 values.yaml |
+| 特性            | 实现                                                         |
+| --------------- | ------------------------------------------------------------ |
+| Secret 不进 git | `create-secret.sh` + 部署前自动检查                          |
+| Pod 安全        | runAsNonRoot / readOnlyRootFilesystem / allowPrivilegeEscalation=false |
+| 网络隔离        | NetworkPolicy 默认拒绝入站                                   |
+| 资源限制        | requests + limits 默认值                                     |
+| RBAC 最小权限   | controller 只授予必要资源                                    |
+| CVE 扫描        | `kp scan` + `kp deploy` 自动集成 Trivy                       |
+| 明文密码检测    | `kp doctor` 扫描 values.yaml                                 |
+| DB 迁移安全     | `kp deploy` 前自动检测破坏性变更，阻断部署                   |
 
 ---
 
 ## kp deploy 流程
 
 ```
-CVE 扫描（Trivy）
+迁移兼容性检查（破坏性变更阻断）
     ↓
 Secret 检查（缺失则警告）
+    ↓
+CVE 扫描（Trivy）
     ↓
 BuildLayers（Kahn 拓扑排序）→ []Layer
     ↓
@@ -145,6 +147,29 @@ IDLE → INITIALIZING → DEPLOYING → VALIDATING → RUNNING
                           ↓              ↓
                     ROLLING_BACK ←───────┘
                       CLEANING → IDLE
+```
+
+---
+
+## kp upgrade 跨版本升级
+
+```
+Step 1  全链路兼容性检查
+        1a. DB 迁移风险（破坏性变更阻断）
+        1b. API 兼容性（oasdiff）
+        1c. Helm Values 兼容性
+    ↓
+Step 2  执行 DB 迁移
+    ↓
+Step 3  部署服务
+    ↓
+Step 4  升级后健康校验
+```
+
+```bash
+kp upgrade --dry-run     # 预览所有操作
+kp upgrade               # 执行升级
+kp upgrade --force       # 忽略破坏性变更警告（不推荐）
 ```
 
 ---
@@ -168,23 +193,27 @@ kubepivot-controller（常驻 pod）
 ## AI 规划
 
 ```bash
-export DTK_LLM_PROVIDER=grok      # grok / claude / openai / doubao
-export DTK_LLM_API_KEY=xai-xxx
+export KP_LLM_PROVIDER=grok      # grok / claude / openai / doubao
+export KP_LLM_API_KEY=xai-xxx
 kp ai-plan --suggest-only
 kp ai-plan --desc "BTC/ETH 充提币系统"
 ```
 
-支持 Grok / Claude / OpenAI / 豆包，`DTK_LLM_ENDPOINT` 支持私有化部署。
+支持 Grok / Claude / OpenAI / 豆包，`KP_LLM_ENDPOINT` 支持私有化部署。
 
 ---
 
 ## 版本路线图
 
 ```
-v1.0.0  多服务独立 release + 拓扑排序 + 级联 rollback  🏆
-v1.1.0  controller e2e + status 多 release + rollback 进度
-v1.2.0  安全合规基线（Secret/Pod 安全/NetworkPolicy/doctor 安全检查）
-v1.3.0  供应链安全（Trivy CVE 扫描集成）  ← 当前
+v1.0.0  多服务独立 release + 拓扑排序 + 级联 rollback        🏆
+v1.1.0  controller e2e + status 多 release + rollback 进度   🏆
+v1.2.0  安全合规基线（Secret/Pod 安全/NetworkPolicy/doctor）  🏆
+v1.3.0  供应链安全（Trivy CVE 扫描 + cosign + SBOM）         🏆
+v1.4.0  跨版本迁移（DB迁移感知 + API兼容 + kp upgrade）      🏆
+v1.5.0  StatefulSet 支持（etcd 健康监控 + pod 详情）          🏆  ← 当前
+v1.5.1  PVC 备份恢复（需要 CSI VolumeSnapshot）
+v1.6.0  大规模场景（增量部署 + 并行度控制 + 耗时统计）
 v2.0.0  企业级插件（Vault + 审计日志 + OPA）
 ```
 
@@ -194,13 +223,17 @@ v2.0.0  企业级插件（Vault + 审计日志 + OPA）
 
 - [Quickstart](docs/guide/zh-CN/quickstart.md)
 - [部署指南](docs/guide/zh-CN/deploy.md)
-- [AI 使用手册](docs/guide/zh-CN/ai.md)
+- [AI 使用手册](docs/guide/zh-CN/ai-guide.md)
 - [命令参考](docs/guide/zh-CN/commands.md)
 - [已知坑和注意事项](docs/guide/zh-CN/gotchas.md)
 - [整体架构设计](docs/design/architecture.md)
 - [多服务支持设计](docs/design/multi-service.md)
 - [状态机设计](docs/design/state-machine.md)
 - [A2 Controller 设计](docs/design/controller.md)
+- [数据库迁移设计](docs/design/migrate.md)
+- [API 兼容性设计](docs/design/compat.md)
+- [蓝绿发布设计](docs/design/bluegreen.md)
+- [跨版本升级设计](docs/design/upgrade.md)
 
 ---
 
