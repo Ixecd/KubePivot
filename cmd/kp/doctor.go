@@ -33,8 +33,11 @@ func runDoctor(_ []string) {
 
 	root, err := projectRoot()
 	if err == nil {
+		env, _ := readEnvFile(filepath.Join(root, "configs", "project.env"))
 		results = append(results, checkProjectEnv(root))
 		results = append(results, checkRegistryPrefix(root))
+		etcdResults := checkEtcdAll(root, env)
+		results = append(results, etcdResults...)
 	}
 
 	fmt.Println("环境依赖：")
