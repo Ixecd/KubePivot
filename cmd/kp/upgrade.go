@@ -197,11 +197,7 @@ func runUpgrade(args []string) {
 	// ── Step 4: 部署服务 ──────────────────────────────────────────────────────
 	P.Info("⛵", "Step 3/4 部署服务")
 	deployArgs := []string{}
-	if *service != "" {
-		// 只部署指定服务暂不支持（需要 components.yaml filter），提示用户
-		P.Info("💡", fmt.Sprintf("--service 过滤暂不支持，将部署所有服务（目标版本: %s）", target))
-	}
-	if err := runDeployInternal(deployArgs, root, env); err != nil {
+	if err := runDeployInternal(deployArgs, root, env, *service); err != nil {
 		fmt.Println()
 		P.Fail(fmt.Sprintf("服务部署失败: %v", err))
 		fmt.Printf("%s DB 迁移已执行，请运行 kp rollback 回滚服务\n",
@@ -215,7 +211,7 @@ func runUpgrade(args []string) {
 		P.Info("🔍", "Step 4/4 升级后健康校验")
 		cfg := &deployConfig{}
 		resolveDeployConfig(cfg, env, root)
-		if err := healthCheckAllServices(cfg, root, env); err != nil {
+		if err := healthCheckAllServices(cfg, root, env, *service); err != nil {
 			P.Fail(fmt.Sprintf("健康校验失败: %v", err))
 			fmt.Printf("%s 运行 kp rollback 回滚服务\n", colorize(colorYellow, "💡"))
 			os.Exit(1)
@@ -228,13 +224,27 @@ func runUpgrade(args []string) {
 }
 
 // runDeployInternal 内部调用 deploy 逻辑
-func runDeployInternal(args []string, root string, env map[string]string) error {
+func runDeployInternal(args []string, root string, env map[string]string, serviceFilter string) error {
 	cfg := &deployConfig{}
 	resolveDeployConfig(cfg, env, root)
 
-	plan, err := planner.BuildPlan(filepath.Join(root, "configs/components.yaml"))
+	plans, err := planner.BuildPlan(filepath.Join(root, "configs/components.yaml"))
 	if err != nil {
 		return err
+	}
+
+	// --service 过滤
+	if serviceFilter != "" {
+		var filtered []planner.Plan
+		for _, p := range plans {
+			if p.Name == serviceFilter {
+				filtered = append(filtered, p)
+			}
+		}
+		if len(filtered) == 0 {
+			return fmt.Errorf("未找到服务 %s，请检查 components.yaml", serviceFilter)
+		}
+		plans = filtered
 	}
 
 	store := state.NewAutoStore(env["ETCD_ENDPOINTS"])
@@ -246,17 +256,20 @@ func runDeployInternal(args []string, root string, env map[string]string) error 
 		return err
 	}
 
-	return executeDeploy(sm, cfg, env, plan, root)
+	return executeDeploy(sm, cfg, env, plans, root)
 }
 
 // healthCheckAllServices 检查所有有 image 的服务 /healthz
-func healthCheckAllServices(cfg *deployConfig, root string, env map[string]string) error {
+func healthCheckAllServices(cfg *deployConfig, root string, env map[string]string, serviceFilter string) error {
 	plans, err := planner.BuildPlan(filepath.Join(root, "configs/components.yaml"))
 	if err != nil {
 		return err
 	}
 	for _, p := range plans {
 		if p.Image == "" {
+			continue
+		}
+		if serviceFilter != "" && p.Name != serviceFilter {
 			continue
 		}
 		P.Start("🔍", fmt.Sprintf("检查 %s /healthz", p.Name))
