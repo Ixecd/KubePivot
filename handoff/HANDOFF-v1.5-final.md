@@ -58,7 +58,7 @@ cmd/kp/
 
 ---
 
-## 三、已知 Bug（P1，待修复）
+## 三、已知 Bug（P1，已修复）
 
 ### Bug 1：蓝绿失败后状态机停在 DEPLOYING
 
@@ -97,10 +97,6 @@ kp init 生成的模板已自动满足，存量项目需手动改。
 ---
 
 ## 五、下一步（v1.5.2 → v1.6.0）
-
-**v1.5.2 bug 修复**：
-- 修 Bug 1（蓝绿失败后状态机停在 DEPLOYING）
-- 修 Bug 2（resume IDLE 判断误判）
 
 **v1.5.1（需要 CSI 集群）**：
 - `kp pvc backup/restore/list` 完整验证

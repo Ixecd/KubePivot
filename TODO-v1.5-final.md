@@ -6,8 +6,8 @@
 
 ## 🚨 v1.5.2 — Bug 修复
 
-- [ ] [P1] 蓝绿失败后状态机停在 DEPLOYING（`multi_deploy.go:103` cascadeOK 路径）
-- [ ] [P1] `kp resume` IDLE 判断未检查 Deployment，蓝绿场景误判重新部署
+- [x] [P1] 蓝绿失败后状态机停在 DEPLOYING（`multi_deploy.go:103` cascadeOK 路径）
+- [x] [P1] `kp resume` IDLE 判断未检查 Deployment，蓝绿场景误判重新部署
 - [ ] [P2] `kp upgrade --service` 过滤已实现，待 e2e 验证
 
 ---
