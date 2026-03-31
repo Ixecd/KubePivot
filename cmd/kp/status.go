@@ -80,6 +80,19 @@ func runStatus(args []string) {
 		printHelmStatus(cfg, projectName)
 	} else {
 		printHelmStatusMulti(cfg, projectName, components)
+		// StatefulSet pod 详情展示
+		version = envOrDefault(env, "VERSION", "v0.1.0")
+		hasSTS := false
+		for _, c := range components {
+			if strings.ToLower(c.Type) == "statefulset" {
+				if !hasSTS {
+					fmt.Println()
+					fmt.Println("StatefulSet 详情：")
+					hasSTS = true
+				}
+				printStatefulSetStatus(cfg, c.Name, version)
+			}
+		}
 	}
 
 	// ── 历史记录（--history）─────────────────────────────────

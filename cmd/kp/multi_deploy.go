@@ -221,9 +221,15 @@ func deployService(cfg *deployConfig, env map[string]string, plan planner.Plan, 
 		// rollout status（只有 image 不为空的服务需要等待）
 		if plan.Image != "" {
 			P.Start("🔍", fmt.Sprintf("等待 %s rollout", plan.Name))
+			// 根据类型选择资源种类
+			resourceType := "deployment"
+			if strings.ToLower(plan.Type) == "statefulset" {
+				resourceType = "statefulset"
+			}
+			
 			rolloutArgs := []string{
 				"kubectl", "rollout", "status",
-				fmt.Sprintf("deployment/%s", plan.Name),
+				fmt.Sprintf("%s/%s", resourceType, plan.Name),
 				"--namespace", cfg.namespace,
 				"--timeout=120s",
 			}
@@ -271,9 +277,12 @@ func buildHelmArgs(cfg *deployConfig, release, chartPath string, env map[string]
 		args = append(args,
 			"--set", fmt.Sprintf("image.repository=%s", imageRepo(registryPrefix, plan.Image, arch)),
 			"--set", fmt.Sprintf("image.tag=%s", version),
-			"--set", fmt.Sprintf("replicaCount=%d", plan.Replicas),
 			"--set", fmt.Sprintf("service.port=%d", plan.Port),
 		)
+		// StatefulSet 不通过 helm --set 覆盖 replicas，由 StatefulSet spec 管理
+		if strings.ToLower(plan.Type) != "statefulset" {
+			args = append(args, "--set", fmt.Sprintf("replicaCount=%d", plan.Replicas))
+		}
 	}
 
 	// controller chart 注入 resources.yaml

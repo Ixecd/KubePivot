@@ -32,7 +32,7 @@ func checkRequiredSecrets(cfg *deployConfig, root string) {
 	}
 
 	fmt.Println()
-	P.Info("⚠️ ", fmt.Sprintf("以下 Secret 在 K8s 中不存在，服务可能无法启动："))
+	P.Info("⚠️ ", "以下 Secret 在 K8s 中不存在，服务可能无法启动：")
 	for _, name := range missing {
 		fmt.Printf("    - %s\n", name)
 	}

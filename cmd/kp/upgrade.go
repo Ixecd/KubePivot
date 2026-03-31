@@ -36,7 +36,7 @@ func runUpgrade(args []string) {
 		target = currentVersion
 	}
 
-	P.Info("🚀", fmt.Sprintf("KubePivot 跨版本升级器"))
+	P.Info("🚀", "KubePivot 跨版本升级器")
 	fmt.Printf("  当前版本: %s\n", colorize(colorCyan, currentVersion))
 	fmt.Printf("  目标版本: %s\n", colorize(colorGreen, target))
 	if *service != "" {
