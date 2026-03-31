@@ -124,28 +124,28 @@ func printStatefulSetStatus(cfg *deployConfig, stsName, targetVersion string) {
 	})
 
 	// 4. 打印 pod 列表
-	fmt.Printf("  %-5s %-35s %-8s %-12s %s\n", "序号", "Pod 名称", "就绪", "版本", "状态")
-	fmt.Printf("  %s\n", strings.Repeat("─", 70))
+	fmt.Printf("  %-5s  %-35s  %-4s  %-12s  %s\n", "No.", "Pod", "OK", "Version", "Phase")
+	fmt.Printf("  %s\n", strings.Repeat("─", 65))
 	for _, p := range pods {
-		readyIcon := colorize(colorGreen, "✓")
+		ok := colorize(colorGreen, "Y")
 		if !p.Ready {
-			readyIcon = colorize(colorYellow, "⚠")
+			ok = colorize(colorYellow, "N")
 		}
-
+	
+		// 先计算 plain 宽度，再加颜色，最后手动补空格
 		versionColor := colorGreen
 		if p.Version != targetVersion && targetVersion != "" {
-			versionColor = colorYellow // 旧版本，升级中
+			versionColor = colorYellow
 		}
-
-		fmt.Printf("  %-5d %-35s %-8s %-12s %s\n",
-			p.Ordinal,
-			p.Name,
-			readyIcon,
-			colorize(versionColor, p.Version),
-			p.Phase,
-		)
+		verPad := 12 - len(p.Version)
+		if verPad < 0 {
+			verPad = 0
+		}
+		ver := colorize(versionColor, p.Version) + strings.Repeat(" ", verPad)
+	
+		fmt.Printf("  %-5d  %-35s  %-4s  %s  %s\n",
+			p.Ordinal, p.Name, ok, ver, p.Phase)
 	}
-	fmt.Println()
 }
 
 // extractOrdinal 从 pod 名提取 ordinal
