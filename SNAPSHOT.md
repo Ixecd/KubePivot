@@ -117,5 +117,8 @@ snapshots/
 ├── SNAPSHOT-kp-2026-03-29-v1.0.0-final.md
 ├── SNAPSHOT-kp-2026-03-30-v1.1.0.md
 ├── SNAPSHOT-kp-2026-03-30-v1.2.0.md
-└── SNAPSHOT-kp-2026-03-30-v1.3.0.md
+├── SNAPSHOT-kp-2026-03-30-v1.3.0.md
+└── SNAPSHOT-kubepivot-2026-03-31-v1.4.0
 ```
+
+> 当前：v1.4.0

@@ -513,6 +513,111 @@ kp compat check --base v1.yaml --revision v2.yaml --output-json
 
 ---
 
+### kp migrate run
+
+执行待执行的数据库迁移文件。
+
+```bash
+kp migrate run                          # 执行所有待执行迁移
+kp migrate run --target 5               # 只迁移到版本 5
+kp migrate run --dry-run                # 预览文件名 + 操作摘要
+kp migrate run --dry-run --full-sql     # 预览完整 SQL 内容
+kp migrate run --migrations-dir ./db/migrations
+```
+
+**dry-run 输出**：
+
+```
+迁移文件                              操作摘要
+──────────────────────────────────────────────────────
+000003_add_withdraw_table.up.sql     CREATE TABLE WITHDRAWS; CREATE INDEX
+```
+
+**执行失败时**不会自动 rollback，只打印清晰提示引导用户手动决策：
+
+```
+❌ 数据库迁移失败！
+  版本: 4
+  文件: 000004_drop_legacy_column.up.sql
+  错误: column "email" does not exist
+
+💡 建议操作：
+  1. 检查并修复迁移 SQL
+  2. 如需回滚整个部署，请执行：kp rollback
+```
+
+---
+
+### kp diff --migrate
+
+在 helm values 差异之后追加迁移建议。
+
+```bash
+kp diff --service wallet-service --migrate
+kp diff --service wallet-service --from 1 --to 2 --migrate
+```
+
+输出示例：
+
+```
+对比 web3-blitz-wallet-service revision 6 → 7
+
+  ~ image.tag    v0.1.11 → v0.1.12
+
+── 迁移建议 ──────────────────────────────────────────
+  发现 1 个待执行迁移（版本 3 之后）：
+
+  ❌ 破坏性  版本 4    000004_drop_legacy.up.sql
+    💡 删除列 legacy_col 是不可逆操作，建议先将数据备份到历史表
+
+❌ 包含破坏性迁移，建议先运行 kp migrate plan 确认风险
+💡 确认无误后运行 kp migrate run --dry-run 预览，再执行 kp migrate run
+```
+
+---
+
+### kp upgrade
+
+跨版本全链路升级器。**不是 `kp deploy` 的替代品**，而是跨大版本跃迁时的安全编排器。
+
+```bash
+kp upgrade                          # 全量升级（带完整检查）
+kp upgrade --target v1.4.0          # 升级到指定版本
+kp upgrade --dry-run                # 预览所有操作，不实际执行
+kp upgrade --force                  # 忽略破坏性变更警告（不推荐）
+kp upgrade --no-healthcheck         # 跳过升级后健康校验
+```
+
+**升级流程**：
+
+```
+Step 1/4  全链路兼容性检查
+  1a. DB 迁移风险（复用 kp migrate plan）
+  1b. API 兼容性（引导 kp compat check）
+  1c. Helm Values 兼容性（引导 kp diff --migrate）
+      ↓ 有破坏性变更 → 阻断（--force 可绕过）
+
+Step 2/4  执行 DB 迁移（复用 kp migrate run）
+      ↓ 失败 → 提示 kp rollback，服务不升级
+
+Step 3/4  部署服务（复用 kp deploy 核心逻辑）
+      ↓ 失败 → 提示 kp rollback
+
+Step 4/4  升级后健康校验（kubectl rollout status）
+      ↓ 失败 → 提示 kp rollback
+```
+
+**与 `kp deploy` 的区别**：
+
+| 维度    | `kp deploy`        | `kp upgrade`            |
+| ------- | ------------------ | ----------------------- |
+| 定位    | 日常发版执行器     | 跨版本跃迁编排器        |
+| 频率    | 高频               | 低频                    |
+| 检查    | 基础（Secret/CVE） | 全链路（DB/API/Values） |
+| DB 迁移 | 不执行             | 自动执行                |
+
+---
+
 ### kp promote
 
 蓝绿发布流量切换。将 Service selector 从当前活跃 slot 切换到新版本 slot。

@@ -72,6 +72,10 @@ kp deploy
 | `kp migrate` | 数据库迁移状态检查 + 破坏性变更分析 |
 | `kp compat`  | API 兼容性检测（oasdiff） |
 | `kp promote` | 蓝绿发布流量切换 |
+| `kp migrate` | DB 迁移状态检查 + 破坏性变更分析 + 执行迁移 |
+| `kp compat`  | API 兼容性检测（oasdiff） |
+| `kp promote` | 蓝绿发布流量切换 |
+| `kp upgrade` | 跨版本全链路升级（DB迁移+部署+健康校验） |
 
 ---
 
