@@ -47,6 +47,7 @@ func deployBlueGreen(cfg *deployConfig, env map[string]string, plan planner.Plan
 	helmArgs := buildHelmArgs(cfg, targetRelease, chartPath, env, plan, version)
 	// 加 slot label，方便 Service selector 切换
 	helmArgs = append(helmArgs, "--set", fmt.Sprintf("bluegreen.slot=%s", targetSlot))
+	helmArgs = append(helmArgs, "--set", "bluegreen.skipService=true")
 	if _, err := runOutput(helmArgs...); err != nil {
 		P.Fail(fmt.Sprintf("helm upgrade %s 失败", targetRelease))
 		return fmt.Errorf("蓝绿部署失败: %w", err)
@@ -58,7 +59,7 @@ func deployBlueGreen(cfg *deployConfig, env map[string]string, plan planner.Plan
 		P.Start("🔍", fmt.Sprintf("等待 %s rollout", plan.Name))
 		rolloutArgs := []string{
 			"kubectl", "rollout", "status",
-			fmt.Sprintf("deployment/%s-%s", plan.Name, targetSlot),
+			fmt.Sprintf("deployment/%s", targetRelease),
 			"--namespace", cfg.namespace,
 			"--timeout=120s",
 		}
