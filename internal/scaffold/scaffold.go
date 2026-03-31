@@ -627,7 +627,7 @@ func writeResourcesConfig(outputDir, name string) error {
 	b.WriteString("\n")
 	b.WriteString("  # 示例：监控 StatefulSet\n")
 	b.WriteString("  # - kind: StatefulSet\n")
-	b.WriteString("  #   name: postgres\n")
+	b.WriteString("  #   name: " + name + "-postgres\n")
 	b.WriteString("  #   on-missing: auto-heal\n")
 	b.WriteString("  #   max-retry: 2\n")
 	b.WriteString("  #   fallback: rollback\n")

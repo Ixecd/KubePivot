@@ -100,7 +100,8 @@ func deployLayers(sm *state.Machine, cfg *deployConfig, env map[string]string, l
 		}
 
 		if cascadeOK {
-			sm.Transition(state.StateRunning, fmt.Sprintf("级联回滚完成，失败服务：%v", failed))
+			sm.Transition(state.StateRollingBack, fmt.Sprintf("级联回滚完成，失败服务：%v", failed))
+			sm.Transition(state.StateRunning, "级联回滚成功")
 			return fmt.Errorf("部署失败，已级联回滚：%v", failed)
 		}
 
@@ -125,7 +126,8 @@ func deployLayers(sm *state.Machine, cfg *deployConfig, env map[string]string, l
 		}
 
 		if fullOK {
-			sm.Transition(state.StateRunning, "整组回滚完成")
+			sm.Transition(state.StateRollingBack, "整组回滚完成")
+			sm.Transition(state.StateRunning, "整组回滚成功")
 			return fmt.Errorf("部署失败，已整组回滚")
 		}
 
@@ -226,7 +228,7 @@ func deployService(cfg *deployConfig, env map[string]string, plan planner.Plan, 
 			if strings.ToLower(plan.Type) == "statefulset" {
 				resourceType = "statefulset"
 			}
-			
+
 			rolloutArgs := []string{
 				"kubectl", "rollout", "status",
 				fmt.Sprintf("%s/%s", resourceType, plan.Name),
