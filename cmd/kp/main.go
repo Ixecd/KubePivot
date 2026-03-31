@@ -81,6 +81,8 @@ func main() {
 		runMigrate(os.Args[2:])
 	case "compat":
 		runCompat(os.Args[2:])
+	case "pvc":
+		runPVC(os.Args[2:])
 	case "controller":
 		if len(os.Args) > 2 && os.Args[2] == "start" {
 			controller.Start()
@@ -157,6 +159,7 @@ func printUsage() {
   kp migrate  status [--database-url] [--service] [--migration-tool]  查看 DB 迁移状态
   kp compat   check [--base] [--revision] [--output-json]  检测 API 破坏性变更
   kp migrate  run   [--dry-run] [--full-sql] [--target N]   执行数据库迁移
+  kp pvc      backup/restore/list --service <name>   PVC 快照备份和恢复（需要 CSI） 
   kp controller start   （在 controller pod 内部运行，启动 Reconciliation Loop）
 
 示例:

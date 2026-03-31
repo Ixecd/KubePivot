@@ -37,6 +37,9 @@ func runDoctor(_ []string) {
 		results = append(results, checkProjectEnv(root))
 		results = append(results, checkRegistryPrefix(root))
 		etcdResults := checkEtcdAll(root, env)
+		// VolumeSnapshot 检查（可选，无 CRD 时 warn 不 error）
+		results = append(results, checkVolumeSnapshotCRD())
+		results = append(results, checkVolumeSnapshotClass())
 		results = append(results, etcdResults...)
 	}
 
