@@ -1,6 +1,6 @@
 # 部署指南
 
-`kp deploy` 是 dev-toolkit 的核心命令，封装了从构建镜像到 K8s 滚动更新的完整流程。
+`kp deploy` 是 KubePivot 的核心命令，封装了从构建镜像到 K8s 滚动更新的完整流程。
 
 ---
 
@@ -13,14 +13,26 @@ kp deploy
   ├── 2. 读取 configs/project.env         读取 VERSION / ARCH / REGISTRY_PREFIX
   ├── 3. AI 规划资源                       replicas / cpu / memory / storage
   ├── 4. 过滤 image="" 的组件             CLI 工具不部署，只部署有 image 的服务
-  ├── 5. 组装 IMAGES 环境变量传给 make    kp 负责过滤，make 只管构建
+  ├── 5. 前置检查                          Secret 存在性 / CVE 扫描 / 迁移兼容性
   │
-  └── make deploy.full
-        ├── deploy.build                  docker build（VERSION 不变则跳过）
-        ├── deploy.push                   docker push（VERSION 不变则跳过）
-        ├── deploy.install                helm upgrade --install --wait
-        └── deploy.run.all                kubectl set image + rollout status
+  └── 按拓扑层级部署（同层并行，层间串行）
+        ├── build                         docker build（VERSION 不变则跳过）
+        ├── push                          docker push
+        ├── helm upgrade --install --wait
+        └── rollout status
 ```
+
+---
+
+## 部署前自动检查
+
+`kp deploy` 在实际部署前会自动执行以下检查，有问题时阻断部署：
+
+| 检查项        | 阻断条件                        | 跳过方式                            |
+| ------------- | ------------------------------- | ----------------------------------- |
+| Secret 存在性 | 缺少 secretKeyRef 引用的 Secret | 先运行 `./scripts/create-secret.sh` |
+| CVE 扫描      | 发现 CRITICAL/HIGH 漏洞         | `--severity LOW` 降低阻断级别       |
+| 迁移兼容性    | 待执行迁移含破坏性变更          | `--force-migrate`（不推荐）         |
 
 ---
 
@@ -29,7 +41,7 @@ kp deploy
 **VERSION 是触发重新部署的开关。**
 
 ```
-VERSION 不变 → docker manifest inspect 发现远端已有该 tag
+VERSION 不变 → 本地 docker image inspect 发现已有该 tag
              → 跳过 build 和 push
              → helm 用已有镜像，不更新
 
@@ -39,10 +51,11 @@ VERSION 变了 → 重新 build → push → helm 更新 image tag → 滚动更
 每次发布新版本：
 
 ```bash
-# 编辑 configs/project.env
-VERSION=v0.2.0
+# 推荐方式：用 kp release 自动管理版本
+kp release --version v0.2.0
 
-# 重新部署
+# 或手动编辑 configs/project.env
+VERSION=v0.2.0
 kp deploy
 ```
 
@@ -52,10 +65,14 @@ kp deploy
 
 ```yaml
 components:
-  - name: myapp       # 必须与 cmd/ 下 binary 名一致，也是 deployment 名
-    port: 8080        # 容器端口
-    image: myapp      # 非空 = 参与 build/push/deploy
-                      # 留空或 "" = 跳过，不构建不部署
+  - name: myapp           # 必须与 cmd/ 下 binary 名一致，也是 deployment 名
+    port: 8080            # 容器端口
+    image: myapp          # 非空 = 参与 build/push/deploy
+                          # 留空或 "" = 跳过，不构建不部署
+    strategy: rolling     # rolling（默认）/ blue-green / canary
+    api_version: v1       # 对外 API 版本，用于 kp compat 依赖检查
+    type: deployment      # deployment（默认）/ statefulset
+    depends_on: []        # 依赖的服务名，kp 按依赖顺序部署
 ```
 
 **`image` 为空的使用场景：**
@@ -79,6 +96,7 @@ PROJECT_NAME=myapp          # 项目名，helm release name 和 namespace 默认
 
 REGISTRY_PREFIX=qingchun22  # 镜像前缀，拼出来是 qingchun22/myapp-arm64:v0.1.0
                              # 可以是 Docker Hub username 或 ACR 地址
+                             # ACR 格式：registry.cn-hangzhou.aliyuncs.com/ns（自动跳过 -arch 后缀）
 
 KUBE_CONTEXT=               # kubectl context 名
                              # 留空 = 使用当前 context
@@ -87,45 +105,14 @@ KUBE_CONTEXT=               # kubectl context 名
 KUBE_NAMESPACE=myapp        # K8s namespace，不存在时自动创建
 
 ARCH=arm64                  # 镜像架构，影响 tag 后缀（arm64 / amd64）
+                             # ACR 仓库不需要此后缀，会自动跳过
 
 VERSION=v0.1.0              # 镜像 tag，改这个触发重新 build+push
 ```
 
 ---
 
-## helm upgrade 参数说明
-
-```makefile
-helm upgrade --install $(PROJECT_NAME) $(CHART_DIR) \
-    --set image.repository=$(REGISTRY_PREFIX)/$(firstword $(BINS))-$(ARCH) \
-    --set image.tag=$(VERSION) \
-    --force-conflicts \    # 防止 SSA field manager 冲突
-    --wait \               # 等 pod ready 再返回，确保 rollout 能找到 deployment
-    --timeout 120s
-```
-
-**`--force-conflicts`**：如果曾用 `kubectl set image` 直接改过 deployment，
-Helm SSA 会遇到 field manager 冲突。`--force-conflicts` 强制接管这些字段。
-
-**`--wait`**：Helm 默认异步返回，不加 `--wait` 的话 deployment 还没 ready，
-后续 `kubectl set image` 就会报 `deployments.apps "x" not found`。
-
-**`$(firstword $(BINS))`**：镜像名取自 `cmd/` 目录扫描结果，
-不用 `$(PROJECT_NAME)` 是因为两者可能不同（如 `PROJECT_NAME=kubepivot`，binary 是 `kp`）。
-
----
-
-### 部署前自动检查
-
-`kp deploy` 在实际部署前会自动执行以下检查，有问题时阻断部署：
-
-| 检查项        | 阻断条件                        | 跳过方式                            |
-| ------------- | ------------------------------- | ----------------------------------- |
-| Secret 存在性 | 缺少 secretKeyRef 引用的 Secret | 先运行 `./scripts/create-secret.sh` |
-| CVE 扫描      | 发现 CRITICAL/HIGH 漏洞         | `--severity LOW` 降低阻断级别       |
-| 迁移兼容性    | 待执行迁移含破坏性变更          | `--force-migrate`（不推荐）         |
-
-### 蓝绿发布
+## 蓝绿发布
 
 在 `configs/components.yaml` 里声明：
 
@@ -143,6 +130,16 @@ components:
 - `blue-green`：内置蓝绿，`kp deploy` + `kp promote` 两步完成
 - `canary`：打印提示并调用 `scripts/canary-hook.sh`（用户自实现）
 
+**蓝绿完整流程**：
+
+```bash
+kp deploy                     # 部署新版本到非活跃 slot（不影响线上流量）
+# 验证新版本
+kubectl port-forward deployment/wallet-service-green ...
+kp promote                    # 切换流量
+kp rollback                   # 如有问题，切回旧版本
+```
+
 ---
 
 ## 部署到国内 / 生产环境
@@ -153,7 +150,7 @@ components:
 REGISTRY_PREFIX=registry.cn-hangzhou.aliyuncs.com/yournamespace
 ```
 
-国内推拉不需要代理，速度稳定。
+ACR 格式自动跳过 `-arch` 后缀，镜像名格式为 `registry.cn-xxx/ns/image:tag`。
 
 **多架构镜像：**
 
@@ -199,28 +196,16 @@ kubectl patch deployment myapp -n myapp \
 kubectl exec -n myapp <pod-name> -- wget -qO- http://localhost:8080/healthz
 ```
 
-**`type` 字段（v1.0.0+）：**
-```yaml
-components:
-  - name: postgres
-    type: statefulset    # deployment（默认）/ statefulset
-    port: 5432
-    image: ""
-    depends_on: []       # 依赖的服务名，kp 按依赖顺序部署
+**迁移兼容性检查阻断了部署**
+
 ```
+❌ 发现破坏性 DB 变更，升级终止
 ```
 
-**quickstart.md** — 第五步的输出示例替换为：
-```
-AI 规划结果:
-- myapp: replicas=1 cpu=100m memory=128Mi storage=1Gi
+先运行 `kp migrate plan` 查看具体风险，确认安全后：
 
-[07:52:10] 🏗  构建镜像 myapp（v0.1.0）
-[07:52:18] ✓  构建完成（8.3s）
-[07:52:18] 📤 推送镜像 myapp（v0.1.0）
-[07:52:21] ✓  推送完成（3.1s）
-[07:52:21] ⛵ helm upgrade myapp
-[07:52:30] ✓  helm upgrade 完成（9.2s）
-[07:52:30] 🔍 等待 rollout 就绪
-[07:52:32] ✓  服务就绪（1.8s）
-[07:52:32] ✅ 部署完成，状态: RUNNING (version=v0.1.0)
+```bash
+kp deploy --force-migrate   # 不推荐，除非你确认风险可控
+```
+
+或者先修复迁移文件，再重新部署。

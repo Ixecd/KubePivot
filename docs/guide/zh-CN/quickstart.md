@@ -1,4 +1,4 @@
-# Quickstart — dev-toolkit
+# Quickstart — KubePivot
 
 > 从零到服务跑在 K8s 上，预计 15 分钟。
 
@@ -8,13 +8,13 @@
 
 在开始之前，确认本机已安装：
 
-| 工具 | 最低版本 | 检查命令 |
-|---|---|---|
-| Go | 1.21+ | `go version` |
-| Docker | 任意 | `docker version` |
-| kubectl | 任意 | `kubectl version --client` |
-| helm | 3.x | `helm version` |
-| K8s 集群 | 任意 | `kubectl cluster-info` |
+| 工具     | 最低版本 | 检查命令                   |
+| -------- | -------- | -------------------------- |
+| Go       | 1.21+    | `go version`               |
+| Docker   | 任意     | `docker version`           |
+| kubectl  | 任意     | `kubectl version --client` |
+| helm     | 3.x      | `helm version`             |
+| K8s 集群 | 任意     | `kubectl cluster-info`     |
 
 K8s 集群可以是本地的（OrbStack、Docker Desktop、minikube）或远程集群，只要 `kubectl` 能连上即可。
 
@@ -115,35 +115,15 @@ kp deploy
 AI 规划结果:
 - myapp: replicas=1 cpu=100m memory=128Mi storage=1Gi
 
-===========> Building qingchun22/myapp-arm64:v0.1.0
-===========> Pushing qingchun22/myapp-arm64:v0.1.0
-===========> Installing chart myapp to myapp
-
-NAME: myapp
-STATUS: deployed
-REVISION: 1
-
-NOTES:
-✅ myapp 部署成功！
-
-命名空间: myapp
-版本:     v0.1.0
-时间:     2026-03-27 07:52:21
-
-组件状态:
-  业务服务   ✓ running
-  postgres  ✓ enabled
-  etcd      ✓ enabled
-  controller ✗ disabled
-
-快速访问:
-  kubectl get pods -n myapp
-  kubectl logs -n myapp deployment/myapp
-  kubectl port-forward -n myapp deployment/myapp 8080:8080
-
-===========> Deploying myapp v0.1.0 on arm64
-deployment "myapp" successfully rolled out
-✅ 部署完成，状态: RUNNING (version=v0.1.0)
+[07:52:10] 🏗  构建镜像 myapp（v0.1.0）
+[07:52:18] ✓  构建完成（8.3s）
+[07:52:18] 📤 推送镜像 myapp（v0.1.0）
+[07:52:21] ✓  推送完成（3.1s）
+[07:52:21] ⛵ helm upgrade myapp
+[07:52:30] ✓  helm upgrade 完成（9.2s）
+[07:52:30] 🔍 等待 rollout 就绪
+[07:52:32] ✓  服务就绪（1.8s）
+[07:52:32] ✅ 部署完成，状态: RUNNING (version=v0.1.0)
 ```
 
 验证：
@@ -219,6 +199,14 @@ kp down
 
 # 只看规划，不执行
 kp deploy --dry-run
+
+# 数据库迁移
+kp migrate status
+kp migrate plan
+kp migrate run --dry-run
+
+# 跨版本升级
+kp upgrade --dry-run
 ```
 
 ---
@@ -257,7 +245,7 @@ kp deploy
 
 ```bash
 python3 -c "
-import json
+import json, os
 p=os.path.expanduser('~/.kp/state/myapp/myapp.json')
 d=json.load(open(p))
 d['state']='IDLE'

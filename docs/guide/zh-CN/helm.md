@@ -8,26 +8,28 @@
 
 ```
 deployments/<n>/
-├── <n>-postgres/              # StatefulSet 独立 chart
+├── <n>-postgres/              # StatefulSet + PVC 独立 chart
 │   ├── Chart.yaml
 │   ├── values.yaml            # storage: 1Gi
 │   └── templates/
 │       ├── statefulset.yaml
 │       └── service.yaml
 │
-├── <n>-etcd/                  # Deployment 独立 chart
+├── <n>-etcd/                  # StatefulSet + PVC 独立 chart（v1.2.0+）
 │   ├── Chart.yaml
+│   ├── values.yaml            # storage: 1Gi
 │   └── templates/
-│       ├── deployment.yaml
+│       ├── statefulset.yaml
 │       └── service.yaml
 │
-├── <n>/                       # 业务服务 chart
+├── <n>/                       # 业务服务 chart（含安全基线）
 │   ├── Chart.yaml
 │   ├── values.yaml
 │   └── templates/
-│       ├── deployment.yaml    # 含 initContainers
+│       ├── deployment.yaml    # 含 initContainers + Pod SecurityContext
 │       ├── service.yaml
 │       ├── serviceaccount.yaml
+│       ├── networkpolicy.yaml # 默认拒绝入站（v1.2.0+）
 │       └── NOTES.txt
 │
 └── <n>-controller/            # controller chart（默认 disabled）
@@ -35,11 +37,52 @@ deployments/<n>/
     ├── values.yaml
     └── templates/
         ├── deployment.yaml
-        ├── rbac.yaml
+        ├── rbac.yaml          # 最小权限（v1.2.0+）
         └── configmap.yaml
 ```
 
 每个服务对应独立的 helm release：`{project}-{service}`。
+
+---
+
+## 内置安全基线（v1.2.0+）
+
+`kp init` 生成的业务服务 chart 天生合规：
+
+```yaml
+# deployment.yaml 里自动包含
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  readOnlyRootFilesystem: false  # 改为 true 可加强安全
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+```
+
+NetworkPolicy 默认拒绝入站，只允许同 namespace + 业务端口：
+
+```yaml
+# networkpolicy.yaml
+spec:
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+      ports:
+        - port: {{ .Values.service.port }}
+```
 
 ---
 
@@ -85,11 +128,11 @@ postgres://user:pass@<n>-postgres:5432/<n>?sslmode=disable&search_path=public
 
 ⚠️ **`search_path=public` 不能省略**：pgx v5 驱动连接时会重置 `search_path` 为空，不加这个参数会导致 Go 程序找不到 `public` schema 下的任何表。
 
-### etcd
+### etcd（v1.2.0+ StatefulSet + PVC）
 
 ```yaml
 image: quay.io/coreos/etcd:v3.5.14
-storage: emptyDir（重启后重新注册，代价可接受）
+storage: PVC 1Gi（重启数据持久化）
 probe: GET /health
 service name: <n>-etcd
 ```
@@ -136,7 +179,16 @@ service:
   type: ClusterIP
   port: 8080
 
-resources: {}
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+securityContext:
+  readOnlyRootFilesystem: false  # 改为 true 加强安全，需确保服务不写本地文件
 
 env:
   - name: DATABASE_URL
@@ -149,28 +201,28 @@ env:
 
 ## 自定义配置
 
-### 修改数据库密码
-
-修改 `<n>-postgres/templates/statefulset.yaml` 里的 `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB`，同步修改业务服务 chart `values.yaml` 里的 `DATABASE_URL`。
-
 ### 使用 K8s Secret 管理敏感配置（推荐生产）
 
+`kp init` 已自动生成 `scripts/create-secret.sh`，幂等创建 Secret：
+
 ```bash
-kubectl create secret generic wallet-secrets -n <n> \
-  --from-literal=DATABASE_URL="postgres://user:pass@<n>-postgres:5432/<n>?sslmode=disable&search_path=public" \
-  --from-literal=JWT_SECRET="your-jwt-secret"
+./scripts/create-secret.sh
 ```
+
+Secret 通过 `secretKeyRef` 注入到 pod：
 
 ```yaml
-# values.yaml
-envFrom:
-  - secretRef:
-      name: wallet-secrets
+env:
+  - name: DATABASE_URL
+    valueFrom:
+      secretKeyRef:
+        name: <n>-secret
+        key: DATABASE_URL
 ```
 
-### 增大 postgres 存储
+### 增大 postgres / etcd 存储
 
-修改 `<n>-postgres/values.yaml`：
+修改对应 `values.yaml`：
 
 ```yaml
 storage: 10Gi
@@ -178,13 +230,7 @@ storage: 10Gi
 
 ⚠️ PVC 创建后不能直接修改 storage，需要先扩容 PVC 或重建 StatefulSet。
 
-### etcd 持久化（生产环境）
-
-默认 etcd 用 `emptyDir`，重启后数据丢失（业务服务重新注册即可）。如需持久化，把 `<n>-etcd/templates/deployment.yaml` 改为 StatefulSet + PVC。
-
----
-
-## 不需要 postgres / etcd 的项目
+### 不需要 postgres / etcd 的项目
 
 删掉对应的 chart 目录，同时删掉业务服务 chart `deployment.yaml` 里对应的 initContainer，更新 `components.yaml` 移除该组件的 `depends_on`。
 
@@ -203,7 +249,7 @@ spec:
 
 **wallet-service 卡在 `Init:0/2`**
 
-initContainers 在等 postgres 和 etcd。注意 service name 是 `<n>-postgres` 和 `<n>-etcd`（带项目前缀），老项目迁移时 service name 可能不同，见 [gotchas.md](gotchas.md) 老项目迁移章节。
+initContainers 在等 postgres 和 etcd。注意 service name 是 `<n>-postgres` 和 `<n>-etcd`（带项目前缀）。
 
 ```bash
 kubectl logs -n <n> <pod-name> -c wait-postgres

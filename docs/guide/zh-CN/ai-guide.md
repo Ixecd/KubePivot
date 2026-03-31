@@ -1,6 +1,6 @@
 # kp AI 使用手册
 
-> 适用：dev-toolkit v0.9.0+
+> 适用：KubePivot v0.9.0+
 
 ---
 
@@ -22,8 +22,8 @@
 
 ```bash
 # 1. 配置 LLM provider（以 Grok 为例）
-export DTK_LLM_PROVIDER=grok
-export DTK_LLM_API_KEY=xai-your-key
+export KP_LLM_PROVIDER=grok
+export KP_LLM_API_KEY=xai-your-key
 
 # 2. 先看建议，不写入文件
 kp ai-plan --suggest-only
@@ -39,23 +39,23 @@ kp deploy
 
 ## 支持的 LLM Provider
 
-| Provider | DTK_LLM_PROVIDER | 默认模型 | API 地址 |
-|----------|-----------------|---------|---------|
-| Grok（xAI） | `grok` | `grok-3` | `https://api.x.ai/v1/chat/completions` |
-| Claude（Anthropic） | `claude` | `claude-sonnet-4-20250514` | `https://api.anthropic.com/v1/messages` |
-| OpenAI | `openai` | `gpt-4o` | `https://api.openai.com/v1/chat/completions` |
-| 豆包（字节跳动） | `doubao` | `doubao-pro-32k` | `https://ark.cn-beijing.volces.com/api/v3/chat/completions` |
+| Provider            | KP_LLM_PROVIDER | 默认模型                   | API 地址                                                    |
+| ------------------- | --------------- | -------------------------- | ----------------------------------------------------------- |
+| Grok（xAI）         | `grok`          | `grok-3`                   | `https://api.x.ai/v1/chat/completions`                      |
+| Claude（Anthropic） | `claude`        | `claude-sonnet-4-20250514` | `https://api.anthropic.com/v1/messages`                     |
+| OpenAI              | `openai`        | `gpt-4o`                   | `https://api.openai.com/v1/chat/completions`                |
+| 豆包（字节跳动）    | `doubao`        | `doubao-pro-32k`           | `https://ark.cn-beijing.volces.com/api/v3/chat/completions` |
 
 ---
 
 ## 环境变量
 
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `DTK_LLM_PROVIDER` | LLM provider 名称 | `claude` |
-| `DTK_LLM_API_KEY` | API key，**必填** | - |
-| `DTK_LLM_MODEL` | 模型名，覆盖默认值 | 各 provider 默认 |
-| `DTK_LLM_ENDPOINT` | API 地址，私有化部署时覆盖 | 各 provider 默认 |
+| 变量              | 说明                       | 默认值           |
+| ----------------- | -------------------------- | ---------------- |
+| `KP_LLM_PROVIDER` | LLM provider 名称          | `claude`         |
+| `KP_LLM_API_KEY`  | API key，**必填**          | -                |
+| `KP_LLM_MODEL`    | 模型名，覆盖默认值         | 各 provider 默认 |
+| `KP_LLM_ENDPOINT` | API 地址，私有化部署时覆盖 | 各 provider 默认 |
 
 ---
 
@@ -64,10 +64,10 @@ kp deploy
 ### Grok（推荐，速度快）
 
 ```bash
-export DTK_LLM_PROVIDER=grok
-export DTK_LLM_API_KEY=xai-xxxxxxxxxxxxxxxx
+export KP_LLM_PROVIDER=grok
+export KP_LLM_API_KEY=xai-xxxxxxxxxxxxxxxx
 # 可选：指定模型
-export DTK_LLM_MODEL=grok-3-mini   # 更快更便宜
+export KP_LLM_MODEL=grok-3-mini   # 更快更便宜
 ```
 
 API key 在 [console.x.ai](https://console.x.ai) 获取。
@@ -75,9 +75,9 @@ API key 在 [console.x.ai](https://console.x.ai) 获取。
 ### Claude
 
 ```bash
-export DTK_LLM_PROVIDER=claude
-export DTK_LLM_API_KEY=sk-ant-xxxxxxxxxxxxxxxx
-export DTK_LLM_MODEL=claude-haiku-4-5-20251001   # 更快
+export KP_LLM_PROVIDER=claude
+export KP_LLM_API_KEY=sk-ant-xxxxxxxxxxxxxxxx
+export KP_LLM_MODEL=claude-haiku-4-5-20251001   # 更快
 ```
 
 API key 在 [console.anthropic.com](https://console.anthropic.com) 获取。
@@ -85,30 +85,30 @@ API key 在 [console.anthropic.com](https://console.anthropic.com) 获取。
 ### OpenAI
 
 ```bash
-export DTK_LLM_PROVIDER=openai
-export DTK_LLM_API_KEY=sk-xxxxxxxxxxxxxxxx
-export DTK_LLM_MODEL=gpt-4o-mini   # 更便宜
+export KP_LLM_PROVIDER=openai
+export KP_LLM_API_KEY=sk-xxxxxxxxxxxxxxxx
+export KP_LLM_MODEL=gpt-4o-mini   # 更便宜
 ```
 
 ### 豆包
 
 ```bash
-export DTK_LLM_PROVIDER=doubao
-export DTK_LLM_API_KEY=your-ark-key
-export DTK_LLM_MODEL=doubao-pro-32k
+export KP_LLM_PROVIDER=doubao
+export KP_LLM_API_KEY=your-ark-key
+export KP_LLM_MODEL=doubao-pro-32k
 ```
 
 API key 在[火山引擎控制台](https://console.volcengine.com/ark)获取。
 
 ### 私有化部署
 
-任何 OpenAI 兼容的私有部署都可以通过 `DTK_LLM_ENDPOINT` 接入：
+任何 OpenAI 兼容的私有部署都可以通过 `KP_LLM_ENDPOINT` 接入：
 
 ```bash
-export DTK_LLM_PROVIDER=openai   # 或其他兼容的 provider
-export DTK_LLM_API_KEY=your-key
-export DTK_LLM_ENDPOINT=http://your-private-llm:8080/v1/chat/completions
-export DTK_LLM_MODEL=your-model-name
+export KP_LLM_PROVIDER=openai   # 或其他兼容的 provider
+export KP_LLM_API_KEY=your-key
+export KP_LLM_ENDPOINT=http://your-private-llm:8080/v1/chat/completions
+export KP_LLM_MODEL=your-model-name
 ```
 
 ---
@@ -119,13 +119,13 @@ export DTK_LLM_MODEL=your-model-name
 kp ai-plan [flags]
 ```
 
-| Flag | 说明 | 默认值 |
-|------|------|--------|
-| `--suggest-only` | 只打印建议，不写入 components.yaml | false |
-| `--desc` | 补充描述，帮助 LLM 更准确分析 | 空 |
-| `--namespace` | K8s namespace | 读 project.env |
-| `--context` | kubectl context | 读 project.env |
-| `--kubeconfig` | kubeconfig 路径 | `~/.kube/config` |
+| Flag             | 说明                               | 默认值           |
+| ---------------- | ---------------------------------- | ---------------- |
+| `--suggest-only` | 只打印建议，不写入 components.yaml | false            |
+| `--desc`         | 补充描述，帮助 LLM 更准确分析      | 空               |
+| `--namespace`    | K8s namespace                      | 读 project.env   |
+| `--context`      | kubectl context                    | 读 project.env   |
+| `--kubeconfig`   | kubeconfig 路径                    | `~/.kube/config` |
 
 ---
 
@@ -185,12 +185,12 @@ LLM 输出 JSON，kp 解析后渲染成 components.yaml：
 
 LLM 会按以下原则给出资源建议，你可以在 components.yaml 里手动调整：
 
-| 服务类型 | replicas | cpu | memory |
-|---------|---------|-----|--------|
-| 核心 HTTP 服务（高可用） | 2+ | 200-500m | 256-512Mi |
-| 普通 HTTP 服务 | 1 | 100-200m | 128-256Mi |
-| 后台 worker | 1 | 100m | 128Mi |
-| CLI 工具 | 1 | 100m | 64Mi（image 为空） |
+| 服务类型                 | replicas | cpu      | memory             |
+| ------------------------ | -------- | -------- | ------------------ |
+| 核心 HTTP 服务（高可用） | 2+       | 200-500m | 256-512Mi          |
+| 普通 HTTP 服务           | 1        | 100-200m | 128-256Mi          |
+| 后台 worker              | 1        | 100m     | 128Mi              |
+| CLI 工具                 | 1        | 100m     | 64Mi（image 为空） |
 
 **不会列入 components.yaml 的**：postgres、etcd、bitcoind、geth-rpc 等基础设施组件，这些由 Helm chart 直接管理。
 
@@ -201,8 +201,8 @@ LLM 会按以下原则给出资源建议，你可以在 components.yaml 里手�
 ### web3-blitz（BTC/ETH 充提币系统）
 
 ```bash
-export DTK_LLM_PROVIDER=grok
-export DTK_LLM_API_KEY=xai-xxx
+export KP_LLM_PROVIDER=grok
+export KP_LLM_API_KEY=xai-xxx
 
 cd ~/web3-blitz
 kp ai-plan --desc "BTC/ETH 充提币系统，wallet-service 是核心 HTTP 服务，bitcoind 和 geth-rpc 是基础设施不要列进来"
@@ -223,12 +223,12 @@ kp ai-plan --desc "BTC/ETH 充提币系统，wallet-service 是核心 HTTP 服�
 
 ## 常见问题
 
-**DTK_LLM_API_KEY 未配置**
+**KP_LLM_API_KEY 未配置**
 
 ```
-初始化 LLM 客户端失败: DTK_LLM_API_KEY 未配置
-  export DTK_LLM_API_KEY=your-api-key
-  export DTK_LLM_PROVIDER=grok
+初始化 LLM 客户端失败: KP_LLM_API_KEY 未配置
+  export KP_LLM_API_KEY=your-api-key
+  export KP_LLM_PROVIDER=grok
 ```
 
 **LLM 返回的 JSON 解析失败**
