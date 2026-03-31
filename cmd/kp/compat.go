@@ -68,7 +68,7 @@ func runCompatCheck(args []string) {
 		}
 	}
 
-	P.Info("🔍", fmt.Sprintf("检测 API 兼容性变更"))
+	P.Info("🔍", "检测 API 兼容性变更")
 	fmt.Printf("  基准版本: %s\n", *baseFile)
 	fmt.Printf("  对比版本: %s\n", *revFile)
 	fmt.Println()
