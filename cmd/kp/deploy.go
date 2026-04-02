@@ -24,6 +24,7 @@ type deployConfig struct {
 	dryRun       bool
 	sign         bool
 	forceMigrate bool
+	parallelism  int  // 同层最大并发数，0 表示不限制
 }
 
 func runDeploy(args []string) {
@@ -41,6 +42,7 @@ func runDeploy(args []string) {
 	flags.BoolVar(&cfg.dryRun, "dry-run", false, "print plan only, do not deploy")
 	flags.BoolVar(&cfg.sign, "sign", false, "部署后对镜像进行 cosign keyless 签名")
 	flags.BoolVar(&cfg.forceMigrate, "force-migrate", false, "忽略破坏性迁移警告强制部署（不推荐）")
+	flags.IntVar(&cfg.parallelism, "parallelism", 0, "同层最大并发部署数（0=不限制，建议大规模集群设为 4-8）")
 
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "解析参数失败:", err)

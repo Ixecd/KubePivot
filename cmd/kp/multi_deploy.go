@@ -48,10 +48,19 @@ func deployLayers(sm *state.Machine, cfg *deployConfig, env map[string]string, l
 		results := make(chan result, len(layer))
 		var wg sync.WaitGroup
 
+		// semaphore：parallelism=0 表示不限制，用 len(layer) 作上限
+		sem := cfg.parallelism
+		if sem <= 0 || sem > len(layer) {
+			sem = len(layer)
+		}
+		semCh := make(chan struct{}, sem)
+
 		for _, plan := range layer {
 			wg.Add(1)
 			go func(p planner.Plan) {
 				defer wg.Done()
+				semCh <- struct{}{}        // 获取令牌
+				defer func() { <-semCh }() // 释放令牌
 				err := deployService(cfg, env, p, root, projectName, version)
 				results <- result{name: p.Name, err: err}
 			}(plan)
