@@ -83,6 +83,8 @@ func main() {
 		runCompat(os.Args[2:])
 	case "pvc":
 		runPVC(os.Args[2:])
+	case "secret":
+		runSecret(os.Args[2:])
 	case "controller":
 		if len(os.Args) > 2 && os.Args[2] == "start" {
 			controller.Start()
