@@ -41,6 +41,8 @@ func runDoctor(_ []string) {
 		results = append(results, checkVolumeSnapshotCRD())
 		results = append(results, checkVolumeSnapshotClass())
 		results = append(results, etcdResults...)
+		tlsResults := checkTLSSecretExpiry(env["KUBE_NAMESPACE"])
+		results = append(results, tlsResults...)
 	}
 
 	fmt.Println("环境依赖：")
