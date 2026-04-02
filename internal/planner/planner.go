@@ -3,38 +3,43 @@ package planner
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 // Component 组件定义
 type Component struct {
-	Name       string
-	Type       string   // deployment（默认）/ statefulset
-	Image      string
-	Port       int
-	Replicas   int
-	CPU        string
-	Memory     string
-	Storage    string
-	DependsOn  []string // 依赖的服务名列表
-	Strategy   string   // rolling（默认）/ blue-green / canary
-	APIVersion string   // 服务对外 API 版本，用于 kp compat 依赖检查
+	Name        string
+	Type        string // deployment（默认）/ statefulset
+	Image       string
+	Port        int
+	Replicas    int
+	CPU         string
+	Memory      string
+	Storage     string
+	DependsOn   []string // 依赖的服务名列表
+	Strategy    string   // rolling（默认）/ blue-green / canary
+	APIVersion  string   // 服务对外 API 版本，用于 kp compat 依赖检查
+	Namespace   string
+	CrossNsDeps []string // 跨 namespace 依赖，格式 "other-ns/svc-name"
 }
 
 // Plan 单个组件的部署计划
 type Plan struct {
-	Name       string
-	Type       string
-	Replicas   int
-	CPU        string
-	Memory     string
-	Storage    string
-	Image      string
-	Port       int
-	DependsOn  []string
-	Strategy   string
-	APIVersion string
+	Name        string
+	Type        string
+	Replicas    int
+	CPU         string
+	Memory      string
+	Storage     string
+	Image       string
+	Port        int
+	DependsOn   []string
+	Strategy    string
+	APIVersion  string
+	Namespace   string
+	CrossNsDeps []string
 }
 
 // Layer 拓扑排序后的一层（同层可并行部署）
@@ -53,7 +58,8 @@ type yamlComponents struct {
 		Storage    string   `yaml:"storage"`
 		DependsOn  []string `yaml:"depends_on"`
 		Strategy   string   `yaml:"strategy"`
-		APIVersion string `yaml:"api_version"`
+		APIVersion string   `yaml:"api_version"`
+		Namespace  string   `yaml:"namespace"`
 	} `yaml:"components"`
 }
 
@@ -74,17 +80,28 @@ func LoadComponents(path string) ([]Component, error) {
 		if t == "" {
 			t = "deployment"
 		}
+		var localDeps []string
+		var crossDeps []string
+		for _, dep := range c.DependsOn {
+			if strings.Contains(dep, "/") {
+				crossDeps = append(crossDeps, dep)
+			} else {
+				localDeps = append(localDeps, dep)
+			}
+		}
 		components = append(components, Component{
-			Name:      c.Name,
-			Type:      t,
-			Image:     c.Image,
-			Port:      c.Port,
-			Replicas:  c.Replicas,
-			CPU:       c.CPU,
-			Memory:    c.Memory,
-			Storage:   c.Storage,
-			DependsOn: c.DependsOn,
-			Strategy:  c.Strategy,
+			Name:        c.Name,
+			Type:        t,
+			Image:       c.Image,
+			Port:        c.Port,
+			Replicas:    c.Replicas,
+			CPU:         c.CPU,
+			Memory:      c.Memory,
+			Storage:     c.Storage,
+			Strategy:    c.Strategy,
+			Namespace:   c.Namespace,
+			DependsOn:   localDeps, // 只有同 namespace 的
+			CrossNsDeps: crossDeps, // 跨 namespace 的
 		})
 	}
 	return components, nil
@@ -150,6 +167,8 @@ func BuildLayers(path string) ([]Layer, error) {
 			DependsOn:  c.DependsOn,
 			Strategy:   c.Strategy,
 			APIVersion: c.APIVersion,
+			Namespace:   c.Namespace,
+			CrossNsDeps: c.CrossNsDeps,
 		}
 	}
 

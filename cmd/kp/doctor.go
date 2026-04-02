@@ -50,6 +50,13 @@ func runDoctor(args []string) {
 		results = append(results, checkVolumeSnapshotClass())
 		results = append(results, etcdResults...)
 		tlsResults := checkTLSSecretExpiry(env["KUBE_NAMESPACE"])
+		// 跨 namespace 依赖嗅探
+		cfg := &deployConfig{
+			kubeconfig: *kubeconfig,
+			context:    *context,
+		}
+		crossResults := checkCrossNsDeps(cfg, root)
+		results = append(results, crossResults...)
 		results = append(results, tlsResults...)
 	}
 
@@ -280,13 +287,6 @@ func extractYAMLField(yaml, key string) string {
 		}
 	}
 	return ""
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func checkTrivy() checkResult {
