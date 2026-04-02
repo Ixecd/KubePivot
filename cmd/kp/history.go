@@ -2,12 +2,14 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
-	"text/tabwriter"
 	"strings"
+	"text/tabwriter"
+	"time"
 
 	"github.com/Ixecd/kubepivot/internal/state"
 )
@@ -18,6 +20,7 @@ func runHistory(args []string) {
 	context := flags.String("context", "", "kubernetes context")
 	kubeconfig := flags.String("kubeconfig", "", "kubeconfig 文件路径")
 	limit := flags.Int("n", 20, "显示最近 N 条，0 = 全部")
+	export := flags.String("export", "", "导出格式：json | csv，留空只打印")
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "解析参数失败:", err)
 		os.Exit(1)
@@ -87,10 +90,63 @@ func runHistory(args []string) {
 	}
 	w.Flush()
 
+	// --export 导出
+	if *export != "" {
+		exportHistory(history, *export, projectName, cfg.namespace)
+	}
+
 	if *limit > 0 && start > 0 {
 		fmt.Printf("\n（共 %d 条，显示最近 %d 条，用 -n 0 查看全部）\n",
 			len(sm.Record().History), *limit)
 	} else {
 		fmt.Printf("\n共 %d 条\n", len(history))
 	}
+}
+
+// exportHistory 导出部署历史
+func exportHistory(history []state.Transition, format, projectName, namespace string) {
+	timestamp := time.Now().Format("20060102-150405")
+	filename := fmt.Sprintf("kp-history-%s-%s.%s", projectName, timestamp, format)
+
+	switch format {
+	case "json":
+		data, err := json.MarshalIndent(map[string]interface{}{
+			"project":   projectName,
+			"namespace": namespace,
+			"exported":  time.Now().Format(time.RFC3339),
+			"history":   history,
+		}, "", "  ")
+		if err != nil {
+			P.Fail(fmt.Sprintf("JSON 序列化失败: %v", err))
+			return
+		}
+		if err := os.WriteFile(filename, data, 0o644); err != nil {
+			P.Fail(fmt.Sprintf("写入失败: %v", err))
+			return
+		}
+
+	case "csv":
+		var b strings.Builder
+		b.WriteString("序号,时间,从,到,版本,原因\n")
+		for i, h := range history {
+			b.WriteString(fmt.Sprintf("%d,%s,%s,%s,%s,%s\n",
+				i+1,
+				h.Timestamp.Format("2006-01-02 15:04:05"),
+				h.From,
+				h.To,
+				h.Version,
+				strings.ReplaceAll(h.Reason, ",", "，"), // 转义中文逗号
+			))
+		}
+		if err := os.WriteFile(filename, []byte(b.String()), 0o644); err != nil {
+			P.Fail(fmt.Sprintf("写入失败: %v", err))
+			return
+		}
+
+	default:
+		P.Fail(fmt.Sprintf("不支持的格式：%s（支持 json / csv）", format))
+		return
+	}
+
+	P.Done(fmt.Sprintf("已导出 %d 条记录到 %s", len(history), filename))
 }
