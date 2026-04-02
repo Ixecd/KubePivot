@@ -8,15 +8,31 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Ixecd/kubepivot/internal/planner"
 	"github.com/Ixecd/kubepivot/internal/state"
 )
 
+type deployTiming struct {
+	build   time.Duration
+	push    time.Duration
+	helm    time.Duration
+	rollout time.Duration
+}
+
+type result struct {
+	name   string
+	err    error
+	timing deployTiming
+}
+
 // deployLayers 按拓扑层级部署所有服务
 // 同层并行，层间串行
 // 失败时：重试 3 次 → 级联 rollback → 整组 rollback → kp down
 func deployLayers(sm *state.Machine, cfg *deployConfig, env map[string]string, layers []planner.Layer, root string) error {
+	var allTimings []timingRow
+
 	// secret 存在性检查（只警告，不阻断）
 	checkRequiredSecrets(cfg, root)
 
@@ -41,10 +57,6 @@ func deployLayers(sm *state.Machine, cfg *deployConfig, env map[string]string, l
 		P.Info("📦", fmt.Sprintf("部署第 %d 层（共 %d 层，%d 个服务）",
 			layerIdx+1, len(layers), len(layer)))
 
-		type result struct {
-			name string
-			err  error
-		}
 		results := make(chan result, len(layer))
 		var wg sync.WaitGroup
 
@@ -61,8 +73,8 @@ func deployLayers(sm *state.Machine, cfg *deployConfig, env map[string]string, l
 				defer wg.Done()
 				semCh <- struct{}{}        // 获取令牌
 				defer func() { <-semCh }() // 释放令牌
-				err := deployService(cfg, env, p, root, projectName, version)
-				results <- result{name: p.Name, err: err}
+				t, err := deployService(cfg, env, p, root, projectName, version)
+				results <- result{name: p.Name, err: err, timing: t}
 			}(plan)
 		}
 
@@ -76,6 +88,8 @@ func deployLayers(sm *state.Machine, cfg *deployConfig, env map[string]string, l
 				P.Fail(fmt.Sprintf("%s 部署失败: %v", r.name, r.err))
 				failed = append(failed, r.name)
 			} else {
+				total := r.timing.build + r.timing.push + r.timing.helm + r.timing.rollout
+				allTimings = append(allTimings, timingRow{name: r.name, timing: r.timing, total: total})
 				deployedMu.Lock()
 				deployed = append(deployed, releaseName(projectName, r.name))
 				deployedMu.Unlock()
@@ -148,6 +162,7 @@ func deployLayers(sm *state.Machine, cfg *deployConfig, env map[string]string, l
 		return fmt.Errorf("部署失败且回滚失败，已执行 kp down")
 	}
 
+	printTimingTable(allTimings)
 	return nil
 }
 
@@ -155,7 +170,9 @@ func deployLayers(sm *state.Machine, cfg *deployConfig, env map[string]string, l
 // - chart 不存在：直接报错，不重试
 // - build/push 只做一次
 // - helm upgrade + rollout：最多重试 3 次
-func deployService(cfg *deployConfig, env map[string]string, plan planner.Plan, root, projectName, version string) error {
+func deployService(cfg *deployConfig, env map[string]string, plan planner.Plan, root, projectName, version string) (deployTiming, error) {
+	var t deployTiming
+
 	release := releaseName(projectName, plan.Name)
 	chartPath := filepath.Join(root, "deployments", projectName, plan.Name)
 
@@ -163,18 +180,18 @@ func deployService(cfg *deployConfig, env map[string]string, plan planner.Plan, 
 	if plan.Image == "" {
 		if _, err := os.Stat(chartPath); err != nil {
 			P.Info("⏭ ", fmt.Sprintf("跳过 %s（CLI 工具，无 chart）", plan.Name))
-			return nil
+			return t, nil
 		}
 	}
 
 	// chart 必须存在才能继续
 	if _, err := os.Stat(chartPath); err != nil {
-		return fmt.Errorf("chart 目录不存在：%s\n请运行 kp init 重新生成项目结构，或手动创建 %s", chartPath, chartPath)
+		return t, fmt.Errorf("chart 目录不存在：%s\n请运行 kp init 重新生成项目结构，或手动创建 %s", chartPath, chartPath)
 	}
 
 	// ── 蓝绿发布分支 ──────────────────────────────────────────────────────────
 	if plan.Strategy == "blue-green" {
-		return deployBlueGreen(cfg, env, plan, root, projectName, version, chartPath)
+		return t, deployBlueGreen(cfg, env, plan, root, projectName, version, chartPath)
 	}
 
 	// ── canary 提示（用户自实现） ─────────────────────────────────────────────
@@ -187,20 +204,23 @@ func deployService(cfg *deployConfig, env map[string]string, plan planner.Plan, 
 	if plan.Image != "" {
 		makeEnv := buildMakeEnvForService(env, cfg, plan)
 
+		start := time.Now()
 		P.Start("🏗 ", fmt.Sprintf("构建 %s:%s", plan.Image, version))
 		if err := runCmd(root, makeEnv, "make", "deploy.build"); err != nil {
 			P.Fail(fmt.Sprintf("构建 %s 失败", plan.Image))
-			return fmt.Errorf("构建失败: %w", err)
+			return t, fmt.Errorf("构建失败: %w", err)
 		}
 		P.Done(fmt.Sprintf("构建 %s 完成", plan.Image))
+		t.build = time.Since(start)
 
+		start = time.Now()
 		P.Start("📤", fmt.Sprintf("推送 %s:%s", plan.Image, version))
 		if err := runCmd(root, makeEnv, "make", "deploy.push"); err != nil {
 			P.Fail(fmt.Sprintf("推送 %s 失败", plan.Image))
-			return fmt.Errorf("推送失败: %w", err)
+			return t, fmt.Errorf("推送失败: %w", err)
 		}
-
 		P.Done(fmt.Sprintf("推送 %s 完成", plan.Image))
+		t.push = time.Since(start)
 
 		// cosign 签名
 		if cfg.sign {
@@ -220,6 +240,7 @@ func deployService(cfg *deployConfig, env map[string]string, plan planner.Plan, 
 			P.Info("🔄", fmt.Sprintf("%s 重试第 %d/%d 次", plan.Name, attempt, maxRetry))
 		}
 
+		start := time.Now()
 		P.Start("⛵", fmt.Sprintf("helm upgrade %s", release))
 		helmArgs := buildHelmArgs(cfg, release, chartPath, env, plan, version)
 		if _, err := runOutput(helmArgs...); err != nil {
@@ -228,9 +249,11 @@ func deployService(cfg *deployConfig, env map[string]string, plan planner.Plan, 
 			continue
 		}
 		P.Done(fmt.Sprintf("helm upgrade %s 完成", release))
+		t.helm = time.Since(start)
 
 		// rollout status（只有 image 不为空的服务需要等待）
 		if plan.Image != "" {
+			start := time.Now()
 			P.Start("🔍", fmt.Sprintf("等待 %s rollout", plan.Name))
 			// 根据类型选择资源种类
 			resourceType := "deployment"
@@ -258,12 +281,13 @@ func deployService(cfg *deployConfig, env map[string]string, plan planner.Plan, 
 				continue
 			}
 			P.Done(fmt.Sprintf("%s 就绪", plan.Name))
+			t.rollout = time.Since(start)
 		}
 
-		return nil // 成功
+		return t, nil // 成功
 	}
 
-	return fmt.Errorf("%s 部署失败（重试 %d 次）: %w", plan.Name, maxRetry, lastErr)
+	return t, fmt.Errorf("%s 部署失败（重试 %d 次）: %w", plan.Name, maxRetry, lastErr)
 }
 
 // buildHelmArgs 构建 helm upgrade 参数
