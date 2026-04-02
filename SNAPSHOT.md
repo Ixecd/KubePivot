@@ -1,124 +1,89 @@
-# SNAPSHOT — dev-toolkit
+# KubePivot 当前快照
 
-> 项目整体快照，新会话开始时直接扔给 Claude，5 秒对齐，继续工作。
-> 最后更新：2026-03-30 / v1.3.0
-
----
-
-## 项目定位
-
-**dev-toolkit = 企业级 Kubernetes 研发脚手架 + 部署运维工具链**
-面向：出海业务、中小团队/企业客户、合规强要求场景
-核心价值：让用户零成本获得合规基线
+> 版本：v1.6.0
+> 日期：2026-04-03
+> 状态：✅ 全绿，可发布
 
 ---
 
-## 版本路线图
+## 快速状态
 
 ```
-v1.0.0  多服务独立 release + 拓扑排序 + 级联 rollback  🏆
-v1.1.0  controller e2e + status 多 release + rollback 进度 + init dry-run  ✅
-v1.2.0  安全合规基线（Secret/Pod 安全/Network Policy/doctor 安全检查）  ✅
-v1.3.0  供应链安全（Trivy CVE 扫描）  ✅（主体）
-v2.0.0  企业级插件（Vault + 审计日志 + OPA）
+go test ./... -race  → 全绿
+make dev             → build + test + install 一键完成
+当前 tag             → v1.6.0（待打）
+companion            → github.com/Ixecd/web3-blitz（BTC/ETH 充提币）
 ```
 
 ---
 
-## 命令全览
+## v1.5.2 ~ v1.6.0 新增能力
 
-```
-kp init          --name <n> --module <m> [--with-frontend] [--dry-run]
-kp deploy        [--namespace] [--context] [--dry-run]
-kp scan          [--severity CRITICAL,HIGH] [--image img:tag]
-kp resume        从中断点恢复
-kp rollback      手动整组 helm rollback（拓扑逆序）
-kp release       --version v1.0.0 [--deploy]
-kp down          彻底下线，删除所有资源
-kp status        [--history] 查看部署状态 + 多 release 展示
-kp history       [-n 20] 查看状态转换历史
-kp diff          [--from N] [--to M] 对比版本差异
-kp doctor        检查环境依赖 + 安全检查
-kp ai-plan       [--suggest-only] [--desc] AI 扫描仓库生成 components.yaml
-kp controller start  （controller pod 内部运行）
-```
-
----
-
-## kp init 生成内容（v1.2.0+）
-
-```
-{name}/
-├── cmd/{name}/
-├── internal/api/ auth/ metrics/ db/migrations/
-├── configs/project.env components.yaml resources.yaml
-├── deployments/{name}/
-│   ├── {name}-postgres/     StatefulSet + PVC
-│   ├── {name}-etcd/         StatefulSet + PVC
-│   ├── {name}/              Pod SecurityContext + NetworkPolicy + limits
-│   └── {name}-controller/   RBAC 最小权限
-├── scripts/
-│   └── create-secret.sh     幂等创建 K8s Secret
-├── monitoring/ build/ test/ handoff/ snapshots/
-```
-
----
-
-## 安全特性（v1.2.0+）
-
-| 特性 | 实现方式 |
-|------|---------|
-| Secret 不进 git | `create-secret.sh` + `kp deploy` 前检查 |
-| Pod 安全基线 | `securityContext`（非 root/只读文件系统/降权） |
-| 网络隔离 | `NetworkPolicy`（默认拒绝入站）|
-| 资源限制 | requests + limits 默认值 |
-| RBAC 最小权限 | controller 只授予必要资源 |
-| CVE 扫描 | `kp scan` + `kp deploy` 自动集成 Trivy |
-| 明文密码检测 | `kp doctor` 扫 values.yaml |
-
----
-
-## 测试覆盖
-
-| 包 | 测试数 |
-|---|---|
-| internal/planner | 32 |
-| internal/state | 57 |
-| internal/scaffold | 34 |
-| internal/controller | 20 |
-| **合计** | **143** |
-
----
-
-## 验证项目
-
-- `github.com/Ixecd/e2e`（3层拓扑）
-- `github.com/Ixecd/web3-blitz`（2层拓扑，controller 自愈 + CVE 修复验证）
-
----
-
-## 常用命令
-
+### kp secret
 ```bash
-cd ~/dev-toolkit
-go test ./... -race
-make install
-cd ~/web3-blitz && kp deploy
-kp doctor
-kp scan
+kp secret rotate --secret <n> [--strategy graceful|immediate]
+kp secret cleanup --secret <n>
+kp secret audit
+```
+
+### kp network
+```bash
+kp network gen [--output <dir>]   # 生成跨 ns NetworkPolicy 模板，不自动 apply
+```
+
+### kp deploy 新 flag
+```bash
+kp deploy --parallelism 4         # 同层最大并发数
+kp deploy --changed-only          # 基于 git diff 增量部署
+```
+
+### kp doctor 新检查
+```bash
+kp doctor --perf [--context <ctx>]  # Apiserver P99 延迟 + 并发度建议
+# 新增：helm-diff 检测、TLS 证书过期、跨域嗅探
+```
+
+### kp history
+```bash
+kp history --export json
+kp history --export csv
+```
+
+### 可观测性
+```bash
+LOG_FORMAT=json kp deploy 2>deploy.log   # 结构化 JSON 日志
+LOG_LEVEL=debug kp deploy                # 调试模式
+```
+
+### components.yaml 跨 namespace 依赖
+```yaml
+depends_on:
+  - web3-blitz-postgres          # 同 namespace，参与 DAG
+  - kube-system/coredns          # 跨 namespace，只嗅探
 ```
 
 ---
 
-## 快照归档
+## Controller HA
 
 ```
-snapshots/
-├── SNAPSHOT-kp-2026-03-29-v1.0.0-final.md
-├── SNAPSHOT-kp-2026-03-30-v1.1.0.md
-├── SNAPSHOT-kp-2026-03-30-v1.2.0.md
-├── SNAPSHOT-kp-2026-03-30-v1.3.0.md
-└── SNAPSHOT-kubepivot-2026-03-31-v1.4.0
+kubepivot-controller（多副本）
+  ├── etcd Leader Election（TTL=15s，无 client-go）
+  ├── WorkQueue 三集合去重（queue/dirty/processing）
+  └── RBAC 最小权限（含 leases 读写权）
 ```
 
-> 当前：v1.4.0
+---
+
+## 压测基准（KWOK 500 节点）
+
+```
+Apiserver P50: 288ms  P99: 562ms → 建议 --parallelism=4
+DAG 规划  P50: 10ms   P99: 40ms  → 纯内存计算，不是瓶颈
+```
+
+---
+
+## 下一步
+
+v1.7.0 — 状态漂移治理（SSA FieldManager + force-sync）
