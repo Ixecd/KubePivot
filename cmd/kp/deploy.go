@@ -25,6 +25,7 @@ type deployConfig struct {
 	sign         bool
 	forceMigrate bool
 	parallelism  int  // 同层最大并发数，0 表示不限制
+	changedOnly  bool // 只部署有 git 变更的服务
 }
 
 func runDeploy(args []string) {
@@ -42,6 +43,7 @@ func runDeploy(args []string) {
 	flags.BoolVar(&cfg.dryRun, "dry-run", false, "print plan only, do not deploy")
 	flags.BoolVar(&cfg.sign, "sign", false, "部署后对镜像进行 cosign keyless 签名")
 	flags.BoolVar(&cfg.forceMigrate, "force-migrate", false, "忽略破坏性迁移警告强制部署（不推荐）")
+	flags.BoolVar(&cfg.changedOnly, "changed-only", false, "只部署有 git 变更的服务（基于 git diff HEAD~1 HEAD）")
 	flags.IntVar(&cfg.parallelism, "parallelism", 0, "同层最大并发部署数（0=不限制，建议大规模集群设为 4-8）")
 
 	if err := flags.Parse(args); err != nil {
@@ -314,6 +316,38 @@ func executeDeploy(sm *state.Machine, cfg *deployConfig, env map[string]string, 
 	layers, err := planner.BuildLayers(filepath.Join(root, cfg.components))
 	if err != nil {
 		return fmt.Errorf("构建部署计划失败: %w", err)
+	}
+
+	// --changed-only：只部署有 git 变更的服务
+	if cfg.changedOnly {
+		if !hasGitHistory(root) {
+			P.Info("⚠️ ", "git 历史不足，跳过增量检测，全量部署")
+		} else {
+			// 展平所有 plan 用于变更检测
+			var allPlans []planner.Plan
+			for _, layer := range layers {
+				allPlans = append(allPlans, layer...)
+			}
+			changed, err := detectChangedServices(root, allPlans)
+			if err == nil {
+				printChangedSummary(allPlans, changed)
+				if changed != nil && len(changed) == 0 {
+					P.Info("✅", "无服务变更，跳过部署")
+					return nil
+				}
+				// 过滤 layers
+				if changed != nil {
+					var filteredLayers []planner.Layer
+					for _, layer := range layers {
+						filtered := filterChangedPlans(layer, changed)
+						if len(filtered) > 0 {
+							filteredLayers = append(filteredLayers, filtered)
+						}
+					}
+					layers = filteredLayers
+				}
+			}
+		}
 	}
 
 	// 多服务（多层 或 同层多个服务）走独立 release 路径
