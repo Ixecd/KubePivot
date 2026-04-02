@@ -441,30 +441,45 @@ dependencies: []
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: dev-toolkit-controller
+  name: kubepivot-controller
   namespace: {{ .Release.Namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: dev-toolkit-controller
+  name: kubepivot-controller
 rules:
-  # 当前为全量权限，上线前请按实际需要收紧
-  - apiGroups: ["*"]
-    resources: ["*"]
-    verbs: ["*"]
+  # 核心资源：deployments/statefulsets/pods 自愈用
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "replicasets"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  # Leader Election：leases 读写权
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # helm rollback 用
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+  # 事件记录
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: dev-toolkit-controller
+  name: kubepivot-controller
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: dev-toolkit-controller
+  name: kubepivot-controller
 subjects:
   - kind: ServiceAccount
-    name: dev-toolkit-controller
+    name: kubepivot-controller
     namespace: {{ .Release.Namespace }}
 {{- end }}
 `

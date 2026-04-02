@@ -34,6 +34,7 @@ func runDoctor(args []string) {
 	results = append(results, checkHelm())
 	results = append(results, checkTrivy())
 	results = append(results, checkOasdiff())
+	results = append(results, checkHelmDiff())
 	results = append(results, checkK8sCluster())
 
 	root, err := projectRoot()
@@ -314,4 +315,30 @@ func checkOasdiff() checkResult {
 	}
 	version := strings.TrimSpace(strings.Split(string(out), "\n")[0])
 	return checkResult{name: "oasdiff", ok: true, detail: version}
+}
+
+func checkHelmDiff() checkResult {
+	out, err := exec.Command("helm", "plugin", "list").Output()
+	if err != nil {
+		return checkResult{
+			name:    "helm-diff",
+			ok:      false,
+			isError: false,
+			detail:  "查询 helm 插件失败",
+		}
+	}
+	if strings.Contains(string(out), "diff") {
+		return checkResult{
+			name:   "helm-diff",
+			ok:     true,
+			detail: "已安装",
+		}
+	}
+	return checkResult{
+		name:    "helm-diff",
+		ok:      false,
+		isError: false,
+		detail:  "未安装，kp diff --drift 不可用",
+		fix:     "helm plugin install https://github.com/databus23/helm-diff",
+	}
 }

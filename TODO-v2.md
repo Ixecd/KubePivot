@@ -21,12 +21,12 @@
 ## 🚨 v1.6.0 — Controller 高可用 + 大规模场景
 
 ### Controller 高可用（P0）
-- [ ] Leader Election：`client-go/leaderelection` + K8s `Leases` 资源
-- [ ] Controller 支持多副本（`replicas: 3`），任意节点故障不影响自愈
-- [ ] WorkQueue + Rate Limiter：`workqueue.NewRateLimitingQueue` 防事件风暴
-- [ ] Event Aggregation：大规模变更时聚合同类事件，防 Controller 死循环
-- [ ] `kp doctor` 深度检查 Controller 存活 + RBAC（含 `leases` 读写权）
-- [ ] `kp doctor --perf`：测 Apiserver P99 延迟，高延迟时自动降低 `--parallelism`
+- [x] Leader Election：`client-go/leaderelection` + K8s `Leases` 资源
+- [x] Controller 支持多副本（`replicas: 3`），任意节点故障不影响自愈
+- [x] WorkQueue + Rate Limiter：`workqueue.NewRateLimitingQueue` 防事件风暴
+- [x] Event Aggregation：大规模变更时聚合同类事件，防 Controller 死循环
+- [x] `kp doctor` 深度检查 Controller 存活 + RBAC（含 `leases` 读写权）
+- [x] `kp doctor --perf`：测 Apiserver P99 延迟，高延迟时自动降低 `--parallelism`
 - [ ] `kp doctor` 加 `helm-diff` 插件检测
 - [ ] Controller RBAC 模板自动补全 `leases` 权限（`kp init` 更新）
 
