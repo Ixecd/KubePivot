@@ -16,13 +16,13 @@ type Reconciler struct {
 	resources  *ResourcesConfig
 	detector   Detector
 	helm       HelmClient
+	queue      *ReconcileQueue
 }
 
 func NewReconciler(sm *state.Machine, kubeconfig string) *Reconciler {
 	resources, err := LoadResources("")
 	if err != nil {
 		slog.Error("加载 configs/resources.yaml 失败", "err", err)
-		// 降级：空配置，不监控任何资源
 		resources = &ResourcesConfig{}
 	}
 	return &Reconciler{
@@ -31,6 +31,7 @@ func NewReconciler(sm *state.Machine, kubeconfig string) *Reconciler {
 		resources:  resources,
 		detector:   NewKubectlDetector(kubeconfig),
 		helm:       &RealHelmClient{},
+		queue:      NewReconcileQueue(),
 	}
 }
 
@@ -38,6 +39,12 @@ func (r *Reconciler) Start(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	slog.Info("Reconciliation Loop 已启动", "resources", len(r.resources.Resources))
+
+	// 启动 WorkQueue Worker
+	r.queue.Run(ctx, func(reason string) {
+		slog.Debug("WorkQueue 触发 Reconcile", "key", reason)
+		r.queue.Add("tick")
+	})
 
 	ticker := time.NewTicker(8 * time.Second)
 	defer ticker.Stop()
@@ -51,7 +58,7 @@ func (r *Reconciler) Start(ctx context.Context, wg *sync.WaitGroup) {
 			slog.Info("Reconciliation Loop 已关闭")
 			return
 		case <-ticker.C:
-			r.reconcile()
+			r.queue.Add("tick")
 		}
 	}
 }

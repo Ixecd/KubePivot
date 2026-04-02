@@ -100,7 +100,7 @@ func (r *Reconciler) watch(ctx context.Context, cli *clientv3.Client, key string
 				return true
 			}
 			slog.Debug("etcd 状态变更，立即触发 Reconcile")
-			r.reconcile()
+			r.queue.Add("reconcile")
 		}
 	}
 }
