@@ -1,4 +1,4 @@
-// cmd/dtk/history.go
+// cmd/kp/history.go
 package main
 
 import (

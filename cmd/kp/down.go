@@ -35,7 +35,7 @@ func runDown(args []string) {
 	resolveDeployConfig(cfg, env, root)
 
 	projectName := envOrDefault(env, "PROJECT_NAME", filepath.Base(root))
-	stateFile := expandHome(fmt.Sprintf("~/.dtk/state/%s/%s.json", projectName, cfg.namespace))
+	stateFile := expandHome(fmt.Sprintf("~/.kp/state/%s/%s.json", projectName, cfg.namespace))
 
 	// 二次确认
 	fmt.Printf("⚠️  即将删除以下资源：\n")

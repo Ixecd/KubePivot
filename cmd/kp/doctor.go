@@ -85,7 +85,7 @@ func runDoctor(_ []string) {
 
 	fmt.Println()
 	if errors == 0 && warns == 0 {
-		P.Info("✅", "环境检查通过，可以开始使用 dtk")
+		P.Info("✅", "环境检查通过，可以开始使用 kp")
 		return
 	}
 

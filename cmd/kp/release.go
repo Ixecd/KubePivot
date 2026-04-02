@@ -23,7 +23,7 @@ func runRelease(args []string) {
 	}
 
 	if *version == "" {
-		fmt.Fprintln(os.Stderr, "缺少 --version，例如：dtk release --version v1.0.0")
+		fmt.Fprintln(os.Stderr, "缺少 --version，例如：kp release --version v1.0.0")
 		os.Exit(1)
 	}
 
