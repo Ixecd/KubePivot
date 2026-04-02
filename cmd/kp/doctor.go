@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,7 +19,11 @@ type checkResult struct {
 	fix     string
 }
 
-func runDoctor(_ []string) {
+func runDoctor(args []string) {
+	flags := flag.NewFlagSet("doctor", flag.ExitOnError)
+	perf := flags.Bool("perf", false, "测试 Apiserver P99 延迟（采样 10 次）")
+	flags.Parse(args)
+
 	P.Info("🩺", "检查环境依赖...")
 	fmt.Println()
 
@@ -81,6 +86,13 @@ func runDoctor(_ []string) {
 				warns++
 			}
 		}
+	}
+
+	// --perf 模式
+	if *perf {
+		fmt.Println()
+		fmt.Println("性能检查：")
+		printResult(checkApiserverLatency())
 	}
 
 	fmt.Println()

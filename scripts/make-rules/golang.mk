@@ -52,7 +52,7 @@ ifeq (${BINS},)
 	$(error Could not determine BINS, set ROOT_DIR or run in source dir)
 endif
 
-EXCLUDE_TESTS=github.com/Ixecd/dev-toolkit/test github.com/Ixecd/dev-toolkit/pkg/log github.com/Ixecd/dev-toolkit/third_party github.com/Ixecd/dev-toolkit/internal/pkg/logger
+EXCLUDE_TESTS=github.com/Ixecd/kubepivot/test github.com/Ixecd/kubepivot/pkg/log github.com/Ixecd/kubepivot/third_party github.com/Ixecd/kubepivot/internal/pkg/logger
 
 .PHONY: go.build.verify
 go.build.verify:
@@ -101,3 +101,10 @@ go.test.cover: go.test
 .PHONY: go.updates
 go.updates: tools.verify.go-mod-outdated
 	@$(GO) list -u -m -json all | go-mod-outdated -update -direct
+
+.PHONY: go.dev
+go.dev:
+	@echo "===========> Build + Test + Install (dev loop)"
+	@$(GO) build ./...
+	@$(GO) test ./... -race
+	@$(MAKE) install

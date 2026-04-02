@@ -86,6 +86,11 @@ install:
 	@ln -sf $(shell go env GOPATH)/bin/kp $(shell go env GOPATH)/bin/kubepivot
 	@$(GO) install ./cmd/kp
 
+## dev: Build, test and install in one shot (fast dev loop).
+.PHONY: dev
+dev:
+	@$(MAKE) go.dev
+
 ## build.multiarch: Build source code for multiple platforms.
 .PHONY: build.multiarch
 build.multiarch:
