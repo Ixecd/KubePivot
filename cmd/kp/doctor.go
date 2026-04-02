@@ -22,6 +22,8 @@ type checkResult struct {
 func runDoctor(args []string) {
 	flags := flag.NewFlagSet("doctor", flag.ExitOnError)
 	perf := flags.Bool("perf", false, "测试 Apiserver P99 延迟（采样 10 次）")
+	context := flags.String("context", "", "kubernetes context")
+	kubeconfig := flags.String("kubeconfig", "", "kubeconfig 路径")
 	flags.Parse(args)
 
 	P.Info("🩺", "检查环境依赖...")
@@ -93,7 +95,7 @@ func runDoctor(args []string) {
 	if *perf {
 		fmt.Println()
 		fmt.Println("性能检查：")
-		printResult(checkApiserverLatency())
+		printResult(checkApiserverLatency(*kubeconfig, *context))
 	}
 
 	fmt.Println()

@@ -7,13 +7,15 @@ import (
 )
 
 // checkApiserverLatency 采样 10 次 kubectl get nodes，统计 P50/P99 延迟
-func checkApiserverLatency() checkResult {
+func checkApiserverLatency(kubeconfig, context string) checkResult {
 	const samples = 10
 	var latencies []time.Duration
 
 	for i := 0; i < samples; i++ {
 		start := time.Now()
-		runOutput("kubectl", "get", "nodes", "--request-timeout=5s", "-o", "name")
+		args := kubectlBaseArgs(kubeconfig, context, "")
+		args = append(args, "get", "nodes", "--request-timeout=5s", "-o", "name")
+		runOutput(args...)
 		latencies = append(latencies, time.Since(start))
 	}
 
