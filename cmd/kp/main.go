@@ -75,6 +75,8 @@ func main() {
 		runRelease(os.Args[2:])
 	case "scan":
 		runScan(os.Args[2:])
+	case "warmup":
+		runWarmup(os.Args[2:])
 	case "promote":
 		runPromote(os.Args[2:])
 	case "migrate":
