@@ -106,6 +106,9 @@ func runDriftCheck(cfg *deployConfig, root string, env map[string]string, servic
 
 	var results []driftResult
 	for _, plan := range plans {
+		if plan.Image == "" {
+			continue
+		}
 		if serviceFilter != "" && plan.Name != serviceFilter {
 			continue
 		}

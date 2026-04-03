@@ -39,9 +39,11 @@ func runDoctor(args []string) {
 	results = append(results, checkHelmDiff())
 	results = append(results, checkK8sCluster())
 
+	var env map[string]string
+
 	root, err := projectRoot()
 	if err == nil {
-		env, _ := readEnvFile(filepath.Join(root, "configs", "project.env"))
+		env, _ = readEnvFile(filepath.Join(root, "configs", "project.env"))
 		results = append(results, checkProjectEnv(root))
 		results = append(results, checkRegistryPrefix(root))
 		etcdResults := checkEtcdAll(root, env)
@@ -84,6 +86,18 @@ func runDoctor(args []string) {
 			printResult(r)
 		}
 		results = append(results, secResults...)
+	}
+
+
+	// Drift 告警（有 helm-diff 插件时）
+	if err == nil {
+		cfgDrift := &deployConfig{kubeconfig: *kubeconfig, context: *context}
+		resolveDeployConfig(cfgDrift, env, root)
+		if out2, e := runOutput("helm", "plugin", "list"); e == nil &&
+			strings.Contains(string(out2), "diff") {
+			fmt.Println("\nDrift 检查：")
+			runDriftCheck(cfgDrift, root, env, "")
+		}
 	}
 
 	// 统计
