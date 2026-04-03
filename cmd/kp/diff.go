@@ -21,6 +21,7 @@ func runDiff(args []string) {
 	to := flags.Int("to", 0, "目标 revision（默认 latest）")
 	migrate := flags.Bool("migrate", false, "同时分析迁移建议（需要 DATABASE_URL）")
 	service := flags.String("service", "", "指定服务名（多服务模式下必填）")
+	drift := flags.Bool("drift", false, "检测配置漂移（需要 helm-diff 插件）")
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "解析参数失败:", err)
 		os.Exit(1)
@@ -40,6 +41,10 @@ func runDiff(args []string) {
 		kubeconfig: *kubeconfig,
 	}
 	resolveDeployConfig(cfg, env, root)
+	if *drift {
+		runDriftCheck(cfg, root, env, *service)
+		return
+	}
 	releaseName := envOrDefault(env, "PROJECT_NAME", filepath.Base(root))
 
 	if *service != "" {
