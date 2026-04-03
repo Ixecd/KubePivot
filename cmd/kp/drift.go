@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Ixecd/kubepivot/internal/controller"
 	"github.com/Ixecd/kubepivot/internal/planner"
 )
 
@@ -55,11 +56,12 @@ func classifyDriftField(field string, managers []string) DriftLevel {
 
 // driftResult 单个服务的漂移检测结果
 type driftResult struct {
-	service string
-	hard    []string // 硬冲突：kp 拥有所有权
-	managed []string // 受控偏离：豁免字段
-	clean   bool     // 无漂移
-	err     error
+	service  string
+	hard     []string // 硬冲突：kp 拥有所有权
+	managed  []string // 受控偏离：豁免字段
+	clean    bool     // 无漂移
+	exempted []string // 豁免字段（no-sync-fields）
+	err      error
 }
 
 // runDriftCheck 检测所有服务的配置漂移
@@ -73,6 +75,22 @@ func runDriftCheck(cfg *deployConfig, root string, env map[string]string, servic
 	if !strings.Contains(string(out), "diff") {
 		P.Fail("helm-diff 插件未安装，运行：helm plugin install https://github.com/databus23/helm-diff")
 		return
+	}
+
+	// 加载 resources.yaml 获取 no-sync-fields 配置
+	resCfg, _ := controller.LoadResources(
+		filepath.Join(root, "configs", "resources.yaml"),
+	)
+	noSyncFields := func(svcName string) []string {
+		if resCfg == nil {
+			return nil
+		}
+		for _, res := range resCfg.Resources {
+			if res.Name == svcName || strings.HasSuffix(res.Name, "-"+svcName) {
+				return res.NoSyncFields
+			}
+		}
+		return nil
 	}
 
 	plans, err := planner.BuildPlan(filepath.Join(root, "configs", "components.yaml"))
@@ -99,7 +117,7 @@ func runDriftCheck(cfg *deployConfig, root string, env map[string]string, servic
 			for _, slot := range []string{"blue", "green"} {
 				slotRelease := release + "-" + slot
 				if helmReleaseExists(cfg.kubeconfig, cfg.context, cfg.namespace, slotRelease) {
-					r := detectServiceDrift(cfg, slotRelease, chartPath, env, plan)
+					r := detectServiceDrift(cfg, slotRelease, chartPath, env, plan, noSyncFields(plan.Name))
 					r.service = fmt.Sprintf("%s (%s slot)", plan.Name, slot)
 					results = append(results, r)
 				}
@@ -107,7 +125,7 @@ func runDriftCheck(cfg *deployConfig, root string, env map[string]string, servic
 			continue
 		}
 
-		r := detectServiceDrift(cfg, release, chartPath, env, plan)
+		r := detectServiceDrift(cfg, release, chartPath, env, plan, noSyncFields(plan.Name))
 		r.service = plan.Name
 		results = append(results, r)
 	}
@@ -119,7 +137,7 @@ func runDriftCheck(cfg *deployConfig, root string, env map[string]string, servic
 			fmt.Printf("  ⏭  %-25s 跳过（%v）\n", r.service, r.err)
 			continue
 		}
-		if r.clean && len(r.hard) == 0 && len(r.managed) == 0 {
+		if r.clean && len(r.hard) == 0 && len(r.managed) == 0 && len(r.exempted) == 0 {
 			fmt.Printf("  %s %-25s 无漂移\n", colorize(colorGreen, "✓"), r.service)
 			continue
 		}
@@ -132,6 +150,9 @@ func runDriftCheck(cfg *deployConfig, root string, env map[string]string, servic
 		for _, m := range r.managed {
 			fmt.Printf("    %s %s\n", colorize(colorYellow, "⚠️  受控偏离："), m)
 		}
+		for _, e := range r.exempted {
+			fmt.Printf("    %s %s\n", colorize(colorGray, "ℹ️  已豁免："), e)
+		}
 	}
 
 	fmt.Println()
@@ -143,7 +164,7 @@ func runDriftCheck(cfg *deployConfig, root string, env map[string]string, servic
 }
 
 // detectServiceDrift 检测单个服务的漂移
-func detectServiceDrift(cfg *deployConfig, release, chartPath string, env map[string]string, plan planner.Plan) driftResult {
+func detectServiceDrift(cfg *deployConfig, release, chartPath string, env map[string]string, plan planner.Plan, noSyncFields []string) driftResult {
 	var r driftResult
 
 	// 用 helm diff upgrade 对比当前集群状态和 chart 期望状态
@@ -237,6 +258,13 @@ func detectServiceDrift(cfg *deployConfig, release, chartPath string, env map[st
 		seen[key] = true
 		toVal := toMap[key]
 		entry := fmt.Sprintf("%s: %s → %s", key, fromVal, toVal)
+		
+		// 检查 no-sync-fields 豁免
+		if isNoSyncEntry(entry, noSyncFields) {
+			r.exempted = append(r.exempted, entry)
+			continue
+		}
+
 		level := classifyDriftKey(key)
 		switch level {
 		case DriftHard:
@@ -272,4 +300,14 @@ func classifyDriftKey(key string) DriftLevel {
 		return DriftManaged
 	}
 	return DriftExternal
+}
+
+// isNoSyncEntry 检查条目是否在豁免列表里
+func isNoSyncEntry(entry string, noSyncFields []string) bool {
+	for _, f := range noSyncFields {
+		if strings.Contains(strings.ToLower(entry), strings.ToLower(f)) {
+			return true
+		}
+	}
+	return false
 }
