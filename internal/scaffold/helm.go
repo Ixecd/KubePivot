@@ -374,6 +374,39 @@ spec:
           protocol: TCP
 `, name, name)
 
+vsPreview := fmt.Sprintf(`# virtualservice-preview.yaml
+# 仅在 strategy: blue-green 时使用，kp deploy --preview 会自动生成填充版本
+# 需要 Istio 已安装：kubectl get crd virtualservices.networking.istio.io
+#
+# 手动 apply 后，用 x-kp-preview: <slot> header 将流量路由到非活跃 slot：
+#   curl -H "x-kp-preview: green" http://%s/healthz
+#
+# apiVersion: networking.istio.io/v1beta1
+# kind: VirtualService
+# metadata:
+#   name: %s-preview
+#   namespace: {{ .Release.Namespace }}
+# spec:
+#   hosts:
+#   - %s
+#   http:
+#   - match:
+#     - headers:
+#         x-kp-preview:
+#           exact: "green"
+#     route:
+#     - destination:
+#         host: %s-green
+#         port:
+#           number: {{ .Values.service.port }}
+#   - route:
+#     - destination:
+#         host: %s
+#         port:
+#           number: {{ .Values.service.port }}
+#       weight: 100
+`, name, name, name, name, name)
+
 	var vb strings.Builder
 	vb.WriteString("replicaCount: 1\n\n")
 	vb.WriteString("image:\n")
@@ -406,6 +439,7 @@ spec:
 		filepath.Join(dir, "service.yaml"):                 svc,
 		filepath.Join(dir, "serviceaccount.yaml"):          sa,
 		filepath.Join(dir, "networkpolicy.yaml"):           networkPolicy,
+		filepath.Join(dir, "virtualservice-preview.yaml"):  vsPreview,
 	})
 }
 

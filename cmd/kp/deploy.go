@@ -96,7 +96,22 @@ func runDeploy(args []string) {
 
 	// 检查当前状态，拒绝重复部署
 	current := sm.State()
+	sandboxStates := map[state.State]bool{
+		state.StateLocked:       true,
+		state.StateSnapshotting: true,
+		state.StateSimulating:   true,
+		state.StateCommitting:   true,
+		state.StateRestoring:    true,
+	}
+	if sandboxStates[current] {
+		fmt.Fprintf(os.Stderr,
+			"❌ 当前处于 Sandbox 会话（状态: %s），禁止发起新部署\n"+
+				"   等待 Sandbox 完成，或运行: kp sandbox unlock --force --reason \"...\"\n",
+			current)
+		os.Exit(1)
+	}
 	if current != state.StateIdle && current != state.StateRunning && current != state.StateTerminated {
+	// Sandbox 状态：明确提示，禁止部署
 		fmt.Fprintf(os.Stderr, "当前部署状态为 %s，不能发起新部署\n如需继续，请运行: kp resume\n", current)
 		os.Exit(1)
 	}

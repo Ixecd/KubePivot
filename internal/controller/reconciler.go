@@ -56,6 +56,12 @@ func (r *Reconciler) Start(ctx context.Context, wg *sync.WaitGroup) {
 		r.StartDriftSyncLoop(ctx)
 	}()
 
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		r.StartSandboxGCLoop(ctx)
+	}()
+
 	go r.startEtcdWatcher(ctx, wg)
 
 	for {
