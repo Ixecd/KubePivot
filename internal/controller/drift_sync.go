@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 const driftSyncInterval = 30 * time.Second
@@ -183,13 +186,45 @@ func isKubepivotOwnedKey(key string) bool {
 	return false
 }
 
-// writeDriftAuditLog 写漂移审计日志
+// writeDriftAuditLog 写漂移审计日志到 etcd（降级到 slog）
 func writeDriftAuditLog(resource, namespace string, diffs []string) {
-	slog.Info("drift audit",
-		"resource", resource,
-		"namespace", namespace,
-		"diffs", strings.Join(diffs, "; "),
-		"ts", time.Now().Format(time.RFC3339),
+	entry := fmt.Sprintf(`{"resource":"%s","namespace":"%s","diffs":%q,"ts":"%s"}`,
+		resource, namespace,
+		strings.Join(diffs, "; "),
+		time.Now().Format(time.RFC3339),
 	)
-	// TODO(v1.7.0)：写入 etcd /kubepivot/<project>/drift/<timestamp>
+
+	slog.Info("drift audit", "resource", resource, "namespace", namespace,
+		"diffs", strings.Join(diffs, "; "))
+
+	// 写入 etcd
+	endpoints := os.Getenv("ETCD_ENDPOINTS")
+	if endpoints == "" {
+		return
+	}
+
+	cli, err := clientv3.New(clientv3.Config{
+		Endpoints:   strings.Split(endpoints, ","),
+		DialTimeout: 3 * time.Second,
+	})
+	if err != nil {
+		slog.Warn("drift audit: etcd 连接失败", "err", err)
+		return
+	}
+	defer cli.Close()
+
+	key := fmt.Sprintf("/kubepivot/%s/%s/drift/%d",
+		getenv("PROJECT_NAME", namespace),
+		namespace,
+		time.Now().UnixNano(),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	if _, err := cli.Put(ctx, key, entry); err != nil {
+		slog.Warn("drift audit: 写入 etcd 失败", "err", err)
+	} else {
+		slog.Debug("drift audit: 已写入 etcd", "key", key)
+	}
 }
