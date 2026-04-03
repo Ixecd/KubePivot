@@ -28,6 +28,8 @@ func runMigrate(args []string) {
 		runMigrateStatus(args[1:])
 	case "plan":
 		runMigratePlan(args[1:])
+	case "fix-dirty":
+		runMigrateFixDirty(args[1:])
 	case "run":
 		runMigrateRun(args[1:])
 	default:

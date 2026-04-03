@@ -90,6 +90,10 @@ func runMigrateRun(args []string) {
 		return
 	}
 
+	// 执行迁移前触发 PVC 快照（有 CSI 才执行）
+	migrCfg := &deployConfig{namespace: envOrDefault(env, "KUBE_NAMESPACE", "")}
+	hadSnapshot := tryPVCBackupBeforeMigrate(migrCfg)
+
 	// 执行迁移
 	P.Info("🚀", fmt.Sprintf("开始执行迁移（当前版本: %d → 目标版本: %d，共 %d 个文件）",
 		currentVersion, targetVer, len(files)))
@@ -99,6 +103,7 @@ func runMigrateRun(args []string) {
 		if err := executeMigrationFile(db, f, tool); err != nil {
 			fmt.Println()
 			printMigrateFailure(f, err)
+			restoreAfterMigrateFail(migrCfg, root, hadSnapshot)
 			os.Exit(1)
 		}
 	}

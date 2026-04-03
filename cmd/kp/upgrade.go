@@ -46,6 +46,16 @@ func runUpgrade(args []string) {
 	}
 	fmt.Println()
 
+	// ── 快照保护（有 CSI 才执行）────────────────────────────────────────────
+	upgradeCfg := &deployConfig{namespace: envOrDefault(env, "KUBE_NAMESPACE", "")}
+	hadSnapshot := tryPVCBackupBeforeMigrate(upgradeCfg)
+	if hadSnapshot {
+		P.Info("📸", "PVC 快照已创建，升级失败时可自动恢复")
+	} else {
+		P.Info("⏭ ", "无 CSI 快照支持，升级失败需手动处理 DB")
+	}
+	fmt.Println()
+
 	// ── Step 1: 全链路兼容性检查 ─────────────────────────────────────────────
 	P.Info("🔍", "Step 1/4 全链路兼容性检查")
 	fmt.Println()
@@ -174,8 +184,7 @@ func runUpgrade(args []string) {
 						if err := executeMigrationFile(db2, f, tool); err != nil {
 							fmt.Println()
 							printMigrateFailure(f, err)
-							fmt.Printf("\n%s 服务未升级，请修复迁移后重试，或运行 kp rollback\n",
-								colorize(colorYellow, "💡"))
+							restoreAfterMigrateFail(upgradeCfg, root, hadSnapshot)
 							os.Exit(1)
 						}
 					}
@@ -200,8 +209,7 @@ func runUpgrade(args []string) {
 	if err := runDeployInternal(deployArgs, root, env, *service); err != nil {
 		fmt.Println()
 		P.Fail(fmt.Sprintf("服务部署失败: %v", err))
-		fmt.Printf("%s DB 迁移已执行，请运行 kp rollback 回滚服务\n",
-			colorize(colorYellow, "💡"))
+		restoreAfterMigrateFail(upgradeCfg, root, hadSnapshot)
 		os.Exit(1)
 	}
 	fmt.Println()
