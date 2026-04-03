@@ -300,6 +300,7 @@ func buildHelmArgs(cfg *deployConfig, release, chartPath string, env map[string]
 		"--namespace", cfg.namespace,
 		"--create-namespace",
 		"--wait",
+		"--force-conflicts",
 		"--timeout", "120s",
 	}
 	if cfg.kubeconfig != "" {
