@@ -18,17 +18,30 @@ const (
 	StateRollingBack  State = "ROLLING_BACK"
 	StateCleaning     State = "CLEANING"
 	StateTerminated   State = "TERMINATED"
+
+	// v1.8.0 Operation Sandbox
+	StateLocked       State = "LOCKED"
+	StateSnapshotting State = "SNAPSHOTTING"
+	StateSimulating   State = "SIMULATING"
+	StateCommitting   State = "COMMITTING"
+	StateRestoring    State = "RESTORING"
 )
 
 // validTransitions 合法的状态转换表
 var validTransitions = map[State][]State{
-	StateIdle:         {StateInitializing},
+	StateIdle:         {StateInitializing, StateLocked},
 	StateInitializing: {StateDeploying, StateCleaning},
 	StateDeploying:    {StateValidating, StateRollingBack, StateCleaning},
 	StateValidating:   {StateRunning, StateRollingBack, StateCleaning},
-	StateRunning:      {StateInitializing, StateTerminated, StateCleaning, StateRollingBack},
+	StateRunning:      {StateInitializing, StateTerminated, StateCleaning, StateRollingBack, StateLocked},
 	StateRollingBack:  {StateRunning, StateCleaning},
 	StateCleaning:     {StateIdle, StateTerminated},
+	// v1.8.0 Operation Sandbox
+	StateLocked:       {StateSnapshotting, StateIdle},
+	StateSnapshotting: {StateSimulating, StateRestoring, StateIdle},
+	StateSimulating:   {StateCommitting, StateRestoring, StateIdle},
+	StateCommitting:   {StateRunning, StateRestoring}, // 禁止 force-unlock
+	StateRestoring:    {StateIdle},
 	StateTerminated:   {},
 }
 

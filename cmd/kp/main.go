@@ -87,6 +87,8 @@ func main() {
 		runNetwork(os.Args[2:])
 	case "secret":
 		runSecret(os.Args[2:])
+	case "sandbox":
+		runSandbox(os.Args[2:])
 	case "controller":
 		if len(os.Args) > 2 && os.Args[2] == "start" {
 			controller.Start()

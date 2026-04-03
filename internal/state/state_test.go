@@ -745,3 +745,78 @@ func TestAutoMigrateToEtcd_LocalStoreNoMigration(t *testing.T) {
 	err := autoMigrateToEtcd(store, "myapp", "ns", record)
 	assert.NoError(t, err)
 }
+
+// ── v1.8.0 Sandbox 状态机测试 ─────────────────────────────────────────────────
+
+func TestSandboxTransitions_HappyPath(t *testing.T) {
+	store := newTestLocalStore(t)
+	sm, err := New(store, "myapp", "test-ns", "v1.0.0")
+	require.NoError(t, err)
+
+	// IDLE → LOCKED → SNAPSHOTTING → SIMULATING → COMMITTING → RUNNING
+	transitions := []State{
+		StateLocked, StateSnapshotting, StateSimulating,
+		StateCommitting, StateRunning,
+	}
+	for _, to := range transitions {
+		err := sm.Transition(to, "sandbox test")
+		assert.NoError(t, err, "应允许转换到 %s", to)
+	}
+	assert.Equal(t, StateRunning, sm.State())
+}
+
+func TestSandboxTransitions_FailPath(t *testing.T) {
+	store := newTestLocalStore(t)
+	sm, _ := New(store, "myapp", "test-ns", "v1.0.0")
+
+	// IDLE → LOCKED → SNAPSHOTTING → SIMULATING → RESTORING → IDLE
+	sm.Transition(StateLocked, "start")
+	sm.Transition(StateSnapshotting, "snapshot")
+	sm.Transition(StateSimulating, "simulate")
+
+	err := sm.Transition(StateRestoring, "sim failed")
+	assert.NoError(t, err)
+	err = sm.Transition(StateIdle, "restored")
+	assert.NoError(t, err)
+	assert.Equal(t, StateIdle, sm.State())
+}
+
+func TestSandboxTransitions_CommittingForbidsIdle(t *testing.T) {
+	store := newTestLocalStore(t)
+	sm, _ := New(store, "myapp", "test-ns", "v1.0.0")
+
+	sm.Transition(StateLocked, "start")
+	sm.Transition(StateSnapshotting, "snap")
+	sm.Transition(StateSimulating, "sim")
+	sm.Transition(StateCommitting, "commit")
+
+	// COMMITTING 只允许 RUNNING 或 RESTORING，禁止 IDLE（force-unlock 拦截点）
+	err := sm.Transition(StateIdle, "force-unlock attempt")
+	assert.Error(t, err, "COMMITTING 不应允许直接转换到 IDLE")
+	assert.Contains(t, err.Error(), "非法状态转换")
+}
+
+func TestSandboxTransitions_LockedAllowsForceUnlock(t *testing.T) {
+	store := newTestLocalStore(t)
+	sm, _ := New(store, "myapp", "test-ns", "v1.0.0")
+
+	sm.Transition(StateLocked, "start")
+	// LOCKED 允许回 IDLE（force-unlock 合法）
+	err := sm.Transition(StateIdle, "force-unlock")
+	assert.NoError(t, err)
+}
+
+func TestSandboxTransitions_RunningCanEnterLocked(t *testing.T) {
+	store := newTestLocalStore(t)
+	sm, _ := New(store, "myapp", "test-ns", "v1.0.0")
+
+	// 模拟到 RUNNING
+	sm.Transition(StateInitializing, "init")
+	sm.Transition(StateDeploying, "deploy")
+	sm.Transition(StateValidating, "validate")
+	sm.Transition(StateRunning, "running")
+
+	// RUNNING → LOCKED（正常入沙盒）
+	err := sm.Transition(StateLocked, "sandbox start")
+	assert.NoError(t, err)
+}
