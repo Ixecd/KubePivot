@@ -557,3 +557,48 @@ func TestClassifyCrashType_Unknown(t *testing.T) {
 		t.Errorf("无关键词日志应识别为 unknown，got %s", ct)
 	}
 }
+
+func TestCheckAndHeal_ResourceMissing_Rollback(t *testing.T) {
+	t.Setenv("PROJECT_NAME", "myapp")
+	sm := newRunningMachine(t)
+	detector := newMockDetector().withResource("Deployment", "myapp", "test-ns", false)
+	helm := newMockHelm(1, 2)
+	r := newTestReconciler(sm, detector, helm)
+
+	res := Resource{Kind: "Deployment", Name: "myapp", Namespace: "test-ns", OnMissing: "rollback"}
+	err := r.checkAndHeal(res)
+
+	assert.NoError(t, err)
+	require.NotNil(t, helm.rollbackCall, "应该触发 rollback")
+	assert.Equal(t, 1, helm.rollbackCall.revision, "应该 rollback 到 revision 1（latest-1）")
+}
+
+func TestCheckAndHeal_ResourceMissing_Custom_Empty(t *testing.T) {
+	t.Setenv("PROJECT_NAME", "myapp")
+	sm := newRunningMachine(t)
+	detector := newMockDetector().withResource("Deployment", "myapp", "test-ns", false)
+	helm := newMockHelm(1, 2)
+	r := newTestReconciler(sm, detector, helm)
+
+	res := Resource{Kind: "Deployment", Name: "myapp", Namespace: "test-ns",
+		OnMissing: "custom", Fallback: ""}
+	err := r.checkAndHeal(res)
+
+	assert.NoError(t, err)
+	assert.Nil(t, helm.rollbackCall, "fallback 为空时不应触发 rollback")
+}
+
+func TestCheckAndHeal_ResourceMissing_ScaleDown(t *testing.T) {
+	t.Setenv("PROJECT_NAME", "myapp")
+	sm := newRunningMachine(t)
+	detector := newMockDetector().withResource("Deployment", "myapp", "test-ns", false)
+	helm := newMockHelm(1, 2)
+	r := newTestReconciler(sm, detector, helm)
+
+	res := Resource{Kind: "Deployment", Name: "myapp", Namespace: "test-ns", OnMissing: "scale-down"}
+	// scale-down 调 kubectl，在测试环境里会失败，但不应该 panic
+	err := r.checkAndHeal(res)
+	// 允许失败（kubectl 在 CI 里不可用），只验证不 panic 且不触发 rollback
+	assert.Nil(t, helm.rollbackCall, "scale-down 不应触发 helm rollback")
+	_ = err
+}
