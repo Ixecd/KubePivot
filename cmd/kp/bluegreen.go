@@ -87,6 +87,10 @@ func deployBlueGreen(cfg *deployConfig, env map[string]string, plan planner.Plan
 	}
 
 	P.Info("✅", fmt.Sprintf("%s 已部署到 %s slot，运行 kp promote 切换流量", plan.Name, targetSlot))
+	// --preview：生成 Header 路由模板
+	if cfg.preview {
+		runPreviewGen(cfg, plan, root, projectName, targetSlot)
+	}
 	return nil
 }
 

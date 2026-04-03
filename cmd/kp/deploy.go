@@ -26,6 +26,7 @@ type deployConfig struct {
 	forceMigrate bool
 	parallelism  int  // 同层最大并发数，0 表示不限制
 	changedOnly  bool // 只部署有 git 变更的服务
+	preview      bool // 部署后生成 Header-based Preview 路由模板
 }
 
 func runDeploy(args []string) {
@@ -43,6 +44,7 @@ func runDeploy(args []string) {
 	flags.BoolVar(&cfg.dryRun, "dry-run", false, "print plan only, do not deploy")
 	flags.BoolVar(&cfg.sign, "sign", false, "部署后对镜像进行 cosign keyless 签名")
 	flags.BoolVar(&cfg.forceMigrate, "force-migrate", false, "忽略破坏性迁移警告强制部署（不推荐）")
+	flags.BoolVar(&cfg.preview, "preview", false, "部署后生成 Header-based Preview 路由模板（Istio/Nginx）")
 	flags.BoolVar(&cfg.changedOnly, "changed-only", false, "只部署有 git 变更的服务（基于 git diff HEAD~1 HEAD）")
 	flags.IntVar(&cfg.parallelism, "parallelism", 0, "同层最大并发部署数（0=不限制，建议大规模集群设为 4-8）")
 
