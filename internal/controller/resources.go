@@ -17,7 +17,9 @@ type Resource struct {
 	Namespace string `yaml:"namespace"`
 	OnMissing string `yaml:"on-missing"`
 	MaxRetry  int    `yaml:"max-retry"`
-	Fallback  string `yaml:"fallback"`
+	Fallback      string   `yaml:"fallback"`
+	ForceSync    bool     `yaml:"force-sync"`
+	NoSyncFields []string `yaml:"no-sync-fields"`
 }
 
 type ResourcesConfig struct {

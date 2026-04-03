@@ -43,13 +43,19 @@ func (r *Reconciler) Start(ctx context.Context, wg *sync.WaitGroup) {
 	// 启动 WorkQueue Worker
 	r.queue.Run(ctx, func(reason string) {
 		slog.Debug("WorkQueue 触发 Reconcile", "key", reason)
-		r.queue.Add("tick")
+		r.reconcile()
 	})
 
 	ticker := time.NewTicker(8 * time.Second)
 	defer ticker.Stop()
 
 	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		r.StartDriftSyncLoop(ctx)
+	}()
+
 	go r.startEtcdWatcher(ctx, wg)
 
 	for {
@@ -58,7 +64,7 @@ func (r *Reconciler) Start(ctx context.Context, wg *sync.WaitGroup) {
 			slog.Info("Reconciliation Loop 已关闭")
 			return
 		case <-ticker.C:
-			r.queue.Add("tick")
+			r.reconcile()
 		}
 	}
 }

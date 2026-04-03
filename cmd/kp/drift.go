@@ -198,18 +198,59 @@ func detectServiceDrift(cfg *deployConfig, release, chartPath string, env map[st
 	}
 
 	// 解析 diff 输出，分类漂移级别
+	// 解析 diff 输出，分类漂移级别
+	// 用 map 收集 from/to，合并显示（如 replicas: 3 → 2）
+	fromMap := make(map[string]string) // key → old value
+	toMap := make(map[string]string)   // key → new value
+
 	for _, line := range strings.Split(diffOutput, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "+") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "-") && !strings.HasPrefix(trimmed, "+") {
 			continue
 		}
-		// 简单启发式：判断字段所属类型
-		level := classifyDriftLine(line)
-		entry := strings.TrimPrefix(strings.TrimPrefix(line, "-"), "+")
-		entry = strings.TrimSpace(entry)
+		isRemove := strings.HasPrefix(trimmed, "-")
+		entry := strings.TrimSpace(trimmed[1:])
 		if entry == "" {
 			continue
 		}
+		// 过滤纯 key 行（如 "env:" "containers:" 等）
+		if strings.HasSuffix(entry, ":") {
+			continue
+		}
+		// 解析 key: value 格式
+		parts := strings.SplitN(entry, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		if isRemove {
+			fromMap[key] = val
+		} else {
+			toMap[key] = val
+		}
+	}
+
+	// 合并 from/to，生成漂移条目
+	seen := make(map[string]bool)
+	for key, fromVal := range fromMap {
+		seen[key] = true
+		toVal := toMap[key]
+		entry := fmt.Sprintf("%s: %s → %s", key, fromVal, toVal)
+		level := classifyDriftKey(key)
+		switch level {
+		case DriftHard:
+			r.hard = append(r.hard, entry)
+		case DriftManaged:
+			r.managed = append(r.managed, entry)
+		}
+	}
+	for key, toVal := range toMap {
+		if seen[key] {
+			continue
+		}
+		entry := fmt.Sprintf("%s: (new) → %s", key, toVal)
+		level := classifyDriftKey(key)
 		switch level {
 		case DriftHard:
 			r.hard = append(r.hard, entry)
@@ -220,21 +261,15 @@ func detectServiceDrift(cfg *deployConfig, release, chartPath string, env map[st
 	return r
 }
 
-// classifyDriftLine 启发式判断 diff 行的漂移级别
-func classifyDriftLine(line string) DriftLevel {
-	lower := strings.ToLower(line)
-	// kp 拥有所有权的字段
-	if strings.Contains(lower, "image:") ||
-		strings.Contains(lower, "env:") ||
-		strings.Contains(lower, "resources:") ||
-		strings.Contains(lower, "limits:") ||
-		strings.Contains(lower, "requests:") {
+func classifyDriftKey(key string) DriftLevel {
+	lower := strings.ToLower(key)
+	if lower == "image" || lower == "env" ||
+		lower == "limits" || lower == "requests" ||
+		lower == "resources" || lower == "cpu" || lower == "memory" {
 		return DriftHard
 	}
-	// 豁免字段
-	if strings.Contains(lower, "replicas:") {
+	if lower == "replicas" {
 		return DriftManaged
 	}
-	// 其他（外部注入，忽略）
 	return DriftExternal
 }
