@@ -1,8 +1,8 @@
 # KubePivot 当前快照
 
-> 版本：v1.6.0
+> 版本：v1.7.0
 > 日期：2026-04-03
-> 状态：✅ 全绿，可发布
+> 状态：✅ 全绿，已发布
 
 ---
 
@@ -11,79 +11,62 @@
 ```
 go test ./... -race  → 全绿
 make dev             → build + test + install 一键完成
-当前 tag             → v1.6.0（待打）
-companion            → github.com/Ixecd/web3-blitz（BTC/ETH 充提币）
+当前 tag             → v1.7.0
+companion            → github.com/Ixecd/web3-blitz
 ```
 
 ---
 
-## v1.5.2 ~ v1.6.0 新增能力
+## v1.7.0 新增能力
 
-### kp secret
+### kp diff --drift
 ```bash
-kp secret rotate --secret <n> [--strategy graceful|immediate]
-kp secret cleanup --secret <n>
-kp secret audit
+kp diff --drift
+kp diff --drift --service wallet-service
+
+# 输出三级：
+# ❌ 硬冲突（kp 拥有所有权，强制同步）
+# ⚠️  受控偏离（透明展示，不强制同步）
+# ℹ️  已豁免（no-sync-fields，完全跳过）
 ```
 
-### kp network
-```bash
-kp network gen [--output <dir>]   # 生成跨 ns NetworkPolicy 模板，不自动 apply
-```
-
-### kp deploy 新 flag
-```bash
-kp deploy --parallelism 4         # 同层最大并发数
-kp deploy --changed-only          # 基于 git diff 增量部署
-```
-
-### kp doctor 新检查
-```bash
-kp doctor --perf [--context <ctx>]  # Apiserver P99 延迟 + 并发度建议
-# 新增：helm-diff 检测、TLS 证书过期、跨域嗅探
-```
-
-### kp history
-```bash
-kp history --export json
-kp history --export csv
-```
-
-### 可观测性
-```bash
-LOG_FORMAT=json kp deploy 2>deploy.log   # 结构化 JSON 日志
-LOG_LEVEL=debug kp deploy                # 调试模式
-```
-
-### components.yaml 跨 namespace 依赖
+### resources.yaml 新字段
 ```yaml
-depends_on:
-  - web3-blitz-postgres          # 同 namespace，参与 DAG
-  - kube-system/coredns          # 跨 namespace，只嗅探
+- kind: Deployment
+  name: wallet-service
+  on-missing: recreate | rollback | scale-down | alert | custom
+  force-sync: true
+  no-sync-fields:
+    - replicas
+```
+
+### 自愈策略全覆盖
+```
+OOMKilled        → memory limit +25%（kubectl patch）
+CrashLoopBackOff → 启动错误告警；运行时 restarts≥5 自动 rollback
+```
+
+### HPA 集成
+```yaml
+- name: wallet-service
+  min_replicas: 1
+  max_replicas: 5
+  target_cpu: 70
+```
+
+### kp doctor drift 告警
+```bash
+kp doctor   # 有 helm-diff 时自动运行 drift 检查
 ```
 
 ---
 
-## Controller HA
-
-```
-kubepivot-controller（多副本）
-  ├── etcd Leader Election（TTL=15s，无 client-go）
-  ├── WorkQueue 三集合去重（queue/dirty/processing）
-  └── RBAC 最小权限（含 leases 读写权）
-```
-
----
-
-## 压测基准（KWOK 500 节点）
-
-```
-Apiserver P50: 288ms  P99: 562ms → 建议 --parallelism=4
-DAG 规划  P50: 10ms   P99: 40ms  → 纯内存计算，不是瓶颈
-```
+## 技术债
+- `--field-manager`：helm v4 不支持，用 `--force-conflicts` 替代
+- 蓝绿 timing：deployBlueGreen 分支未接入 timing 表格
 
 ---
 
 ## 下一步
 
-v1.7.0 — 状态漂移治理（SSA FieldManager + force-sync）
+v1.8.0 — Operation Sandbox
