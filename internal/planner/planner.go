@@ -19,7 +19,10 @@ type Component struct {
 	Memory      string
 	Storage     string
 	DependsOn   []string // 依赖的服务名列表
-	Strategy    string   // rolling（默认）/ blue-green / canary
+	Strategy     string   // rolling（默认）/ blue-green / canary
+	MinReplicas  int
+	MaxReplicas  int
+	TargetCPU    int      // HPA 目标 CPU 使用率（0=不启用）
 	APIVersion  string   // 服务对外 API 版本，用于 kp compat 依赖检查
 	Namespace   string
 	CrossNsDeps []string // 跨 namespace 依赖，格式 "other-ns/svc-name"
@@ -36,7 +39,10 @@ type Plan struct {
 	Image       string
 	Port        int
 	DependsOn   []string
-	Strategy    string
+	Strategy     string   // rolling（默认）/ blue-green / canary
+	MinReplicas  int
+	MaxReplicas  int
+	TargetCPU    int      // HPA 目标 CPU 使用率（0=不启用）
 	APIVersion  string
 	Namespace   string
 	CrossNsDeps []string
@@ -48,18 +54,21 @@ type Layer []Plan
 // yamlComponents 对应 components.yaml 的结构
 type yamlComponents struct {
 	Components []struct {
-		Name       string   `yaml:"name"`
-		Type       string   `yaml:"type"`
-		Image      string   `yaml:"image"`
-		Port       int      `yaml:"port"`
-		Replicas   int      `yaml:"replicas"`
-		CPU        string   `yaml:"cpu"`
-		Memory     string   `yaml:"memory"`
-		Storage    string   `yaml:"storage"`
-		DependsOn  []string `yaml:"depends_on"`
-		Strategy   string   `yaml:"strategy"`
-		APIVersion string   `yaml:"api_version"`
-		Namespace  string   `yaml:"namespace"`
+		Name         string   `yaml:"name"`
+		Type         string   `yaml:"type"`
+		Image        string   `yaml:"image"`
+		Port         int      `yaml:"port"`
+		Replicas     int      `yaml:"replicas"`
+		CPU          string   `yaml:"cpu"`
+		Memory       string   `yaml:"memory"`
+		Storage      string   `yaml:"storage"`
+		Strategy     string   `yaml:"strategy"`
+		MinReplicas  int      `yaml:"min_replicas"`
+		MaxReplicas  int      `yaml:"max_replicas"`
+		TargetCPU    int      `yaml:"target_cpu"`
+		DependsOn    []string `yaml:"depends_on"`
+		APIVersion   string   `yaml:"api_version"`
+		Namespace    string   `yaml:"namespace"`
 	} `yaml:"components"`
 }
 
@@ -99,6 +108,9 @@ func LoadComponents(path string) ([]Component, error) {
 			Memory:      c.Memory,
 			Storage:     c.Storage,
 			Strategy:    c.Strategy,
+			MinReplicas: c.MinReplicas,
+			MaxReplicas: c.MaxReplicas,
+			TargetCPU:   c.TargetCPU,
 			Namespace:   c.Namespace,
 			DependsOn:   localDeps, // 只有同 namespace 的
 			CrossNsDeps: crossDeps, // 跨 namespace 的

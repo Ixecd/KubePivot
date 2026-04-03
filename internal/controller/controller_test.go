@@ -481,3 +481,79 @@ func TestNewReconciler_FallsBackOnLoadError(t *testing.T) {
 	assert.NotNil(t, r)
 	assert.Empty(t, r.resources.Resources)
 }
+
+// ── bumpMemory 测试 ───────────────────────────────────────────────────────────
+
+func TestBumpMemory_Mi(t *testing.T) {
+	cases := []struct {
+		input string
+		pct   int
+		want  string
+	}{
+		{"256Mi", 25, "320Mi"},
+		{"128Mi", 25, "160Mi"},
+		{"100Mi", 25, "125Mi"},
+		{"1Mi", 25, "2Mi"}, // 最小步长 +1
+	}
+	for _, c := range cases {
+		got := bumpMemory(c.input, c.pct)
+		if got != c.want {
+			t.Errorf("bumpMemory(%s, %d) = %s, want %s", c.input, c.pct, got, c.want)
+		}
+	}
+}
+
+func TestBumpMemory_Gi(t *testing.T) {
+	got := bumpMemory("4Gi", 25)
+	if got != "5Gi" {
+		t.Errorf("bumpMemory(4Gi, 25) = %s, want 5Gi", got)
+	}
+}
+
+func TestBumpMemory_Invalid(t *testing.T) {
+	cases := []string{"", "256", "256KB", "abc"}
+	for _, c := range cases {
+		got := bumpMemory(c, 25)
+		if got != "" {
+			t.Errorf("bumpMemory(%q) 应返回空，got %q", c, got)
+		}
+	}
+}
+
+// ── analyzeCrashType 测试（纯关键词匹配） ────────────────────────────────────
+
+func TestClassifyCrashType_Startup(t *testing.T) {
+	startupLogs := []string{
+		"dial tcp 127.0.0.1:5432: connect: connection refused",
+		"failed to connect to etcd",
+		"no such host: my-postgres",
+		"permission denied: /etc/config",
+	}
+	for _, log := range startupLogs {
+		ct := classifyCrashLogs(log)
+		if ct != crashStartup {
+			t.Errorf("日志 %q 应识别为 startup，got %s", log, ct)
+		}
+	}
+}
+
+func TestClassifyCrashType_Runtime(t *testing.T) {
+	runtimeLogs := []string{
+		"panic: runtime error: nil pointer dereference",
+		"runtime error: index out of range",
+		"fatal error: segmentation fault",
+	}
+	for _, log := range runtimeLogs {
+		ct := classifyCrashLogs(log)
+		if ct != crashRuntime {
+			t.Errorf("日志 %q 应识别为 runtime，got %s", log, ct)
+		}
+	}
+}
+
+func TestClassifyCrashType_Unknown(t *testing.T) {
+	ct := classifyCrashLogs("some random output without keywords")
+	if ct != crashUnknown {
+		t.Errorf("无关键词日志应识别为 unknown，got %s", ct)
+	}
+}
