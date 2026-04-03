@@ -119,6 +119,8 @@ func runSandboxStart(args []string) {
 	// 写 session 文件（Controller GC 用）
 	writeSandboxSession(session, root)
 
+	env["SANDBOX_ID"] = sandboxID
+
 	// Step 2: SNAPSHOTTING
 	P.Start("📸", "触发 PVC 快照")
 	sm.Transition(state.StateSnapshotting, "sandbox: 开始快照")
@@ -304,15 +306,145 @@ func trySandboxSnapshot(cfg *deployConfig, root string, env map[string]string) b
 }
 
 func runMigrationSimulation(cfg *deployConfig, root string, env map[string]string) bool {
-	// 检查是否有待执行迁移
 	dbURL := resolveDatabaseURL(&migrateConfig{}, root, env)
 	if dbURL == "" {
 		P.Info("⏭ ", "未配置 DATABASE_URL，跳过迁移模拟")
 		return true
 	}
-	// 用 --dry-run 模式预跑迁移（postgres 事务保证安全）
-	migrateArgs := []string{"kp", "migrate", "run", "--dry-run"}
-	_, err := runOutput(migrateArgs...)
+
+	migDir := findMigrationsDir(root)
+	if migDir == "" {
+		P.Info("⏭ ", "未找到迁移目录，跳过迁移模拟")
+		return true
+	}
+
+	// 生成临时 Job YAML
+	sandboxID := env["SANDBOX_ID"]
+	jobName := fmt.Sprintf("kp-migrate-sim-%s", sandboxID[:6])
+	projectName := envOrDefault(env, "PROJECT_NAME", "app")
+
+	// 从 Secret 获取 DB 连接信息
+	secretName := projectName + "-secret"
+
+	jobYAML := fmt.Sprintf(`apiVersion: batch/v1
+kind: Job
+metadata:
+  name: %s
+  namespace: %s
+  labels:
+    kubepivot.io/sandbox-id: %s
+    kubepivot.io/role: migrate-sim
+spec:
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        kubepivot.io/sandbox-id: %s
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: migrate-sim
+        image: ghcr.io/golang-migrate/migrate:v4
+        command: ["migrate"]
+        args:
+        - "-path=/migrations"
+        - "-database=$(DATABASE_URL)"
+        - "up"
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: %s
+              key: DATABASE_URL
+        volumeMounts:
+        - name: migrations
+          mountPath: /migrations
+          readOnly: true
+      volumes:
+      - name: migrations
+        configMap:
+          name: %s-migrations
+`, jobName, cfg.namespace, sandboxID, sandboxID, secretName, jobName)
+
+	// 先创建 migrations ConfigMap
+	if !createMigrationsConfigMap(cfg, jobName+"-migrations", migDir, sandboxID) {
+		P.Info("⚠️ ", "创建迁移 ConfigMap 失败，降级为 dry-run 模式")
+		return runMigrationSimDryRun(root, env)
+	}
+
+	// apply Job
+	f, err := os.CreateTemp("", "kp-sim-job-*.yaml")
+	if err != nil {
+		return runMigrationSimDryRun(root, env)
+	}
+	defer os.Remove(f.Name())
+	f.WriteString(jobYAML)
+	f.Close()
+
+	args := kubectlBaseArgs(cfg.kubeconfig, cfg.context, cfg.namespace)
+	args = append(args, "apply", "-f", f.Name())
+	if _, err := runOutput(args...); err != nil {
+		P.Info("⚠️ ", "Job 创建失败，降级为 dry-run 模式")
+		return runMigrationSimDryRun(root, env)
+	}
+
+	// 等待 Job 完成（最多 5 分钟）
+	P.Start("⏳", fmt.Sprintf("等待迁移模拟 Job 完成（%s）", jobName))
+	waitArgs := kubectlBaseArgs(cfg.kubeconfig, cfg.context, cfg.namespace)
+	waitArgs = append(waitArgs, "wait", "job/"+jobName,
+		"--for=condition=complete", "--timeout=300s")
+	if _, err := runOutput(waitArgs...); err != nil {
+		P.Fail("迁移模拟 Job 失败或超时")
+		// 清理 Job
+		cleanArgs := kubectlBaseArgs(cfg.kubeconfig, cfg.context, cfg.namespace)
+		cleanArgs = append(cleanArgs, "delete", "job", jobName, "--ignore-not-found")
+		runOutput(cleanArgs...)
+		return false
+	}
+	P.Done("迁移模拟通过")
+
+	// 清理 Job 和 ConfigMap
+	cleanArgs := kubectlBaseArgs(cfg.kubeconfig, cfg.context, cfg.namespace)
+	cleanArgs = append(cleanArgs, "delete", "job", jobName,
+		"configmap", jobName+"-migrations", "--ignore-not-found")
+	runOutput(cleanArgs...)
+	return true
+}
+
+// createMigrationsConfigMap 将迁移文件打包进 ConfigMap
+func createMigrationsConfigMap(cfg *deployConfig, name, migDir, sandboxID string) bool {
+	args := kubectlBaseArgs(cfg.kubeconfig, cfg.context, cfg.namespace)
+	args = append(args, "create", "configmap", name,
+		"--from-file="+migDir,
+		"--dry-run=client", "-o", "yaml")
+	out, err := runOutput(args...)
+	if err != nil {
+		return false
+	}
+
+	// 加 sandbox-id label
+	yaml := string(out) + fmt.Sprintf(
+		"\n  labels:\n    kubepivot.io/sandbox-id: %s\n", sandboxID)
+
+	f, err := os.CreateTemp("", "kp-cm-*.yaml")
+	if err != nil {
+		return false
+	}
+	defer os.Remove(f.Name())
+	f.WriteString(yaml)
+	f.Close()
+
+	applyArgs := kubectlBaseArgs(cfg.kubeconfig, cfg.context, cfg.namespace)
+	applyArgs = append(applyArgs, "apply", "-f", f.Name())
+	_, err = runOutput(applyArgs...)
+	return err == nil
+}
+
+// runMigrationSimDryRun dry-run 降级模式
+func runMigrationSimDryRun(root string, env map[string]string) bool {
+	P.Info("💡", "使用 dry-run 降级模式（不创建 K8s Job）")
+	_, err := runOutput("kp", "migrate", "run", "--dry-run")
 	return err == nil
 }
 

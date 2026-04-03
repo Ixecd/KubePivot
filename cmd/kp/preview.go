@@ -309,18 +309,108 @@ func runWarmup(args []string) {
 
 // patchTrafficWeight 调整 inactive slot 的流量权重
 func patchTrafficWeight(cfg *deployConfig, service string, weight int, layer string) error {
-	// TODO(v1.8.0)：实现 Istio VirtualService / Nginx Ingress weight patch
-	// 当前版本：打印提示，实际 patch 留给用户
-	P.Info("💡", fmt.Sprintf("请手动更新 %s 流量权重到 %d%%（%s）",
-		service, weight, layer))
-	return nil
+	activeSlot := getActiveSlot(cfg, service)
+	if activeSlot == "" {
+		return fmt.Errorf("获取活跃 slot 失败，Service 可能未部署")
+	}
+	inactiveSlot := "green"
+	if activeSlot == "green" {
+		inactiveSlot = "blue"
+	}
+	activeWeight := 100 - weight
+
+	switch layer {
+	case "istio":
+		return patchIstioWeight(cfg, service, inactiveSlot, weight, activeSlot, activeWeight)
+	case "nginx":
+		return patchNginxWeight(cfg, service, inactiveSlot, weight)
+	default:
+		P.Info("💡", fmt.Sprintf("请手动更新 %s 流量权重到 %d%%（%s）", service, weight, layer))
+		return nil
+	}
+}
+
+// patchIstioWeight patch Istio VirtualService 权重
+func patchIstioWeight(cfg *deployConfig, service, inactiveSlot string,
+	inactiveWeight int, activeSlot string, activeWeight int) error {
+
+	patch := fmt.Sprintf(`{"spec":{"http":[{"route":[
+		{"destination":{"host":"%s-%s"},"weight":%d},
+		{"destination":{"host":"%s-%s"},"weight":%d}
+	]}]}}`, service, inactiveSlot, inactiveWeight,
+		service, activeSlot, activeWeight)
+
+	args := kubectlBaseArgs(cfg.kubeconfig, cfg.context, cfg.namespace)
+	args = append(args, "patch", "virtualservice", service+"-preview",
+		"--type=merge", "--patch", patch)
+	_, err := runOutput(args...)
+	return err
+}
+
+// patchNginxWeight patch Nginx Ingress canary weight
+func patchNginxWeight(cfg *deployConfig, service, inactiveSlot string, weight int) error {
+	patch := fmt.Sprintf(
+		`{"metadata":{"annotations":{`+
+			`"nginx.ingress.kubernetes.io/canary-weight":"%d"}}}`,
+		weight)
+
+	args := kubectlBaseArgs(cfg.kubeconfig, cfg.context, cfg.namespace)
+	args = append(args, "patch", "ingress", service+"-preview-canary",
+		"--type=merge", "--patch", patch)
+	_, err := runOutput(args...)
+	return err
 }
 
 // sampleErrorRate 从 Prometheus 采样错误率
+// 需要集群内有 Prometheus，且服务暴露了标准 http_requests_total 指标
 func sampleErrorRate(cfg *deployConfig, service string) float64 {
-	// TODO(v1.8.0)：实现 Prometheus 查询
-	// 当前版本：返回 -1 表示不可用
-	return -1
+	// 查找 Prometheus service
+	args := kubectlBaseArgs(cfg.kubeconfig, cfg.context, "monitoring")
+	args = append(args, "get", "service",
+		"-l", "app=prometheus",
+		"-o", "jsonpath={.items[0].spec.clusterIP}",
+		"--ignore-not-found")
+	out, err := runOutput(args...)
+	if err != nil || len(out) == 0 {
+		// 尝试 prometheus-server（helm 安装）
+		args2 := kubectlBaseArgs(cfg.kubeconfig, cfg.context, "monitoring")
+		args2 = append(args2, "get", "service", "prometheus-server",
+			"-o", "jsonpath={.spec.clusterIP}", "--ignore-not-found")
+		out, err = runOutput(args2...)
+		if err != nil || len(out) == 0 {
+			return -1 // Prometheus 不可达
+		}
+	}
+
+	promAddr := fmt.Sprintf("http://%s:9090", strings.TrimSpace(string(out)))
+
+	// PromQL：5xx 错误率
+	query := fmt.Sprintf(
+		`sum(rate(http_requests_total{service="%s",status=~"5.."}[2m]))`+
+			` / sum(rate(http_requests_total{service="%s"}[2m]))`,
+		service, service)
+
+	queryArgs := []string{"curl", "-sf",
+		fmt.Sprintf("%s/api/v1/query?query=%s", promAddr, query)}
+	qout, err := runOutput(queryArgs...)
+	if err != nil || len(qout) == 0 {
+		return -1
+	}
+
+	// 解析 {"data":{"result":[{"value":[ts,"0.002"]}]}}
+	result := string(qout)
+	idx := strings.LastIndex(result, `","`)
+	if idx < 0 {
+		return -1
+	}
+	valStr := result[idx+2:]
+	end := strings.Index(valStr, `"`)
+	if end < 0 {
+		return -1
+	}
+	var rate float64
+	fmt.Sscanf(valStr[:end], "%f", &rate)
+	return rate
 }
 
 // parseIntList 解析逗号分隔的整数列表
