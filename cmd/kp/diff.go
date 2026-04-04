@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Ixecd/kubepivot/internal/planner"
 	"gopkg.in/yaml.v3"
 )
 
@@ -23,6 +24,8 @@ func runDiff(args []string) {
 	service := flags.String("service", "", "指定服务名（多服务模式下必填）")
 	drift := flags.Bool("drift", false, "检测配置漂移（需要 helm-diff 插件）")
 	envName := flags.String("env", "", "指定部署环境（kp context add 配置）")
+	fromEnv := flags.String("from-env", "", "源环境（kp context add 配置，留空=local）")
+	toEnv := flags.String("to-env", "", "目标环境（kp context add 配置）")
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "解析参数失败:", err)
 		os.Exit(1)
@@ -52,6 +55,13 @@ func runDiff(args []string) {
 		runDriftCheck(cfg, root, env, *service)
 		return
 	}
+
+	// 环境间配置对比
+	if *toEnv != "" {
+		runEnvDiff(cfg, root, env, *fromEnv, *toEnv, *service)
+		return
+	}
+
 	releaseName := envOrDefault(env, "PROJECT_NAME", filepath.Base(root))
 
 	if *service != "" {
@@ -83,12 +93,12 @@ func runDiff(args []string) {
 
 	fmt.Printf("对比 %s revision %d → %d\n\n", releaseName, fromRev, toRev)
 
-	fromValues, err := getHelmValues(cfg, releaseName, fromRev)
+	fromValues, err := getHelmValuesByRevision(cfg, releaseName, fromRev)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "获取 revision", fromRev, "values 失败:", err)
 		os.Exit(1)
 	}
-	toValues, err := getHelmValues(cfg, releaseName, toRev)
+	toValues, err := getHelmValuesByRevision(cfg, releaseName, toRev)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "获取 revision", toRev, "values 失败:", err)
 		os.Exit(1)
@@ -110,7 +120,7 @@ func runDiff(args []string) {
 }
 
 // getHelmValues 获取指定 revision 的 values
-func getHelmValues(cfg *deployConfig, releaseName string, revision int) (map[string]interface{}, error) {
+func getHelmValuesByRevision(cfg *deployConfig, releaseName string, revision int) (map[string]interface{}, error) {
 	args := []string{"helm", "get", "values", releaseName,
 		"--namespace", cfg.namespace,
 		"--revision", fmt.Sprintf("%d", revision),
@@ -298,4 +308,111 @@ func printMigrateSuggestions(root string, env map[string]string) {
 	} else {
 		fmt.Printf("%s 可以安全执行：kp migrate run\n", colorize(colorGreen, "✅"))
 	}
+}
+
+// runEnvDiff 对比两个环境的 helm values 差异
+func runEnvDiff(baseCfg *deployConfig, root string, baseEnv map[string]string,
+	fromEnvName, toEnvName, serviceFilter string) {
+
+	projectName := envOrDefault(baseEnv, "PROJECT_NAME", filepath.Base(root))
+
+	// 构建 from 配置
+	fromCfg := *baseCfg
+	fromEnvMap := copyMap(baseEnv)
+	fromLabel := "local"
+	if fromEnvName != "" {
+		if kpEnv, err := loadEnv(fromEnvName); err == nil {
+			applyEnvToConfig(&fromCfg, kpEnv)
+			applyEnvToMap(fromEnvMap, kpEnv)
+			fromLabel = fromEnvName
+		} else {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
+
+	// 构建 to 配置
+	toCfg := *baseCfg
+	toEnvMap := copyMap(baseEnv)
+	if kpEnv, err := loadEnv(toEnvName); err == nil {
+		applyEnvToConfig(&toCfg, kpEnv)
+		applyEnvToMap(toEnvMap, kpEnv)
+	} else {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	// 加载 components
+	plans, err := planner.BuildPlan(filepath.Join(root, "configs", "components.yaml"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "解析 components.yaml 失败:", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("\n环境对比：%s → %s\n\n",
+		colorize(colorCyan, fromLabel), colorize(colorGreen, toEnvName))
+
+	hasDiff := false
+	for _, plan := range plans {
+		if serviceFilter != "" && plan.Name != serviceFilter {
+			continue
+		}
+		release := projectName + "-" + plan.Name
+
+		fromVals, errF := getHelmValues(&fromCfg, release)
+		toVals, errT := getHelmValues(&toCfg, release)
+
+		if errF != nil && errT != nil {
+			continue
+		}
+		if errF != nil {
+			fmt.Printf("  %s %s（%s 无此 release）\n",
+				colorize(colorYellow, "~"), plan.Name, fromLabel)
+			continue
+		}
+		if errT != nil {
+			fmt.Printf("  %s %s（%s 无此 release）\n",
+				colorize(colorYellow, "~"), plan.Name, toEnvName)
+			continue
+		}
+
+		diffs := diffValues(fromVals, toVals, "")
+		if len(diffs) == 0 {
+			fmt.Printf("  %s %-30s 无差异\n", colorize(colorGreen, "✓"), plan.Name)
+			continue
+		}
+		hasDiff = true
+		fmt.Printf("  %s %s\n", colorize(colorCyan, "▶"), plan.Name)
+		for _, d := range diffs {
+			fmt.Printf("    %s\n", d)
+		}
+	}
+
+	if !hasDiff {
+		fmt.Printf("\n%s 两个环境配置完全一致\n\n", colorize(colorGreen, "✅"))
+	}
+}
+
+// getHelmValues 获取指定环境最新 revision 的 values
+func getHelmValues(cfg *deployConfig, release string) (map[string]interface{}, error) {
+	args := []string{"helm", "get", "values", release,
+		"--namespace", cfg.namespace,
+		"--output", "yaml",
+	}
+	if cfg.kubeconfig != "" {
+		args = append(args, "--kubeconfig", cfg.kubeconfig)
+	}
+	if cfg.context != "" {
+		args = append(args, "--kube-context", cfg.context)
+	}
+	out, err := runOutput(args...)
+	if err != nil {
+		return nil, err
+	}
+	var vals map[string]interface{}
+	yaml.Unmarshal(out, &vals)
+	if vals == nil {
+		vals = make(map[string]interface{})
+	}
+	return vals, nil
 }
