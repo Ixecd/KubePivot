@@ -5,7 +5,7 @@
 
 [![Go Version](https://img.shields.io/badge/go-1.21+-blue.svg)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-143%20passing-brightgreen.svg)](/)
+[![Version](https://img.shields.io/badge/version-v2.0.0-blue.svg)](https://github.com/Ixecd/KubePivot/releases)
 
 ---
 
@@ -22,12 +22,11 @@
 - Secret 管理脚本
 - RBAC 最小权限
 
-`kp deploy` 一条命令：迁移检查 → CVE 扫描 → AI 规划 → 拓扑排序 → build/push → 多服务独立 helm release → 状态追踪 → 耗时统计，全自动。
+`kp deploy` 一条命令：OPA 策略检查 → 迁移兼容性 → CVE 扫描 → AI 规划 → 拓扑排序 → build/push → 多服务独立 helm release → 状态追踪 → 耗时统计，全自动。
 
 ---
 
 ## 快速开始
-
 ```bash
 # 安装
 go install github.com/Ixecd/kubepivot/cmd/kp@latest
@@ -42,261 +41,205 @@ cd myapp
 # 编辑部署配置
 vim configs/project.env   # 填 REGISTRY_PREFIX、KUBE_CONTEXT
 
-# AI 规划服务配置（可选）
-export KP_LLM_PROVIDER=grok
-export KP_LLM_API_KEY=xai-xxx
-kp ai-plan
-
 # 部署
 kp deploy
+
+# 查看状态
+kp status
 ```
 
 ---
 
-## 命令
+## 核心命令
 
-| 命令 | 说明 |
-|------|------|
-| `kp init` | 生成完整 Go 项目骨架（含安全基线） |
-| `kp deploy` | 迁移检查 + CVE 扫描 + 多服务拓扑部署 |
-| `kp upgrade` | 跨版本全链路升级（DB迁移 + 部署 + 健康校验） |
-| `kp migrate` | DB 迁移状态检查 + 破坏性变更分析 + 执行迁移 |
-| `kp compat` | API 兼容性检测（oasdiff） |
-| `kp diff` | 对比两个 revision 的 helm values（含迁移建议） |
-| `kp promote` | 蓝绿发布流量切换 |
-| `kp scan` | 独立 CVE 扫描（Trivy） |
-| `kp doctor` | 环境检查 + 安全检查 + 性能检查 + 跨域嗅探 |
-| `kp doctor --perf` | 测试 Apiserver P99 延迟，推荐并发度 |
-| `kp ai-plan` | AI 扫描仓库，生成 components.yaml |
-| `kp status` | 查看所有 helm release + StatefulSet pod 详情 |
-| `kp rollback` | 拓扑逆序回滚所有服务 |
-| `kp resume` | 从中断点恢复部署 |
-| `kp release` | 打版本 tag，可选触发部署 |
-| `kp down` | 彻底下线，删除所有集群资源 |
-| `kp history` | 查看状态转换历史（支持 --export json/csv） |
-| `kp pvc` | PVC 快照备份和恢复（需要 CSI） |
-| `kp secret` | Secret 轮转 / 清理 / 审计 |
-| `kp network gen` | 生成跨 namespace NetworkPolicy 模板 |
+### 项目脚手架
+```bash
+kp init --name myapp --module github.com/me/myapp
+kp ai-plan                        # AI 规划服务配置（可选）
+```
+
+### 部署
+```bash
+kp deploy                          # 全量部署
+kp deploy --changed-only           # 增量部署（git diff）
+kp deploy --parallelism 4          # 控制并发
+kp deploy --env prod               # 指定环境
+kp deploy --preview                # 蓝绿 + Header 路由模板
+kp resume                          # 从中断点恢复
+kp rollback                        # 回滚
+kp upgrade --target v1.2.0         # 跨版本升级（兼容性检查 + 迁移 + 部署）
+```
+
+### 状态 & 对比
+```bash
+kp status                          # 当前状态
+kp status --env prod               # 指定环境
+kp status --all-envs               # 跨集群统一视图
+kp diff                            # helm values 变更对比
+kp diff --drift                    # 配置漂移检测（三级分层）
+kp diff --to-env prod              # 环境间配置对比
+```
+
+### 蓝绿发布
+```bash
+kp promote --service wallet        # 切换流量
+kp warmup --service wallet \       # 线性预热（10%→50%→100%）
+  --steps 10,50,100 \
+  --interval 2m,5m \
+  --err-threshold 0.01
+```
+
+### 数据库迁移
+```bash
+kp migrate status                  # 查看当前版本
+kp migrate plan                    # 分析迁移风险
+kp migrate run                     # 执行迁移（自动 PVC 快照保护）
+kp migrate run --dry-run           # 预览
+kp migrate fix-dirty               # 修复 dirty 状态
+kp compat check                    # API 兼容性检查（oasdiff）
+```
+
+### Operation Sandbox（迁移原子性）
+```bash
+kp sandbox start --dry-run         # 查看执行计划
+kp sandbox start                   # LOCKED→SNAPSHOTTING→SIMULATING→COMMITTING→RUNNING
+kp sandbox status                  # 查看沙盒状态
+kp sandbox unlock --force \        # 强制解锁（COMMITTING 阶段禁止）
+  --reason "原因"
+```
+
+### PVC 管理
+```bash
+kp pvc backup                      # 创建 PVC 快照
+kp pvc restore                     # 恢复快照
+kp pvc list                        # 列出快照
+```
+
+### Secret 管理
+```bash
+kp secret rotate --secret myapp-secret --strategy graceful
+kp secret cleanup --secret myapp-secret
+kp secret audit                    # TLS 证书过期检测
+kp secret sync --from vault \      # 从 Vault 同步
+  --secret myapp-secret \
+  --vault-path secret/data/myapp
+```
+
+### 多集群管理
+```bash
+kp context add --name prod \
+  --context my-k8s \
+  --namespace production
+kp context list
+kp deploy --env prod
+kp status --all-envs
+kp diff --from-env staging --to-env prod
+```
+
+### 企业合规
+```bash
+kp audit --format table            # 审计日志（SOC2/ISO27001）
+kp audit --format csv --output audit.csv
+kp policy add --name no-latest-tag \
+  --file examples/policies/no-latest-tag.rego
+kp policy check                    # 手动运行策略检查
+```
+
+### 混沌工程
+```bash
+kp chaos inject --service wallet \
+  --kind pod-kill --duration 30s --dry-run
+kp chaos inject --service wallet \
+  --kind network-delay --latency 200ms
+kp chaos list
+kp chaos stop --uid <uid>
+```
+
+### 工具链
+```bash
+kp doctor                          # 环境检查（含 drift 告警）
+kp doctor --perf                   # 性能基准（Apiserver P99）
+kp scan                            # CVE 扫描（trivy）
+kp history --export json           # 部署历史导出
+kp network gen                     # 生成跨 namespace NetworkPolicy 模板
+kp version                         # 查看版本
+kp update                          # 自动更新
+kp plugin install <name>           # 安装插件
+```
 
 ---
 
-## kp init 生成内容
+## 架构
 
 ```
-myapp/
-├── cmd/myapp/               # 服务入口（含 /healthz 路由）
-├── internal/
-│   ├── api/                 # HTTP handler + 路由
-│   ├── auth/                # JWT + RBAC 中间件
-│   ├── db/                  # 数据库连接 + 迁移（golang-migrate）
-│   ├── metrics/             # Prometheus 指标
-│   └── pkg/code/            # 业务错误码
-├── deployments/myapp/
-│   ├── myapp-postgres/      # StatefulSet + PVC
-│   ├── myapp-etcd/          # StatefulSet + PVC
-│   ├── myapp/               # 业务服务（Pod 安全 + NetworkPolicy + limits）
-│   └── myapp-controller/    # A2 自愈控制器（默认 disabled）
-├── scripts/
-│   └── create-secret.sh     # 幂等创建 K8s Secret
-├── configs/
-│   ├── project.env          # 部署配置
-│   ├── components.yaml      # 服务列表 + 依赖关系
-│   └── resources.yaml       # controller 监控资源
-├── monitoring/              # Prometheus + Alertmanager + Grafana
-└── handoff/
-    ├── HANDOFF.md           # 项目上下文交接文档
-    └── AI-CODING-GUIDE.md   # AI 编码约束指南
+kp CLI
+├── 项目脚手架（kp init）
+├── 部署引擎（kp deploy）
+│   ├── AI 规划（可选，grok/openai）
+│   ├── DAG 拓扑排序（Kahn 算法）
+│   ├── 并行部署（semaphore + goroutine）
+│   └── 状态机（etcd 持久化）
+├── A2 Reconciliation Controller
+│   ├── Leader Election（etcd 分布式锁）
+│   ├── WorkQueue（三集合去重）
+│   ├── Drift Sync Loop（30s 扫描）
+│   └── Sandbox GC Loop（5m 扫描）
+├── 企业工具链
+├── 迁移引擎（golang-migrate / Atlas）
+├── 蓝绿发布 + Preview + Warmup
+├── Operation Sandbox（原子性迁移）
+├── OPA 策略引擎
+├── 多集群管理
+└── 混沌工程（Chaos Mesh）
 ```
 
 ---
 
-## 安全基线（开箱即用）
-
-| 特性 | 实现 |
-|------|------|
-| Secret 不进 git | `create-secret.sh` + 部署前自动检查 |
-| Pod 安全 | runAsNonRoot / readOnlyRootFilesystem / allowPrivilegeEscalation=false |
-| 网络隔离 | NetworkPolicy 默认拒绝入站 |
-| 资源限制 | requests + limits 默认值 |
-| RBAC 最小权限 | controller 只授予必要资源（含 leases 读写权） |
-| CVE 扫描 | `kp scan` + `kp deploy` 自动集成 Trivy |
-| 明文密码检测 | `kp doctor` 扫描 values.yaml |
-| DB 迁移安全 | `kp deploy` 前自动检测破坏性变更，阻断部署 |
-| Secret 轮转 | `kp secret rotate` 双密码过渡期，零宕机 |
-
----
-
-## kp deploy 流程
-
-```
-迁移兼容性检查（破坏性变更阻断）
-    ↓
-Secret 检查（缺失则警告）
-    ↓
-CVE 扫描（Trivy）
-    ↓
-BuildLayers（Kahn 拓扑排序）→ []Layer
-    ↓
-for each 层级（同层并行 --parallelism 控制，层间串行）：
-    build → push → helm upgrade --install → rollout status
-    ↓ 失败
-    级联 rollback → 整组 rollback → kp down
-    ↓
-部署耗时统计（build/push/helm/rollout 各阶段）
-```
-
-状态机：
+## 状态机
 
 ```
 IDLE → INITIALIZING → DEPLOYING → VALIDATING → RUNNING
-                          ↓              ↓
-                    ROLLING_BACK ←───────┘
-                      CLEANING → IDLE
+                           ↓
+                      ROLLING_BACK → RUNNING
+
+RUNNING → LOCKED → SNAPSHOTTING → SIMULATING → COMMITTING → RUNNING
+                                                    ↓
+                                                RESTORING → IDLE
 ```
+
+COMMITTING 阶段禁止 force-unlock（DB 正在迁移，强制解锁会导致数据不一致）。
 
 ---
 
-## kp secret rotate
+## 设计原则
 
-```bash
-# 立即轮转（非 DB 类 Secret）
-kp secret rotate --secret wallet-service-secret
+**只保护，不越权**：kp 只对自己声明所有权的字段（image/env/ports/resources）执行 force-sync，不干预 Istio/HPA/云厂商注入的字段，避免无限套娃。
 
-# 优雅轮转（DB 类 Secret，双密码过渡）
-kp secret rotate --secret wallet-service-secret --strategy=graceful
+**降级不阻断**：Trivy 未安装跳过扫描，OPA 未安装跳过策略检查，Prometheus 不可达跳过 error rate 监控，CSI 未安装跳过 PVC 快照——不因为可选组件缺失而阻止核心流程。
 
-# 确认 DB 端已禁用旧密码后清理
-kp secret cleanup --secret wallet-service-secret
-
-# TLS 证书过期审计
-kp secret audit
-```
-
----
-
-## 跨 namespace 依赖
-
-`components.yaml` 支持声明跨 namespace 依赖：
-
-```yaml
-components:
-  - name: wallet-service
-    depends_on:
-      - web3-blitz-postgres      # 同 namespace（参与 DAG 排序）
-      - kube-system/coredns      # 跨 namespace（只嗅探，不参与 DAG）
-```
-
-```bash
-# kp doctor 自动嗅探跨 namespace 依赖是否存在
-kp doctor
-
-# 生成跨 namespace NetworkPolicy 模板（不自动 apply）
-kp network gen
-kubectl apply -f deployments/myapp/network/   # 用户审查后手动执行
-```
-
----
-
-## 可观测性
-
-```bash
-# 结构化 JSON 日志（接入 ELK/Loki）
-LOG_FORMAT=json kp deploy 2>deploy.log
-
-# 调试模式
-LOG_LEVEL=debug kp deploy
-
-# 导出部署历史
-kp history --export json
-kp history --export csv
-
-# Apiserver 性能检测
-kp doctor --perf
-kp doctor --perf --context prod-cluster
-```
-
----
-
-## A2 Reconciliation Controller（高可用）
-
-Controller 支持多副本 Leader Election，任意节点故障不影响自愈：
-
-```
-kp deploy → 写状态到 etcd → 退出
-                  ↓
-kubepivot-controller（3 副本，etcd Leader Election）
-    ├── Leader 节点运行 Reconcile Loop
-    ├── etcd Watch（事件驱动，WorkQueue 去重防风暴）
-    └── 8s 周期 Reconcile（兜底）
-            ↓
-        检测资源缺失 → helm rollback → 自动恢复（~13s）
-```
-
----
-
-## AI 规划
-
-```bash
-export KP_LLM_PROVIDER=grok      # grok / claude / openai / doubao
-export KP_LLM_API_KEY=xai-xxx
-kp ai-plan --suggest-only
-kp ai-plan --desc "BTC/ETH 充提币系统"
-```
-
-支持 Grok / Claude / OpenAI / 豆包，`KP_LLM_ENDPOINT` 支持私有化部署。
-
----
-
-## 开发
-
-```bash
-# 一键 build + test + install
-make dev
-
-# 单独安装
-make install
-
-# KWOK 压测（需要 kwokctl）
-./scripts/bench/kwok_dag_bench.sh 500 20
-```
-
----
-
-## 版本路线图
-
-```
-v1.0.0  多服务独立 release + 拓扑排序 + 级联 rollback        🏆
-v1.1.0  controller e2e + status 多 release + rollback 进度   🏆
-v1.2.0  安全合规基线（Secret/Pod 安全/NetworkPolicy/doctor）  🏆
-v1.3.0  供应链安全（Trivy CVE + cosign + SBOM）              🏆
-v1.4.0  跨版本迁移（DB迁移感知 + API兼容 + kp upgrade）      🏆
-v1.5.0  StatefulSet 支持（etcd 健康监控 + pod 详情）          🏆
-v1.5.1  蓝绿 e2e + 状态机 P1 bug 修复                        🏆
-v1.5.2  Secret 轮转（双密码过渡 + TLS 过期审计）             🏆
-v1.6.0  Controller HA + 大规模场景 + 可观测性                🏆  ← 当前
-v1.7.0  状态漂移治理（SSA FieldManager + force-sync）
-v1.8.0  Operation Sandbox + DB 迁移原子性 + 蓝绿增强
-v1.9.0  多集群联邦 + 企业合规
-v2.0.0  企业级插件平台（Vault + Web UI + Chaos Mesh）
-```
+**确定性优先**：部署顺序由 DAG 决定，漂移治理由规则决定，不依赖 AI 做关键路径决策。
 
 ---
 
 ## 文档
 
-- [Quickstart](docs/guide/zh-CN/quickstart.md)
-- [部署指南](docs/guide/zh-CN/deploy.md)
+- [快速开始](docs/guide/zh-CN/quickstart.md)
 - [命令参考](docs/guide/zh-CN/commands.md)
-- [已知坑和注意事项](docs/guide/zh-CN/gotchas.md)
-- [整体架构设计](docs/design/architecture.md)
+- [常见问题](docs/guide/zh-CN/gotchas.md)
+- [架构设计](docs/design/architecture.md)
 - [状态机设计](docs/design/state-machine.md)
-- [A2 Controller 设计](docs/design/controller.md)
-- [数据库迁移设计](docs/design/migrate.md)
-- [蓝绿发布设计](docs/design/bluegreen.md)
-- [跨版本升级设计](docs/design/upgrade.md)
+- [Operation Sandbox](docs/design/sandbox.md)
+- [蓝绿发布](docs/design/bluegreen.md)
+- [OPA 策略示例](examples/policies/README.md)
+
+---
+
+## Companion 项目
+
+[web3-blitz](https://github.com/Ixecd/web3-blitz) — KubePivot 的端到端验证项目，BTC/ETH 充提，跑在 k3s + OrbStack 上。
 
 ---
 
 ## License
 
-MIT
+MIT © 2026 qc（Ixecd）
