@@ -93,6 +93,8 @@ func main() {
 		runPolicy(os.Args[2:])
 	case "audit":
 		runAudit(os.Args[2:])
+	case "chaos":
+		runChaos(os.Args[2:])
 	case "plugin":
 		runPlugin(os.Args[2:])
 	case "version":
