@@ -87,15 +87,15 @@ func TestWorkQueue_Run_ProcessesAll(t *testing.T) {
 	var mu sync.Mutex
 	processed := []string{}
 
+	q.Add("a")
+	q.Add("b")
+	q.Add("a") // 去重
+
 	q.Run(ctx, func(key string) {
 		mu.Lock()
 		processed = append(processed, key)
 		mu.Unlock()
 	})
-
-	q.Add("a")
-	q.Add("b")
-	q.Add("a") // 去重
 
 	time.Sleep(200 * time.Millisecond)
 
