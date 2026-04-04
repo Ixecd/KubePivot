@@ -7,7 +7,7 @@ PROJECT_NAME   ?= demo-svc
 KUBE_NAMESPACE ?= $(PROJECT_NAME)
 KUBE_CONTEXT   ?=
 KUBE_CONFIG    ?=
-CHART_DIR      ?= $(ROOT_DIR)/deployments/$(PROJECT_NAME)
+CHART_DIR      ?= $(ROOT_DIR)/deployments/$(PROJECT_NAME)/$(PROJECT_NAME)
 
 NAMESPACE ?= $(KUBE_NAMESPACE)
 CONTEXT   ?= $(KUBE_CONTEXT)
@@ -55,13 +55,15 @@ deploy.build:
 .PHONY: deploy.push
 deploy.push:
 	@$(foreach img,$(IMAGES), \
-		if docker image inspect $(REGISTRY_PREFIX)/$(img)-$(ARCH):$(VERSION) > /dev/null 2>&1; then \
-			echo "===========> Pushing $(img):$(VERSION)"; \
-			docker push $(REGISTRY_PREFIX)/$(img)-$(ARCH):$(VERSION) \
-			|| { echo "✘ docker push failed"; exit 1; }; \
-		else \
-			echo "===========> Skipping push $(img):$(VERSION) (not built locally, already on registry)"; \
-		fi; \
+	if docker image inspect $(REGISTRY_PREFIX)/$(img)-$(ARCH):$(VERSION) > /dev/null 2>&1; then \
+		echo "===========> Pushing $(img):$(VERSION)"; \
+		for i in 1 2 3; do \
+			docker push $(REGISTRY_PREFIX)/$(img)-$(ARCH):$(VERSION) && break; \
+			echo "  retry $$i/3..."; sleep 3; \
+		done || { echo "✘ docker push failed after 3 retries"; exit 1; }; \
+	else \
+		echo "===========> Skipping push $(img):$(VERSION) (not built locally, already on registry)"; \
+	fi; \
 	)
 
 .PHONY: deploy.install

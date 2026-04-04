@@ -494,12 +494,25 @@ func writeComponentsConfig(path, name string) error {
 		return err
 	}
 	content := fmt.Sprintf(`components:
+  # 基础设施层（无 image，只部署 helm chart，无需 build/push）
+  - name: %s-postgres
+    type: StatefulSet
+    deps: []
+
+  - name: %s-etcd
+    type: StatefulSet
+    deps: []
+
+  # 业务服务层
   - name: %s
     port: 8080
     image: %s
+    deps:
+      - %s-postgres
+      - %s-etcd
     # strategy: rolling       # rolling（默认）/ blue-green / canary
     # api_version: v1         # 对外 API 版本，用于 kp compat 依赖检查
-`, name, name)
+`, name, name, name, name, name, name)
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
