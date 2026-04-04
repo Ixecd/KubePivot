@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -178,15 +180,14 @@ func checkOPAPolicies(root string, env map[string]string) (blocked []string, war
 		policyName := strings.TrimSuffix(e.Name(), ".rego")
 
 		// opa eval --data <policy> --stdin-input 'data.kp.deny'
-		out, err := runOutput(
-			"opa", "eval",
+		cmd := exec.Command("opa", "eval",
 			"--data", policyPath,
 			"--stdin-input",
 			"--format", "raw",
 			"data.kp.deny",
 		)
-		// 通过 stdin 传入 input
-		_ = inputJSON // TODO: pipe inputJSON to opa stdin
+		cmd.Stdin = bytes.NewReader(inputJSON)
+		out, err := cmd.Output()
 
 		if err != nil {
 			warns = append(warns, fmt.Sprintf("[%s] opa 执行失败: %v", policyName, err))

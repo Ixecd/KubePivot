@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -11,21 +12,22 @@ import (
 	"time"
 
 	"github.com/Ixecd/kubepivot/internal/state"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 // AuditEvent 统一审计事件格式（SOC2/ISO27001 友好）
 type AuditEvent struct {
-	Timestamp  string `json:"timestamp"`
-	Source     string `json:"source"`     // deploy / secret / drift
-	Action     string `json:"action"`     // deploy.start / secret.rotate / drift.force-sync
-	Actor      string `json:"actor"`      // whoami 或 controller
-	Resource   string `json:"resource"`   // 项目名/服务名
-	Namespace  string `json:"namespace"`
-	From       string `json:"from,omitempty"`    // 状态转换：from
-	To         string `json:"to,omitempty"`      // 状态转换：to
-	Version    string `json:"version,omitempty"`
-	Reason     string `json:"reason,omitempty"`
-	Outcome    string `json:"outcome"`    // success / failure / warning
+	Timestamp string `json:"timestamp"`
+	Source    string `json:"source"`   // deploy / secret / drift
+	Action    string `json:"action"`   // deploy.start / secret.rotate / drift.force-sync
+	Actor     string `json:"actor"`    // whoami 或 controller
+	Resource  string `json:"resource"` // 项目名/服务名
+	Namespace string `json:"namespace"`
+	From      string `json:"from,omitempty"` // 状态转换：from
+	To        string `json:"to,omitempty"`   // 状态转换：to
+	Version   string `json:"version,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+	Outcome   string `json:"outcome"` // success / failure / warning
 }
 
 func runAudit(args []string) {
@@ -206,11 +208,52 @@ func collectSecretAudit() []AuditEvent {
 
 // collectDriftAudit drift 审计（当前 slog only，etcd 路径预留）
 func collectDriftAudit(project, namespace string, env map[string]string) []AuditEvent {
-	// TODO(v1.9.0)：从 etcd /kubepivot/<project>/<ns>/drift/<ts> 读取
-	// 当前版本：drift 审计写在 slog，CLI 无法直接读取
-	return nil
-}
+	endpoints := env["ETCD_ENDPOINTS"]
+	if endpoints == "" {
+		return nil
+	}
 
+	cli, err := clientv3.New(clientv3.Config{
+		Endpoints:   strings.Split(endpoints, ","),
+		DialTimeout: 3 * time.Second,
+	})
+	if err != nil {
+		return nil
+	}
+	defer cli.Close()
+
+	prefix := fmt.Sprintf("/kubepivot/%s/%s/drift/", project, namespace)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	resp, err := cli.Get(ctx, prefix, clientv3.WithPrefix())
+	if err != nil || resp == nil {
+		return nil
+	}
+
+	var events []AuditEvent
+	for _, kv := range resp.Kvs {
+		var raw map[string]string
+		if err := json.Unmarshal(kv.Value, &raw); err != nil {
+			continue
+		}
+		ts := raw["ts"]
+		resource := raw["resource"]
+		diffs := raw["diffs"]
+
+		events = append(events, AuditEvent{
+			Timestamp: ts,
+			Source:    "drift",
+			Action:    "drift.force-sync",
+			Actor:     "kubepivot-controller",
+			Resource:  resource,
+			Namespace: namespace,
+			Reason:    diffs,
+			Outcome:   "success",
+		})
+	}
+	return events
+}
 func writeAuditJSONL(out *os.File, events []AuditEvent) {
 	for _, e := range events {
 		data, _ := json.Marshal(e)

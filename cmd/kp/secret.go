@@ -6,6 +6,7 @@ import (
 	"encoding/pem"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -602,37 +603,47 @@ func runSecretSync(args []string) {
 	}
 }
 
-// fetchVaultKV 从 Vault KV v2 读取数据
+// fetchVaultKV 从 Vault KV v2 读取数据（net/http 实现，无外部依赖）
 func fetchVaultKV(addr, token, path string) (map[string]string, error) {
-	// Vault KV v2 API：GET /v1/<path>
-	// path 格式：secret/data/myapp
 	url := fmt.Sprintf("%s/v1/%s", strings.TrimRight(addr, "/"), path)
 
-	curlArgs := []string{
-		"curl", "-sf",
-		"-H", fmt.Sprintf("X-Vault-Token: %s", token),
-		url,
-	}
-	out, err := runOutput(curlArgs...)
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("curl 请求失败: %w", err)
+		return nil, fmt.Errorf("构建请求失败: %w", err)
+	}
+	req.Header.Set("X-Vault-Token", token)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 403 {
+		return nil, fmt.Errorf("Vault Token 无权限（403）")
+	}
+	if resp.StatusCode == 404 {
+		return nil, fmt.Errorf("Vault 路径 %q 不存在（404）", path)
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("Vault 返回 %d", resp.StatusCode)
 	}
 
-	// 解析 Vault KV v2 响应
-	var resp struct {
+	var result struct {
 		Data struct {
 			Data map[string]string `json:"data"`
 		} `json:"data"`
 		Errors []string `json:"errors"`
 	}
-	if err := json.Unmarshal(out, &resp); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("解析响应失败: %w", err)
 	}
-	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("Vault 返回错误: %v", resp.Errors)
+	if len(result.Errors) > 0 {
+		return nil, fmt.Errorf("Vault 返回错误: %v", result.Errors)
 	}
-	if resp.Data.Data == nil {
+	if result.Data.Data == nil {
 		return nil, fmt.Errorf("Vault 路径 %q 无数据", path)
 	}
-	return resp.Data.Data, nil
+	return result.Data.Data, nil
 }
