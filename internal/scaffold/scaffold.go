@@ -29,23 +29,9 @@ type InitOptions struct {
 var (
 	projectNamePattern = regexp.MustCompile(`^[a-z0-9-]+$`)
 	copyEntries        = []string{
-		".editorconfig",
 		".gitignore",
-		".gitlint",
-		".golangci.yaml",
-		".vscode",
-		"build",
-		"configs",
-		"deployments",
-		"docs",
-		"githooks",
 		"scripts",
-		"templates",
-		"tools",
-		"docker-compose.yml",
-		"LICENSE",
 		"Makefile",
-		"README.md",
 	}
 )
 
@@ -109,7 +95,7 @@ func InitProject(opts InitOptions) (err error) {
 		}
 	}
 
-	if err := writeGoMod(filepath.Join(templateRoot, "go.mod"), filepath.Join(outputDir, "go.mod"), module); err != nil {
+	if err := writeGoMod("", filepath.Join(outputDir, "go.mod"), module); err != nil {
 		return err
 	}
 	if err := writeServiceMain(filepath.Join(outputDir, "cmd", name, "main.go"), name); err != nil {
@@ -199,7 +185,7 @@ ETCD_ENDPOINTS=
 
 	replacements := map[string]string{
 		"github.com/Ixecd/kubepivot": module,
-		"dev-toolkit":                  name,
+		"dev-toolkit":                name,
 	}
 
 	if err := replaceInDir(outputDir, replacements); err != nil {
@@ -345,32 +331,15 @@ func resolveTemplateRoot(explicit string) (string, error) {
 	if explicit != "" {
 		return filepath.Abs(explicit)
 	}
-	if env := strings.TrimSpace(os.Getenv("DTK_TEMPLATE_ROOT")); env != "" {
+	// 优先使用内嵌模板（go install 后无需配置）
+	if tmpDir, err := extractEmbeddedTemplates(); err == nil {
+		return tmpDir, nil
+	}
+	// 降级：环境变量覆盖
+	if env := strings.TrimSpace(os.Getenv("KP_TEMPLATE_ROOT")); env != "" {
 		return filepath.Abs(env)
 	}
-
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("get cwd: %w", err)
-	}
-	if isTemplateRoot(cwd) {
-		return cwd, nil
-	}
-	return "", errors.New("template root not found: use --template or set DTK_TEMPLATE_ROOT")
-}
-
-func isTemplateRoot(path string) bool {
-	required := []string{
-		"Makefile",
-		filepath.Join("scripts", "make-rules", "common.mk"),
-		filepath.Join("githooks", "pre-commit.sh"),
-	}
-	for _, item := range required {
-		if _, err := os.Stat(filepath.Join(path, item)); err != nil {
-			return false
-		}
-	}
-	return true
+	return "", errors.New("template root not found: use --template or set KP_TEMPLATE_ROOT")
 }
 
 func resolveOutputDir(explicit, name string) (string, error) {

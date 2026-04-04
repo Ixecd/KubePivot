@@ -123,7 +123,7 @@ func runInit(args []string) {
 	name := flags.String("name", "", "project name (lowercase, e.g. demo-svc)")
 	module := flags.String("module", "", "go module path (e.g. github.com/you/demo-svc)")
 	output := flags.String("output", "", "output directory (default: ./<name>)")
-	template := flags.String("template", "", "template root (default: repo root or KP_TEMPLATE_ROOT)")
+	template := flags.String("template", "", "template root directory (inline templates are used by default and can be overridden by advanced users)")
 	force := flags.Bool("force", false, "allow non-empty output directory")
 	withFrontend := flags.Bool("with-frontend", false, "generate React + Vite + Tailwind frontend skeleton")
 	dryRun := flags.Bool("dry-run", false, "print what would be generated, do not execute")

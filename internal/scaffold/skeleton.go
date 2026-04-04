@@ -527,20 +527,9 @@ echo ""
 }
 
 func writeGoMod(templatePath, outputPath, module string) error {
-	data, err := os.ReadFile(templatePath)
-	if err != nil {
-		return fmt.Errorf("read go.mod template: %w", err)
-	}
-	lines := strings.Split(string(data), "\n")
-	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "module ") {
-			lines[i] = "module " + module
-		}
-		if strings.HasPrefix(strings.TrimSpace(line), "go ") {
-			lines[i] = "go 1.25"
-		}
-	}
-	return os.WriteFile(outputPath, []byte(strings.Join(lines, "\n")), 0o644)
+	// 直接硬编码 go.mod 模板，不依赖外部文件
+	content := fmt.Sprintf("module %s\n\ngo 1.25\n", module)
+	return os.WriteFile(outputPath, []byte(content), 0o644)
 }
 
 func writeSecretScript(outputDir, name string) error {

@@ -1,0 +1,146 @@
+# Copyright 2025 qc <2192629378@qq.com>. All Rights Reserved.
+# Use of this source code is governed by a MIT style
+# License that can be found in the LICENSE file.
+
+# ==============================================================================
+# Makefile helper functions for tools
+#
+
+TOOLS ?=$(BLOCKER_TOOLS) $(CRITICAL_TOOLS) $(TRIVIAL_TOOLS)
+
+.PHONY: tools.install
+tools.install: $(addprefix tools.install., $(TOOLS))
+
+.PHONY: debug-tools
+debug-tools:
+	@echo "BLOCKER_TOOLS: $(BLOCKER_TOOLS)"
+	@echo "CRITICAL_TOOLS: $(CRITICAL_TOOLS)" 
+	@echo "TRIVIAL_TOOLS: $(TRIVIAL_TOOLS)"
+	@echo "TOOLS: $(TOOLS)"
+	@echo "Dependencies: $(addprefix tools.install., $(TOOLS))"
+
+.PHONY: tools.install.%
+tools.install.%:
+	@echo "===========> Installing $*"
+	@$(MAKE) install.$*
+
+.PHONY: tools.verify.%
+tools.verify.%:
+	@if ! which $* &>/dev/null; then $(MAKE) tools.install.$*; fi
+
+.PHONY: install.swagger
+install.swagger:
+	@$(GO) install github.com/go-swagger/go-swagger/cmd/swagger@latest
+
+.PHONY: install.golangci-lint
+install.golangci-lint:
+	@$(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	@golangci-lint completion bash > $(HOME)/.golangci-lint.bash
+	@if ! grep -q .golangci-lint.bash $(HOME)/.bashrc; then echo "source \$$HOME/.golangci-lint.bash" >> $(HOME)/.bashrc; fi
+
+.PHONY: install.go-junit-report
+install.go-junit-report:
+	@$(GO) install github.com/jstemmer/go-junit-report@latest
+
+.PHONY: install.gsemver
+install.gsemver:
+	@$(GO) install github.com/arnaud-deprez/gsemver@latest
+
+.PHONY: install.git-chglog
+install.git-chglog:
+	@$(GO) install github.com/git-chglog/git-chglog/cmd/git-chglog@latest
+
+.PHONY: install.github-release
+install.github-release:
+	@$(GO) install github.com/github-release/github-release@latest
+
+.PHONY: install.coscli
+install.coscli:
+	@wget -q https://github.com/tencentyun/coscli/releases/download/v0.10.2-beta/coscli-linux -O ${HOME}/bin/coscli
+	@chmod +x ${HOME}/bin/coscli
+
+.PHONY: install.coscmd
+install.coscmd:
+	@pipx install coscmd || brew install tencentyun/tap/coscli || echo "coscmd optional skip"
+
+.PHONY: install.golines
+install.golines:
+	@$(GO) install github.com/segmentio/golines@latest
+
+.PHONY: install.go-mod-outdated
+install.go-mod-outdated:
+	@$(GO) install github.com/psampaz/go-mod-outdated@latest
+
+.PHONY: install.mockgen
+install.mockgen:
+	@$(GO) install github.com/golang/mock/mockgen@latest
+
+.PHONY: install.gotests
+install.gotests:
+	@$(GO) install github.com/cweill/gotests/gotests@latest
+
+.PHONY: install.protoc-gen-go
+install.protoc-gen-go:
+	@$(GO) install github.com/golang/protobuf/protoc-gen-go@latest
+
+.PHONY: install.cfssl
+install.cfssl:
+	@go install github.com/cloudflare/cfssl/cmd/cfssl@latest
+	@go install github.com/cloudflare/cfssl/cmd/cfssljson@latest
+
+.PHONY: install.addlicense
+install.addlicense:
+	@$(GO) install github.com/marmotedu/addlicense@latest
+
+.PHONY: install.goimports
+install.goimports:
+	@$(GO) install golang.org/x/tools/cmd/goimports@latest
+
+.PHONY: install.depth
+install.depth:
+	@$(GO) install github.com/KyleBanks/depth/cmd/depth@latest
+
+.PHONY: install.go-callvis
+install.go-callvis:
+	@$(GO) install github.com/ofabry/go-callvis@latest
+
+.PHONY: install.gothanks
+install.gothanks:
+	@$(GO) install github.com/psampaz/gothanks@latest
+
+.PHONY: install.richgo
+install.richgo:
+	@$(GO) install github.com/kyoh86/richgo@latest
+
+.PHONY: install.rts
+install.rts:
+	@$(GO) install github.com/galeone/rts/cmd/rts@latest
+
+.PHONY: install.codegen
+install.codegen:
+	@$(GO) install github.com/Ixecd/kubepivot/tools/codegen@latest
+
+.PHONY: install.kube-score
+install.kube-score:
+	@$(GO) install github.com/zegl/kube-score/cmd/kube-score@latest
+
+.PHONY: install.go-gitlint
+install.go-gitlint:
+	@$(GO) install github.com/marmotedu/go-gitlint/cmd/go-gitlint@latest
+
+.PHONY: install.trivy
+install.trivy:
+	@echo "===========> Installing trivy"
+	@curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+		| sh -s -- -b $(HOME)/bin
+
+.PHONY: install.cosign
+install.cosign:
+	@echo "===========> Installing cosign"
+	@curl -sfL https://raw.githubusercontent.com/sigstore/cosign/main/scripts/install.sh \
+		| sh -s -- -b $(HOME)/bin
+
+.PHONY: install.oasdiff
+install.oasdiff:
+	@echo "===========> Installing oasdiff"
+	@go install github.com/oasdiff/oasdiff/cmd/oasdiff@latest
