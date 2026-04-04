@@ -61,18 +61,17 @@ CD 是集群内部的事——Operator 看着 Git，看着 Registry，自己决�
 
 KubePivot 不是 ArgoCD，也不是 Flux。它解决的问题更具体：**如何让一个 Go 后端团队，在不深入理解 K8s 运维的前提下，拥有 GitOps 级别的 CD 能力**。
 
-### kp deploy 不是推送，是声明
+### 两种模式，同一个方向
+
+**模式 A（今天可用）：kp deploy + Controller 持续调谐**
 
 ```bash
-kp deploy
+kp deploy   # 开发者或 CI 触发，声明期望状态
 ```
 
-这条命令做的事情不是"把 Pod 推进集群"，而是"声明我希望集群运行这个版本"。状态机记录这个意图，Controller 在集群内部持续调谐这个意图：
+这条命令做的事情不是"把 Pod 推进集群"，而是"声明我希望集群运行这个版本"。状态机记录这个意图，Controller 在集群内部持续调谐：
 
 ```
-Git 里的 components.yaml = 期望服务列表
-configs/project.env 里的 VERSION = 期望版本
-↓
 kp deploy 执行一次部署，写入状态机
 ↓
 A2 Reconciliation Controller 持续运行
@@ -81,18 +80,28 @@ A2 Reconciliation Controller 持续运行
   └── 发现偏差 → 自愈（重新部署/回滚/调整 limits）
 ```
 
-### CD 的真正入口是 Git Commit
+**模式 B（愿景）：Git 原生内嵌 KubePivot**
 
-理想的流程长这样：
+这才是"退化"的完整含义——把 KubePivot 直接嵌进 Git 的钩子机制：
+
+```bash
+# .githooks/post-receive（kp init 自动生成，make tools 自动注册）
+#!/bin/bash
+kp deploy --changed-only
+```
 
 ```
-开发者：git push
-  → CI：Lint + 测试 + 构建镜像 + 更新 Git 里的 VERSION
-  → KubePivot Controller：检测到版本变化 → 自动执行部署链路
+git push
+  → post-receive hook 触发 kp deploy
+  → Controller 接管后续调谐
   → 开发者：喝完咖啡，服务已经在跑了
 ```
 
-CI 不碰 K8s。K8s 的事情是 Controller 的责任。**CD 的入口从 "CI 推命令" 退化回了 "Git Commit"**——这里的"退化"是褒义词，是把复杂度藏到了正确的地方。
+不需要 CI/CD 平台，不需要 GitHub Actions，不需要 Jenkins。**Git 本身就是部署系统的控制平面。**
+
+这不是理想化——Git hook 是 Git 的原生能力，`kp init` 生成的项目已经预置了 `.githooks/` 目录，`make tools` 一键注册。从今天开始，你可以选择这条路。
+
+**CD 的入口从"CI 推命令"退化回了"Git Commit"**——这里的"退化"是褒义词，是把复杂度藏到了正确的地方，是对过度工程化的清醒反抗。
 
 ---
 
@@ -102,7 +111,7 @@ CI 不碰 K8s。K8s 的事情是 Controller 的责任。**CD 的入口从 "CI �
 
 DB 迁移和服务升级最怕的是：迁移成功了，服务部署失败了——DB 已经变了，但代码还是旧的，数据不一致，回滚成本极高。
 
-KubePivot 的 Sandbox 解决这个问题：
+KubePivot 的 Sandbox 在支持 CSI Snapshot 的环境下实现近似原子性：
 
 ```
 LOCKED → SNAPSHOTTING → SIMULATING → COMMITTING → RUNNING
@@ -110,7 +119,7 @@ LOCKED → SNAPSHOTTING → SIMULATING → COMMITTING → RUNNING
                           RESTORING（pvc restore + helm rollback）→ IDLE
 ```
 
-整个链路是原子的。COMMITTING 阶段永远禁止 force-unlock——DB 正在迁移的时候，不允许任何人强制中断，这个约束写死在状态机里，不是靠文档靠约定。
+COMMITTING 阶段在软件层面禁止 force-unlock——DB 正在迁移的时候，状态机拒绝任何强制中断请求。这个约束写在代码里，不是靠文档靠约定。极端故障场景（节点 crash、etcd 脑裂）需要人工介入，这一点我们诚实地写在 TODO 里。
 
 ### 漂移治理（Drift Governance）
 
@@ -141,8 +150,6 @@ local       web3-blitz            RUNNING   v0.1.12    04-04 07:14
 staging     web3-blitz-staging    IDLE      v0.1.12    04-04 09:01
 ```
 
-`kp diff --from-env local --to-env staging` 对比两个环境的 helm values 差异。`kp deploy --env prod` 直接部署到生产环境。
-
 ### 企业合规开箱即用
 
 ```bash
@@ -154,17 +161,16 @@ kp policy add --name no-latest-tag \       # OPA 策略，kp deploy 前自动检
 ### 自愈策略全覆盖
 
 ```yaml
-# configs/resources.yaml
 resources:
   - kind: Deployment
     name: wallet-service
-    on-missing: recreate   # recreate | rollback | scale-down | alert | custom
+    on-missing: recreate
     force-sync: true
     no-sync-fields:
-      - replicas            # HPA 管理，kp 不强制同步
+      - replicas   # HPA 管理，kp 不强制同步
 ```
 
-OOMKilled → 自动调整 memory limit +25%。CrashLoopBackOff → 区分启动错误（等待人工）和运行时错误（restarts≥5 自动回滚）。
+OOMKilled → 自动调整 memory limit +25%。CrashLoopBackOff → 区分启动错误和运行时错误，restarts≥5 自动回滚。
 
 ---
 
@@ -175,12 +181,13 @@ OOMKilled → 自动调整 memory limit +25%。CrashLoopBackOff → 区分启动
 | 定位 | 通用 GitOps 平台 | Go 项目 CD 工具链 |
 | 使用门槛 | 需要深入理解 K8s，配置复杂 | `kp init` 一键生成，`kp deploy` 一键部署 |
 | 脚手架 | 无（只管 CD） | 内置（含 Helm chart、迁移、RBAC、监控）|
-| DB 迁移 | 无原生支持 | Operation Sandbox，原子性保证 |
+| DB 迁移 | 无原生支持 | Operation Sandbox，近似原子性 |
 | 漂移治理 | 基础支持 | 三级分层（Hard/Managed/Exempted）|
 | 混沌工程 | 无 | `kp chaos inject`（Chaos Mesh API）|
+| Git 原生集成 | 需要额外配置 | `.githooks/` 开箱即用 |
 | 学习成本 | 高（需懂 K8s、Helm、Kustomize）| 低（Go 开发者几分钟上手）|
 
-KubePivot 不是要替代 ArgoCD，而是**为 Go 后端团队提供更低门槛的 GitOps 路径**。你不需要先成为 K8s 专家，再学 ArgoCD，再配 Flux——`kp init` 生成的项目天生就是 GitOps 兼容的。
+KubePivot 不是要替代 ArgoCD，而是**为 Go 后端团队提供更低门槛的 GitOps 路径**。更激进的一点：KubePivot 把 GitOps 的触发器从"平台"还给了"Git"——`kp init` 生成的项目，`git push` 就是部署。
 
 ---
 
@@ -190,20 +197,24 @@ KubePivot 不是要替代 ArgoCD，而是**为 Go 后端团队提供更低门槛
 # 安装
 go install github.com/Ixecd/kubepivot/cmd/kp@latest
 
-# 生成项目
+# 生成项目（含 .githooks/）
 kp init --name myapp --module github.com/me/myapp
 cd myapp
+
+# 注册 Git hook
+make tools
 
 # 部署
 ./scripts/create-secret.sh
 kp deploy
 
-# 以后的每次发布
+# 以后的每次发布——或者直接 git push
 kp release --version v0.2.0
-# → 自动更新 VERSION，打 tag，push，Controller 接管后续
 ```
 
-你的 CI 继续做它擅长的：构建、测试、推镜像。K8s 的事情交给 KubePivot——**让 CD 回归它本该有的样子：一次 Git Commit**。
+你的 CI 继续做它擅长的：构建、测试、推镜像。K8s 的事情交给 KubePivot。Git 的事情交给 Git。
+
+**让 CD 回归它本该有的样子：一次 Commit。**
 
 ---
 
@@ -213,7 +224,7 @@ kp release --version v0.2.0
 
 GitOps 告诉我们：**真正的可靠来自系统的自愈能力，而不是 Pipeline 的繁琐程度**。
 
-KubePivot 是这个信念的一次工程实践——一个人，两个月，从生日当天的 v1.0.0 到今天的 v2.0.0，236 个单元测试，每一行代码都在问同一个问题：
+KubePivot 是这个信念的一次工程实践——一个人，两个月，从生日当天的 v1.0.0 到 v2.0.0，236 个单元测试，每一行代码都在问同一个问题：
 
 **怎样让下一个开发者不必再踩我踩过的坑？**
 
