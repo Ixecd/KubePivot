@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -24,6 +25,8 @@ func runSecret(args []string) {
 		runSecretRotate(args[1:])
 	case "cleanup":
 		runSecretCleanup(args[1:])
+	case "sync":
+		runSecretSync(args[1:])
 	case "audit":
 		runSecretAudit(args[1:])
 	default:
@@ -43,9 +46,9 @@ func printSecretUsage() {
 // ── secretKeyRef 引用记录 ─────────────────────────────────────────────────────
 
 type SecretRef struct {
-	Service    string // 服务名
-	MountType  string // "env" | "volume"
-	Kind       string // Deployment | StatefulSet
+	Service   string // 服务名
+	MountType string // "env" | "volume"
+	Kind      string // Deployment | StatefulSet
 }
 
 // ── kp secret rotate ──────────────────────────────────────────────────────────
@@ -53,9 +56,9 @@ type SecretRef struct {
 func runSecretRotate(args []string) {
 	flags := flag.NewFlagSet("secret rotate", flag.ExitOnError)
 	secretName := flags.String("secret", "", "Secret 名称（必填）")
-	strategy   := flags.String("strategy", "immediate", "轮转策略：immediate | graceful")
-	namespace  := flags.String("namespace", "", "kubernetes namespace")
-	context    := flags.String("context", "", "kubernetes context")
+	strategy := flags.String("strategy", "immediate", "轮转策略：immediate | graceful")
+	namespace := flags.String("namespace", "", "kubernetes namespace")
+	context := flags.String("context", "", "kubernetes context")
 	kubeconfig := flags.String("kubeconfig", "", "kubeconfig 路径")
 	if err := flags.Parse(args); err != nil {
 		os.Exit(1)
@@ -172,8 +175,8 @@ func runGracefulRotate(cfg pvcConfig, secretName string, refs []SecretRef, root 
 func runSecretCleanup(args []string) {
 	flags := flag.NewFlagSet("secret cleanup", flag.ExitOnError)
 	secretName := flags.String("secret", "", "Secret 名称（必填）")
-	namespace  := flags.String("namespace", "", "kubernetes namespace")
-	context    := flags.String("context", "", "kubernetes context")
+	namespace := flags.String("namespace", "", "kubernetes namespace")
+	context := flags.String("context", "", "kubernetes context")
 	kubeconfig := flags.String("kubeconfig", "", "kubeconfig 路径")
 	if err := flags.Parse(args); err != nil {
 		os.Exit(1)
@@ -197,8 +200,8 @@ func runSecretCleanup(args []string) {
 
 func runSecretAudit(args []string) {
 	flags := flag.NewFlagSet("secret audit", flag.ExitOnError)
-	namespace  := flags.String("namespace", "", "kubernetes namespace")
-	context    := flags.String("context", "", "kubernetes context")
+	namespace := flags.String("namespace", "", "kubernetes namespace")
+	context := flags.String("context", "", "kubernetes context")
 	kubeconfig := flags.String("kubeconfig", "", "kubeconfig 路径")
 	if err := flags.Parse(args); err != nil {
 		os.Exit(1)
@@ -475,4 +478,162 @@ func writeAuditLog(secretName, action string, refs []SecretRef) {
 		defer f.Close()
 		f.Write(append(data, '\n'))
 	}
+}
+
+// runSecretSync 从 Vault 同步 Secret 到 K8s
+func runSecretSync(args []string) {
+	flags := flag.NewFlagSet("secret sync", flag.ExitOnError)
+	from := flags.String("from", "", "来源（目前支持: vault）")
+	vaultAddr := flags.String("vault-addr", "", "Vault 地址（默认读 VAULT_ADDR 环境变量）")
+	vaultToken := flags.String("vault-token", "", "Vault Token（默认读 VAULT_TOKEN 环境变量）")
+	vaultPath := flags.String("vault-path", "", "Vault KV 路径（如 secret/data/web3-blitz）")
+	secretName := flags.String("secret", "", "目标 K8s Secret 名称（必填）")
+	namespace := flags.String("namespace", "", "kubernetes namespace")
+	context := flags.String("context", "", "kubernetes context")
+	kubeconfig := flags.String("kubeconfig", "", "kubeconfig 路径")
+	dryRun := flags.Bool("dry-run", false, "只打印将要同步的 key，不实际写入")
+	flags.Parse(args)
+
+	if *from != "vault" {
+		fmt.Fprintln(os.Stderr, "❌ 目前只支持 --from vault")
+		os.Exit(1)
+	}
+	if *secretName == "" {
+		fmt.Fprintln(os.Stderr, "❌ --secret 必填")
+		os.Exit(1)
+	}
+	if *vaultPath == "" {
+		fmt.Fprintln(os.Stderr, "❌ --vault-path 必填（如 secret/data/myapp）")
+		os.Exit(1)
+	}
+
+	// 读取 Vault 配置（环境变量优先）
+	addr := *vaultAddr
+	if addr == "" {
+		addr = os.Getenv("VAULT_ADDR")
+	}
+	if addr == "" {
+		addr = "http://127.0.0.1:8200"
+	}
+
+	token := *vaultToken
+	if token == "" {
+		token = os.Getenv("VAULT_TOKEN")
+	}
+	if token == "" {
+		fmt.Fprintln(os.Stderr, "❌ 未找到 Vault Token，请设置 VAULT_TOKEN 或使用 --vault-token")
+		os.Exit(1)
+	}
+
+	root, err := projectRoot()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "找不到项目根目录:", err)
+		os.Exit(1)
+	}
+	env, _ := readEnvFile(filepath.Join(root, "configs", "project.env"))
+	cfg := &deployConfig{
+		namespace:  *namespace,
+		context:    *context,
+		kubeconfig: expandHome(*kubeconfig),
+	}
+	resolveDeployConfig(cfg, env, root)
+
+	// 从 Vault 读取 KV
+	P.Start("🔐", fmt.Sprintf("从 Vault 读取 %s", *vaultPath))
+	kvData, err := fetchVaultKV(addr, token, *vaultPath)
+	if err != nil {
+		P.Fail(fmt.Sprintf("读取 Vault 失败: %v", err))
+		os.Exit(1)
+	}
+	P.Done(fmt.Sprintf("读取成功（%d 个 key）", len(kvData)))
+
+	if *dryRun {
+		fmt.Printf("\n%s dry-run 模式，将同步以下 key 到 Secret %q：\n\n",
+			colorize(colorYellow, "📋"), *secretName)
+		for k := range kvData {
+			fmt.Printf("  %s %s\n", colorize(colorCyan, "→"), k)
+		}
+		fmt.Printf("\n实际执行：kp secret sync --from vault --secret %s --vault-path %s\n\n",
+			*secretName, *vaultPath)
+		return
+	}
+
+	// 构建 kubectl create secret 命令
+	P.Start("📝", fmt.Sprintf("同步到 K8s Secret %q", *secretName))
+	args2 := kubectlBaseArgs(cfg.kubeconfig, cfg.context, cfg.namespace)
+	args2 = append(args2, "create", "secret", "generic", *secretName)
+	for k, v := range kvData {
+		args2 = append(args2, fmt.Sprintf("--from-literal=%s=%s", k, v))
+	}
+	args2 = append(args2, "--save-config", "--dry-run=client", "-o", "yaml")
+
+	// 先生成 YAML，再 apply（幂等）
+	out, err := runOutput(args2...)
+	if err != nil {
+		P.Fail(fmt.Sprintf("生成 Secret 失败: %v", err))
+		os.Exit(1)
+	}
+
+	applyArgs := kubectlBaseArgs(cfg.kubeconfig, cfg.context, cfg.namespace)
+	applyArgs = append(applyArgs, "apply", "-f", "-")
+
+	// 通过 stdin pipe YAML 到 kubectl apply
+	applyCmd := exec.Command(applyArgs[0], applyArgs[1:]...)
+	applyCmd.Stdin = strings.NewReader(string(out))
+	if applyOut, err := applyCmd.CombinedOutput(); err != nil {
+		P.Fail(fmt.Sprintf("apply Secret 失败: %s", string(applyOut)))
+		os.Exit(1)
+	}
+
+	P.Done(fmt.Sprintf("Secret %q 已同步（%d 个 key）", *secretName, len(kvData)))
+
+	// 写审计日志
+	// 写审计日志
+	home2, _ := os.UserHomeDir()
+	af, _ := os.OpenFile(
+		filepath.Join(home2, ".kp", "audit", "secret.jsonl"),
+		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if af != nil {
+		auditData, _ := json.Marshal(map[string]string{
+			"action": "sync/vault", "resource": *secretName,
+			"namespace": cfg.namespace, "ts": time.Now().Format(time.RFC3339),
+		})
+		af.Write(append(auditData, '\n'))
+		af.Close()
+	}
+}
+
+// fetchVaultKV 从 Vault KV v2 读取数据
+func fetchVaultKV(addr, token, path string) (map[string]string, error) {
+	// Vault KV v2 API：GET /v1/<path>
+	// path 格式：secret/data/myapp
+	url := fmt.Sprintf("%s/v1/%s", strings.TrimRight(addr, "/"), path)
+
+	curlArgs := []string{
+		"curl", "-sf",
+		"-H", fmt.Sprintf("X-Vault-Token: %s", token),
+		url,
+	}
+	out, err := runOutput(curlArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("curl 请求失败: %w", err)
+	}
+
+	// 解析 Vault KV v2 响应
+	var resp struct {
+		Data struct {
+			Data map[string]string `json:"data"`
+		} `json:"data"`
+		Errors []string `json:"errors"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil, fmt.Errorf("解析响应失败: %w", err)
+	}
+	if len(resp.Errors) > 0 {
+		return nil, fmt.Errorf("Vault 返回错误: %v", resp.Errors)
+	}
+	if resp.Data.Data == nil {
+		return nil, fmt.Errorf("Vault 路径 %q 无数据", path)
+	}
+	return resp.Data.Data, nil
 }
