@@ -257,8 +257,12 @@ func extractTableName(stmt, prefix string) string {
 	}
 	rest := strings.TrimSpace(stmt[idx+len(prefix):])
 	// 去掉 IF EXISTS / IF NOT EXISTS
-	rest = strings.TrimPrefix(strings.ToUpper(rest), "IF NOT EXISTS ")
-	rest = strings.TrimPrefix(strings.ToUpper(rest), "IF EXISTS ")
+	upperRest := strings.ToUpper(rest)
+	if strings.HasPrefix(upperRest, "IF NOT EXISTS ") {
+		rest = rest[len("IF NOT EXISTS "):]
+	} else if strings.HasPrefix(upperRest, "IF EXISTS ") {
+		rest = rest[len("IF EXISTS "):]
+	}
 	fields := strings.Fields(rest)
 	if len(fields) == 0 {
 		return ""
