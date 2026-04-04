@@ -111,8 +111,8 @@ func main() {
 			os.Exit(1)
 		}
 	default:
-		printUsage()
-		os.Exit(1)
+		// 未知命令 → 尝试作为插件执行
+		execPlugin(os.Args[1], os.Args[2:])
 	}
 }
 
