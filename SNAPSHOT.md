@@ -1,8 +1,8 @@
 # KubePivot 当前快照
 
-> 版本：v1.7.0
-> 日期：2026-04-03
-> 状态：✅ 全绿，已发布
+> 版本：v1.8.0
+> 日期：2026-04-04
+> 状态：✅ 全绿，待打 tag
 
 ---
 
@@ -11,62 +11,74 @@
 ```
 go test ./... -race  → 全绿
 make dev             → build + test + install 一键完成
-当前 tag             → v1.7.0
+当前版本             → v1.8.0（未 tag）
 companion            → github.com/Ixecd/web3-blitz
 ```
 
 ---
 
-## v1.7.0 新增能力
+## v1.8.0 新增能力
 
-### kp diff --drift
+### kp sandbox
 ```bash
-kp diff --drift
-kp diff --drift --service wallet-service
-
-# 输出三级：
-# ❌ 硬冲突（kp 拥有所有权，强制同步）
-# ⚠️  受控偏离（透明展示，不强制同步）
-# ℹ️  已豁免（no-sync-fields，完全跳过）
+kp sandbox start --dry-run        # 查看执行计划
+kp sandbox start                  # 启动沙盒（LOCKED→SNAPSHOTTING→SIMULATING→COMMITTING→RUNNING）
+kp sandbox status                 # 查看当前状态
+kp sandbox unlock --force --reason "..."  # 强制解锁（COMMITTING 禁止）
 ```
 
-### resources.yaml 新字段
-```yaml
-- kind: Deployment
-  name: wallet-service
-  on-missing: recreate | rollback | scale-down | alert | custom
-  force-sync: true
-  no-sync-fields:
-    - replicas
-```
-
-### 自愈策略全覆盖
-```
-OOMKilled        → memory limit +25%（kubectl patch）
-CrashLoopBackOff → 启动错误告警；运行时 restarts≥5 自动 rollback
-```
-
-### HPA 集成
-```yaml
-- name: wallet-service
-  min_replicas: 1
-  max_replicas: 5
-  target_cpu: 70
-```
-
-### kp doctor drift 告警
+### kp deploy --preview
 ```bash
-kp doctor   # 有 helm-diff 时自动运行 drift 检查
+kp deploy --preview               # 部署后生成 Header 路由模板（Istio/Nginx/降级）
+# 输出到 deployments/<project>/preview/
+# ⚠️ 不自动 apply，审查后手动执行
+```
+
+### kp warmup
+```bash
+kp warmup --service wallet-service --steps 10,50,100 --interval 2m,5m --dry-run
+kp warmup --service wallet-service --steps 10,50,100 --interval 2m,5m --err-threshold 0.01
+```
+
+### kp migrate fix-dirty
+```bash
+kp migrate fix-dirty              # 交互式 dirty 迁移状态修复指引
+```
+
+### 迁移保护
+```
+kp migrate run  → 自动触发 PVC 快照（有 CSI）→ 迁移失败双层回滚
+kp upgrade      → 快照保护 + 失败双层回滚
 ```
 
 ---
 
+## 新状态机
+
+```
+IDLE/RUNNING → LOCKED → SNAPSHOTTING → SIMULATING → COMMITTING → RUNNING
+                                                  ↓          ↓
+                                              RESTORING   RESTORING
+                                                  ↓
+                                                IDLE
+COMMITTING 阶段禁止 force-unlock
+```
+
+---
+
+## 设计文档
+
+- `docs/design/sandbox.md` — Operation Sandbox 完整设计
+- `docs/design/preview-warmup.md` — Header Preview + Warmup 设计
+
+---
+
 ## 技术债
+- SIMULATING Job / PVC 快照 / Istio weight patch / Prometheus：待对应环境验证
 - `--field-manager`：helm v4 不支持，用 `--force-conflicts` 替代
-- 蓝绿 timing：deployBlueGreen 分支未接入 timing 表格
 
 ---
 
 ## 下一步
 
-v1.8.0 — Operation Sandbox
+v1.9.0 — 多集群联邦 + 企业合规
