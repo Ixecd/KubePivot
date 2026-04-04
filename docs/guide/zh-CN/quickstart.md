@@ -6,8 +6,6 @@
 
 ## 前置条件
 
-在开始之前，确认本机已安装：
-
 | 工具     | 最低版本 | 检查命令                   |
 | -------- | -------- | -------------------------- |
 | Go       | 1.21+    | `go version`               |
@@ -16,9 +14,20 @@
 | helm     | 3.x      | `helm version`             |
 | K8s 集群 | 任意     | `kubectl cluster-info`     |
 
-K8s 集群可以是本地的（OrbStack、Docker Desktop、minikube）或远程集群，只要 `kubectl` 能连上即可。
+K8s 集群可以是本地的（OrbStack、Docker Desktop、minikube）或远程集群。
 
-运行 `kp doctor` 可以一键检查所有前置条件是否满足。
+```bash
+kp doctor   # 一键检查所有前置条件
+```
+
+可选增强（有则自动启用，无则静默跳过）：
+
+| 工具 | 用途 |
+|------|------|
+| trivy | CVE 扫描（`kp scan` / `kp deploy` 前） |
+| helm-diff | drift 检测（`kp diff --drift`） |
+| oasdiff | API 兼容性检查（`kp compat check`） |
+| opa | OPA 策略检查（`kp deploy` 前自动运行） |
 
 ---
 
@@ -26,12 +35,15 @@ K8s 集群可以是本地的（OrbStack、Docker Desktop、minikube）或远程�
 
 ```bash
 go install github.com/Ixecd/kubepivot/cmd/kp@latest
+
+# 验证
+kp version
 ```
 
-验证安装：
+升级到最新版本：
 
 ```bash
-kp --help
+kp update
 ```
 
 ---
@@ -40,34 +52,27 @@ kp --help
 
 ```bash
 kp init --name myapp --module github.com/me/myapp
-```
-
-你会看到：
-
-```
-✅ 项目已成功生成！
-
-  路径    ~/myapp
-  模块    github.com/me/myapp
-  入口    cmd/myapp
-
-下一步：
-  cd ~/myapp
-  make tools   # 安装所有工具
-  make build   # 编译
-  make test    # 测试
-
-⚠️  上线前请检查：
-  deployments/myapp/templates/controller-rbac.yaml
-  → 当前为最小权限，按实际需要调整 ClusterRole rules
-  deployments/myapp/templates/controller-deployment.yaml
-  → 替换 controller.image.repository 为你构建的镜像
-```
-
-进入项目目录：
-
-```bash
 cd myapp
+```
+
+生成的项目结构：
+
+```
+myapp/
+├── cmd/myapp/          # 业务服务入口
+├── internal/           # 业务逻辑（api/db/service）
+├── migrations/         # SQL 迁移文件
+├── configs/
+│   ├── project.env     # 部署配置
+│   ├── components.yaml # 服务列表 + 依赖关系
+│   └── resources.yaml  # Controller 监控资源
+├── deployments/
+│   ├── myapp/          # 业务服务 Helm chart
+│   ├── myapp-postgres/ # PostgreSQL chart
+│   ├── myapp-etcd/     # etcd chart
+│   └── myapp-controller/ # A2 Controller chart
+└── scripts/
+    └── create-secret.sh
 ```
 
 ---
@@ -78,42 +83,45 @@ cd myapp
 
 ```ini
 PROJECT_NAME=myapp
-REGISTRY_PREFIX=your-dockerhub-username   # ← 必填，改成你的 Docker Hub 用户名
-KUBE_CONTEXT=                             # ← 留空=当前 context，或填指定 context 名
-KUBE_CONFIG=                              # ← 留空=~/.kube/config
+REGISTRY_PREFIX=your-dockerhub-username   # ← 必填
+KUBE_CONTEXT=                             # ← 留空=当前 context
 KUBE_NAMESPACE=myapp
-ARCH=arm64                                # ← 按你的机器改：arm64 或 amd64
+ARCH=arm64                                # arm64 或 amd64
 VERSION=v0.1.0
-ETCD_ENDPOINTS=                           # ← 留空，状态存本地文件
+ETCD_ENDPOINTS=                           # ← 留空=本地文件存储状态
 ```
 
-**只有 `REGISTRY_PREFIX` 是必须填的**，其他按需修改。
+**只有 `REGISTRY_PREFIX` 是必须填的。**
+
+多集群支持：
+
+```bash
+kp context add --name prod --context my-k8s --namespace production
+kp deploy --env prod   # 部署到 prod 环境
+```
 
 ---
 
 ## 第四步：创建 K8s Secret
 
-敏感变量（数据库密码、JWT 密钥等）不应进入 git，通过 Secret 注入：
-
 ```bash
-./scripts/create-secret.sh
+./scripts/create-secret.sh   # 幂等，可多次运行
 ```
 
-脚本是幂等的，可以多次运行。如果你需要自定义 Secret 内容，编辑脚本后再运行。
+敏感变量（DB 密码、JWT 密钥）不进 git，通过 Secret 注入。
 
 ---
 
-## 第五步：确认业务服务有 /healthz 路由
+## 第五步：（可选）添加 OPA 策略
 
-打开 `cmd/myapp/main.go`，确认有 `/healthz` 路由（脚手架已生成，正常不需要改）：
+```bash
+kp policy add --name no-latest-tag \
+  --file examples/policies/no-latest-tag.rego
 
-```go
-mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-    w.WriteHeader(http.StatusOK)
-})
+kp policy list    # 查看已配置策略
 ```
 
-这是 K8s liveness/readiness probe 和 kp VALIDATING 阶段的依赖，缺了部署会卡住。
+策略检查在 `kp deploy` 前自动运行，未安装 `opa` 则静默跳过。
 
 ---
 
@@ -126,51 +134,26 @@ kp deploy
 完整输出示例：
 
 ```
-AI 规划结果:
-- myapp-postgres: skip (no image)
-- myapp-etcd: skip (no image)
-- myapp: replicas=1 cpu=100m memory=128Mi storage=1Gi
-
-[07:52:10] 🗂  多服务模式：2 层，独立 helm release
-[07:52:10] 🔍 开始扫描 1 个镜像（阻断级别: CRITICAL,HIGH）
-[07:52:10] ✓  myapp:v0.1.0 无漏洞（0.2s）
-[07:52:10] ✅ 镜像扫描通过
-[07:52:10] 📦 部署第 1 层（共 2 层，2 个服务）
-[07:52:10] ✓  helm upgrade myapp-myapp-postgres 完成（0.2s）
-[07:52:10] ✓  第 1 层全部就绪
-[07:52:10] 📦 部署第 2 层（共 2 层，1 个服务）
-[07:52:10] 🏗  构建 myapp:v0.1.0
-[07:52:18] ✓  构建 myapp 完成（8.3s）
-[07:52:18] 📤 推送 myapp:v0.1.0
-[07:52:21] ✓  推送 myapp 完成（3.1s）
-[07:52:21] ⛵ helm upgrade myapp-myapp
-[07:52:30] ✓  helm upgrade myapp-myapp 完成（9.2s）
-[07:52:30] 🔍 等待 myapp rollout
-[07:52:32] ✓  myapp 就绪（1.8s）
-[07:52:32] ✓  第 2 层全部就绪
-
-  部署耗时统计
-  服务              build    push     helm     rollout  总计
-  ───────────────────────────────────────────────────────────
-  myapp-postgres    -        -        0.2s     -        0.2s
-  myapp             8.3s     3.1s     9.2s     1.8s     22.4s
-
-[07:52:32] ✅ 部署完成，状态: RUNNING (version=v0.1.0)
+[07:14:02] ✅ OPA 策略检查通过
+[07:14:02] 🗂  多服务模式：2 层，独立 helm release
+[07:14:02] 🔍 开始扫描 1 个镜像（阻断级别: CRITICAL,HIGH）
+[07:14:03] ✓  myapp:v0.1.0 无漏洞
+[07:14:03] 📦 部署第 1 层（2 个服务）
+[07:14:03] ✓  helm upgrade myapp-myapp-postgres 完成
+[07:14:03] ✓  第 1 层全部就绪
+[07:14:03] 📦 部署第 2 层（1 个服务）
+[07:14:05] ✓  构建 myapp 完成（8.3s）
+[07:14:08] ✓  推送 myapp 完成（3.1s）
+[07:14:12] ✓  helm upgrade myapp-myapp 完成（9.2s）
+[07:14:14] ✓  myapp 就绪（1.8s）
+[07:14:14] ✅ 部署完成，状态: RUNNING (version=v0.1.0)
 ```
 
 验证：
 
 ```bash
 kubectl get pods -n myapp
-```
-
-看到 pod 都是 `Running` 就成功了：
-
-```
-NAME                          READY   STATUS    RESTARTS   AGE
-myapp-xxx                     1/1     Running   0          30s
-myapp-etcd-0                  1/1     Running   0          30s
-myapp-postgres-0              1/1     Running   0          30s
+kp status
 ```
 
 ---
@@ -179,135 +162,117 @@ myapp-postgres-0              1/1     Running   0          30s
 
 ```bash
 kubectl port-forward -n myapp deployment/myapp 8080:8080
-```
-
-另开一个终端：
-
-```bash
 curl http://localhost:8080/healthz
-# 返回 200 OK
 ```
-
----
-
-## 下一步：填充业务逻辑
-
-骨架生成好之后，参考 `handoff/AI-CODING-GUIDE.md` 了解在哪里加代码、不能动哪些文件。
-
-主要的业务入口：
-
-```
-internal/api/handler.go    # 加 HTTP handler
-internal/api/server.go     # 注册路由
-internal/db/               # 加数据库操作
-migrations/                # 加 SQL 迁移文件
-```
-
-业务逻辑写完后，发布新版本：
-
-```bash
-kp release --version v0.2.0 --deploy
-```
-
-这会自动更新 VERSION、打 git tag、重新 build + push + deploy。
 
 ---
 
 ## 常用命令速查
 
+### 日常部署
+
 ```bash
-# 查看部署状态（含 StatefulSet pod 详情）
-kp status
+kp deploy                    # 全量部署
+kp deploy --changed-only     # 增量（只部署有 git 变更的服务）
+kp deploy --parallelism 4    # 控制并发（大规模集群）
+kp deploy --dry-run          # 只看规划，不执行
+kp deploy --env prod         # 部署到指定环境
+kp resume                    # 中断后恢复
+kp rollback                  # 手动回滚
+```
 
-# 环境检查（含安全基线 + etcd 健康 + TLS 证书过期 + 跨域嗅探）
-kp doctor
+### 查看状态
 
-# 性能检测（Apiserver P99 延迟，推荐并发度）
-kp doctor --perf
+```bash
+kp status                    # 当前状态
+kp status --all-envs         # 跨集群统一视图
+kp status --env prod         # 指定环境
+kp diff                      # helm values 变更对比
+kp diff --drift              # 配置漂移检测
+kp diff --to-env prod        # 环境间配置对比
+```
 
-# 部署中断后恢复
-kp resume
+### 蓝绿发布
 
-# 手动回滚
-kp rollback
+```bash
+kp deploy --preview          # 部署到 inactive slot + 生成 Header 路由模板
+kp promote --service myapp   # 切换流量
+kp warmup --service myapp \  # 线性预热
+  --steps 10,50,100 --interval 2m,5m
+```
 
-# 彻底下线（删除所有资源）
-kp down
+### 数据库迁移
 
-# 只看规划，不执行
-kp deploy --dry-run
-
-# 增量部署（只部署有 git 变更的服务）
-kp deploy --changed-only
-
-# 控制并发（大规模集群延迟高时）
-kp deploy --parallelism 4
-
-# 数据库迁移
+```bash
 kp migrate status
 kp migrate plan
 kp migrate run --dry-run
+kp migrate run               # 自动 PVC 快照保护
+kp migrate fix-dirty         # 修复 dirty 状态
+```
 
-# 跨版本升级
-kp upgrade --dry-run
-kp upgrade
+### 原子性迁移（Sandbox）
 
-# Secret 轮转
-kp secret rotate --secret myapp-secret
-kp secret rotate --secret myapp-secret --strategy graceful  # DB 类零宕机
+```bash
+kp sandbox start --dry-run   # 查看执行计划
+kp sandbox start             # LOCKED→SNAPSHOTTING→SIMULATING→COMMITTING→RUNNING
+kp sandbox status
+```
 
-# 查看部署历史
-kp history
-kp history --export json
-kp history --export csv
+### 多集群
 
-# 结构化日志（接入 ELK/Loki）
-LOG_FORMAT=json kp deploy 2>deploy.log
+```bash
+kp context add --name staging --context orbstack --namespace myapp-staging
+kp context list
+kp deploy --env staging
+kp status --all-envs
+kp diff --from-env local --to-env staging
+```
+
+### 合规 & 安全
+
+```bash
+kp audit --format table      # 审计日志
+kp policy add --name check --file examples/policies/no-latest-tag.rego
+kp secret rotate --secret myapp-secret --strategy graceful
+kp secret sync --from vault --secret myapp-secret --vault-path secret/data/myapp
+kp scan                      # CVE 扫描
+```
+
+### 混沌工程
+
+```bash
+kp chaos inject --service myapp --kind pod-kill --duration 30s --dry-run
+kp chaos inject --service myapp --kind network-delay --latency 200ms
+kp chaos list
+kp chaos stop --uid <uid>
+```
+
+### 工具链
+
+```bash
+kp doctor                    # 环境检查（含 drift 告警）
+kp doctor --perf             # 性能基准
+kp history --export json     # 部署历史导出
+kp version                   # 查看版本
+kp update                    # 自动更新
+kp plugin install <name>     # 安装插件
+kp release --version v0.2.0  # 发布新版本（自动 tag + push）
+LOG_FORMAT=json kp deploy    # 结构化日志（接入 ELK/Loki）
 ```
 
 ---
 
 ## 遇到问题？
 
-**`kp deploy` 报 image not found**
+**`kp deploy` 报 image not found**：检查 `REGISTRY_PREFIX` 是否填写，Docker Hub 是否已登录。
 
-检查 `REGISTRY_PREFIX` 是否填写，Docker Hub 是否已登录（`docker login`）。
+**部署卡在 VALIDATING 超时**：确认 `/healthz` 路由返回 200。
 
-**部署卡在 VALIDATING 超时**
+**当前状态为 DEPLOYING，不能发起新部署**：运行 `kp resume`。
 
-确认 `/healthz` 路由返回 200，用以下命令手动验证：
+**当前处于 Sandbox 会话**：运行 `kp sandbox status` 查看，或 `kp sandbox unlock --force --reason "xxx"`（COMMITTING 阶段禁止）。
 
-```bash
-kubectl exec -n myapp deployment/myapp -- wget -qO- http://localhost:8080/healthz
-```
+**helm upgrade 报 pending-rollback**：参考 [常见问题](gotchas.md)。
 
-**当前状态为 DEPLOYING，不能发起新部署**
-
-```bash
-kp resume
-```
-
-**helm upgrade 报 pending-rollback**
-
-```bash
-kubectl scale deployment/kubepivot-controller -n myapp --replicas=0
-kubectl delete secret -n myapp \
-  $(kubectl get secret -n myapp -l owner=helm,name=myapp-myapp \
-    -o jsonpath='{.items[?(@.metadata.labels.status=="pending-rollback")].metadata.name}')
-kp deploy
-kubectl scale deployment/kubepivot-controller -n myapp --replicas=1
-```
-
-**状态机卡住，需要手动重置**
-
-```bash
-python3 -c "
-import json, os
-p=os.path.expanduser('~/.kp/state/myapp/myapp.json')
-d=json.load(open(p))
-d['state']='IDLE'
-json.dump(d,open(p,'w'),indent=2)
-"
-```
-
-更多问题参考 [已知坑和注意事项](gotchas.md)。
+更多问题参考 [常见问题](gotchas.md)。
