@@ -20,12 +20,30 @@ func runStatus(args []string) {
 	context := flags.String("context", "", "kubernetes context")
 	kubeconfig := flags.String("kubeconfig", "", "kubeconfig 文件路径")
 	showHistory := flags.Bool("history", false, "显示状态转换历史")
+	envName := flags.String("env", "", "指定部署环境（kp context add 配置）")
+	allEnvs := flags.Bool("all-envs", false, "显示所有配置环境的部署状态")
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "解析参数失败:", err)
 		os.Exit(1)
 	}
 	*kubeconfig = expandHome(*kubeconfig)
-
+	if *envName != "" {
+		if kpEnv, err := loadEnv(*envName); err == nil {
+			if kpEnv.Kubeconfig != "" {
+				*kubeconfig = expandHome(kpEnv.Kubeconfig)
+			}
+			if kpEnv.Context != "" {
+				*context = kpEnv.Context
+			}
+			if kpEnv.Namespace != "" {
+				*namespace = kpEnv.Namespace
+			}
+		}
+	}
+	if *allEnvs {
+		runStatusAllEnvs(args)
+		return
+	}
 	root, err := projectRoot()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "找不到项目根目录:", err)
@@ -291,4 +309,150 @@ func helmReleaseInfo(cfg *deployConfig, releaseName string) releaseInfo {
 		status:   result.Info.Status,
 		updated:  updated,
 	}
+}
+
+// runStatusAllEnvs 跨集群统一视图
+func runStatusAllEnvs(args []string) {
+	entries, err := os.ReadDir(kpEnvsDir())
+	if err != nil {
+		P.Info("⏭ ", "暂无已配置的环境，运行 kp context add 添加")
+		return
+	}
+
+	root, err := projectRoot()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "找不到项目根目录:", err)
+		os.Exit(1)
+	}
+	baseEnv, _ := readEnvFile(filepath.Join(root, "configs", "project.env"))
+	projectName := envOrDefault(baseEnv, "PROJECT_NAME", filepath.Base(root))
+
+	fmt.Printf("\n%s  跨集群部署状态 — %s\n\n",
+		colorize(colorCyan, "🌍"), projectName)
+
+	// 收集所有行，先计算各列最大宽度
+	type row struct {
+		env       string
+		namespace string
+		state     string
+		version   string
+		updatedAt string
+	}
+
+	var rows []row
+
+	localState := getEnvState(projectName,
+		envOrDefault(baseEnv, "KUBE_NAMESPACE", projectName),
+		"", "", baseEnv)
+	rows = append(rows, row{"local", localState.namespace, localState.state,
+		localState.version, localState.updatedAt})
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+			continue
+		}
+		name := strings.TrimSuffix(e.Name(), ".yaml")
+		kpEnv, err := loadEnv(name)
+		if err != nil {
+			continue
+		}
+		envMap := copyMap(baseEnv)
+		applyEnvToMap(envMap, kpEnv)
+		ns := kpEnv.Namespace
+		if ns == "" {
+			ns = envOrDefault(baseEnv, "KUBE_NAMESPACE", projectName)
+		}
+		s := getEnvState(projectName, ns, kpEnv.Kubeconfig, kpEnv.Context, envMap)
+		rows = append(rows, row{name, s.namespace, s.state, s.version, s.updatedAt})
+	}
+
+	// 计算各列最大宽度
+	w0, w1, w2, w3 := 8, 20, 10, 10
+	for _, r := range rows {
+		if len(r.env) > w0       { w0 = len(r.env) }
+		if len(r.namespace) > w1 { w1 = len(r.namespace) }
+		if len(r.state) > w2     { w2 = len(r.state) }
+		if len(r.version) > w3   { w3 = len(r.version) }
+	}
+
+	// header
+	fmt.Printf("  %-*s  %-*s  %-*s  %-*s  %s\n",
+		w0, "环境", w1, "namespace", w2, "状态", w3, "版本", "最后更新")
+	fmt.Printf("  %s  %s  %s  %s  %s\n",
+		strings.Repeat("─", w0), strings.Repeat("─", w1),
+		strings.Repeat("─", w2), strings.Repeat("─", w3),
+		strings.Repeat("─", 12))
+
+	// rows
+	for i, r := range rows {
+		envColor := colorGray
+		if i > 0 { envColor = colorCyan }
+		fmt.Printf("  %s  %-*s  %s  %-*s  %s\n",
+			pad(colorize(envColor, r.env), r.env, w0),
+			w1, r.namespace,
+			pad(stateColorized(r.state), r.state, w2),
+			w3, r.version,
+			r.updatedAt)
+	}
+	fmt.Println()
+}
+
+// pad 为带 ANSI 码的字符串按视觉宽度补空格
+func pad(colored, raw string, width int) string {
+	p := width - len(raw)
+	if p < 0 { p = 0 }
+	return colored + strings.Repeat(" ", p)
+}
+
+type envStateResult struct {
+	namespace string
+	state     string
+	version   string
+	updatedAt string
+}
+
+func getEnvState(project, namespace, kubeconfig, context string, env map[string]string) envStateResult {
+	store := state.NewAutoStore(env["ETCD_ENDPOINTS"])
+	sm, err := state.New(store, project, namespace, "")
+	if err != nil {
+		return envStateResult{namespace: namespace, state: "unknown", updatedAt: "-"}
+	}
+	rec := sm.Record()
+	updatedAt := rec.UpdatedAt.Format("01-02 15:04")
+	if rec.UpdatedAt.IsZero() {
+		updatedAt = "-"
+	}
+	version := rec.Version
+	if version == "" {
+		version = envOrDefault(env, "VERSION", "-")
+	}
+	return envStateResult{
+		namespace: namespace,
+		state:     string(rec.State),
+		version:   version,
+		updatedAt: updatedAt,
+	}
+}
+
+func stateColorized(s string) string {
+	switch s {
+	case "RUNNING":
+		return colorize(colorGreen, s)
+	case "DEPLOYING", "INITIALIZING", "VALIDATING":
+		return colorize(colorYellow, s)
+	case "ROLLING_BACK", "RESTORING":
+		return colorize(colorRed, s)
+	case "LOCKED", "COMMITTING":
+		return colorize(colorYellow, s)
+	default:
+		return colorize(colorGray, s)
+	}
+}
+
+func copyMap(m map[string]string) map[string]string {
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }

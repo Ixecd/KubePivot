@@ -89,6 +89,8 @@ func main() {
 		runNetwork(os.Args[2:])
 	case "secret":
 		runSecret(os.Args[2:])
+	case "context":
+		runContext(os.Args[2:])
 	case "sandbox":
 		runSandbox(os.Args[2:])
 	case "controller":

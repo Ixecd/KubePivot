@@ -47,6 +47,7 @@ func runDeploy(args []string) {
 	flags.BoolVar(&cfg.preview, "preview", false, "部署后生成 Header-based Preview 路由模板（Istio/Nginx）")
 	flags.BoolVar(&cfg.changedOnly, "changed-only", false, "只部署有 git 变更的服务（基于 git diff HEAD~1 HEAD）")
 	flags.IntVar(&cfg.parallelism, "parallelism", 0, "同层最大并发部署数（0=不限制，建议大规模集群设为 4-8）")
+	envName := flags.String("env", "", "指定部署环境（kp context add 配置）")
 
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "解析参数失败:", err)
@@ -62,6 +63,20 @@ func runDeploy(args []string) {
 	}
 
 	env, _ := readEnvFile(filepath.Join(root, "configs", "project.env"))
+
+	// --env 覆盖
+	if *envName != "" {
+		kpEnv, err := loadEnv(*envName)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		applyEnvToConfig(cfg, kpEnv)
+		applyEnvToMap(env, kpEnv)
+		P.Info("🌍", fmt.Sprintf("使用环境: %s（context: %s, namespace: %s）",
+			*envName, kpEnv.Context, kpEnv.Namespace))
+	}
+
 	resolveDeployConfig(cfg, env, root)
 
 	plan, err := planner.BuildPlan(filepath.Join(root, cfg.components))
@@ -111,7 +126,7 @@ func runDeploy(args []string) {
 		os.Exit(1)
 	}
 	if current != state.StateIdle && current != state.StateRunning && current != state.StateTerminated {
-	// Sandbox 状态：明确提示，禁止部署
+		// Sandbox 状态：明确提示，禁止部署
 		fmt.Fprintf(os.Stderr, "当前部署状态为 %s，不能发起新部署\n如需继续，请运行: kp resume\n", current)
 		os.Exit(1)
 	}

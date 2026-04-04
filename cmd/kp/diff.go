@@ -22,6 +22,7 @@ func runDiff(args []string) {
 	migrate := flags.Bool("migrate", false, "同时分析迁移建议（需要 DATABASE_URL）")
 	service := flags.String("service", "", "指定服务名（多服务模式下必填）")
 	drift := flags.Bool("drift", false, "检测配置漂移（需要 helm-diff 插件）")
+	envName := flags.String("env", "", "指定部署环境（kp context add 配置）")
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "解析参数失败:", err)
 		os.Exit(1)
@@ -39,6 +40,12 @@ func runDiff(args []string) {
 		namespace:  *namespace,
 		context:    *context,
 		kubeconfig: *kubeconfig,
+	}
+	if *envName != "" {
+		if kpEnv, err := loadEnv(*envName); err == nil {
+			applyEnvToConfig(cfg, kpEnv)
+			applyEnvToMap(env, kpEnv)
+		}
 	}
 	resolveDeployConfig(cfg, env, root)
 	if *drift {
