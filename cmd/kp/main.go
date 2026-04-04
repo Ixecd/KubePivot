@@ -93,6 +93,12 @@ func main() {
 		runPolicy(os.Args[2:])
 	case "audit":
 		runAudit(os.Args[2:])
+	case "plugin":
+		runPlugin(os.Args[2:])
+	case "version":
+		runVersion()
+	case "update":
+		runSelfUpdate(os.Args[2:])
 	case "context":
 		runContext(os.Args[2:])
 	case "sandbox":
