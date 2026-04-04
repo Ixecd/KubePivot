@@ -320,7 +320,7 @@ func runEnvDiff(baseCfg *deployConfig, root string, baseEnv map[string]string,
 	fromCfg := *baseCfg
 	fromEnvMap := copyMap(baseEnv)
 	fromLabel := "local"
-	if fromEnvName != "" {
+	if fromEnvName != "" && fromEnvName != "local" {
 		if kpEnv, err := loadEnv(fromEnvName); err == nil {
 			applyEnvToConfig(&fromCfg, kpEnv)
 			applyEnvToMap(fromEnvMap, kpEnv)
