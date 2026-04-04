@@ -99,6 +99,11 @@ func (r *Reconciler) checkAbnormalState(res Resource) error {
 
 // healRecreate helm upgrade --reuse-values 重新安装
 func (r *Reconciler) healRecreate(res Resource) error {
+	// CRD 资源检测：非标准 K8s 资源走 kubectl apply 而不是 helm rollback
+	if isCRDKind(res.Kind) {
+		return r.healCRDApply(res)
+	}
+
 	releaseName := getenv("PROJECT_NAME", "") + "-" + res.Name
 
 	history, err := r.helm.History(releaseName, res.Namespace)
@@ -502,4 +507,69 @@ func classifyCrashLogs(logs string) crashType {
 		}
 	}
 	return crashUnknown
+}
+
+// isCRDKind 判断是否为自定义资源（非标准 K8s 内置资源）
+func isCRDKind(kind string) bool {
+	builtinKinds := map[string]bool{
+		"deployment":  true,
+		"statefulset": true,
+		"daemonset":   true,
+		"replicaset":  true,
+		"job":         true,
+		"cronjob":     true,
+		"pod":         true,
+		"service":     true,
+		"configmap":   true,
+		"secret":      true,
+	}
+	if kind == "" { return false }
+	return !builtinKinds[strings.ToLower(kind)]
+}
+
+// healCRDApply CRD 资源缺失时，尝试从 helm manifest 提取并重新 apply
+func (r *Reconciler) healCRDApply(res Resource) error {
+	slog.Info("CRD 资源缺失，尝试重新 apply",
+		"kind", res.Kind, "name", res.Name, "namespace", res.Namespace)
+
+	// 从 helm get manifest 提取该资源的 yaml
+	projectName := getenv("PROJECT_NAME", "")
+	releaseName := projectName + "-" + res.Name
+
+	args := []string{"helm", "get", "manifest", releaseName,
+		"--namespace", res.Namespace}
+	if r.kubeconfig != "" {
+		args = append(args, "--kubeconfig", r.kubeconfig)
+	}
+	out, err := runKubectl(args...)
+	if err != nil || len(out) == 0 {
+		slog.Warn("无法获取 helm manifest，跳过 CRD 自愈",
+			"release", releaseName, "err", err)
+		return nil
+	}
+
+	// 过滤出对应 kind 和 name 的资源块（简单字符串匹配）
+	manifest := string(out)
+	if !strings.Contains(manifest, "kind: "+res.Kind) {
+		slog.Warn("manifest 中未找到该 CRD，告警等待人工",
+			"kind", res.Kind, "name", res.Name)
+		return nil
+	}
+
+	// kubectl apply -f - 重新应用
+	applyArgs := []string{"kubectl", "apply", "-f", "-",
+		"--namespace", res.Namespace}
+	if r.kubeconfig != "" {
+		applyArgs = append(applyArgs, "--kubeconfig", r.kubeconfig)
+	}
+	cmd := exec.Command(applyArgs[0], applyArgs[1:]...)
+	cmd.Stdin = strings.NewReader(manifest)
+	applyOut, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("CRD 自愈 apply 失败: %w\n%s", err, applyOut)
+	}
+
+	slog.Info("✅ CRD 自愈成功（kubectl apply）",
+		"kind", res.Kind, "name", res.Name)
+	return nil
 }

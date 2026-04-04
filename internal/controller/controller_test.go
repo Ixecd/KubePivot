@@ -312,7 +312,7 @@ func TestHealRecreate_Success(t *testing.T) {
 	r := newTestReconciler(sm, detector, helm)
 
 	t.Setenv("PROJECT_NAME", "myapp")
-	res := Resource{Name: "myapp", Namespace: "test-ns"}
+	res := Resource{Kind: "Deployment", Name: "myapp", Namespace: "test-ns"}
 	err := r.healRecreate(res)
 
 	require.NoError(t, err)
@@ -330,7 +330,7 @@ func TestHealRecreate_OnlyOneRevision(t *testing.T) {
 	r := newTestReconciler(sm, detector, helm)
 
 	t.Setenv("PROJECT_NAME", "myapp")
-	res := Resource{Name: "myapp", Namespace: "test-ns"}
+	res := Resource{Kind: "Deployment", Name: "myapp", Namespace: "test-ns"}
 	err := r.healRecreate(res)
 
 	// revision=1 时 target=0，heal.go 里 rollback to 0 会被执行
@@ -345,7 +345,7 @@ func TestHealRecreate_HelmHistoryError(t *testing.T) {
 	r := newTestReconciler(sm, detector, helm)
 
 	t.Setenv("PROJECT_NAME", "myapp")
-	res := Resource{Name: "myapp", Namespace: "test-ns"}
+	res := Resource{Kind: "Deployment", Name: "myapp", Namespace: "test-ns"}
 	err := r.healRecreate(res)
 
 	assert.NoError(t, err) // history 失败时跳过，不报错
@@ -362,7 +362,7 @@ func TestHealRecreate_RollbackError(t *testing.T) {
 	r := newTestReconciler(sm, detector, helm)
 
 	t.Setenv("PROJECT_NAME", "myapp")
-	res := Resource{Name: "myapp", Namespace: "test-ns"}
+	res := Resource{Kind: "Deployment", Name: "myapp", Namespace: "test-ns"}
 	err := r.healRecreate(res)
 
 	assert.Error(t, err)
@@ -387,7 +387,7 @@ func TestHealRecreate_StateMachineSyncFailure(t *testing.T) {
 	r := newTestReconciler(sm, detector, helm)
 
 	t.Setenv("PROJECT_NAME", "myapp")
-	res := Resource{Name: "myapp", Namespace: "test-ns"}
+	res := Resource{Kind: "Deployment", Name: "myapp", Namespace: "test-ns"}
 	err := r.healRecreate(res)
 
 	// healRecreate 本身不应该因为状态机同步失败而报错
