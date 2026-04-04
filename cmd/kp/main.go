@@ -89,6 +89,8 @@ func main() {
 		runNetwork(os.Args[2:])
 	case "secret":
 		runSecret(os.Args[2:])
+	case "policy":
+		runPolicy(os.Args[2:])
 	case "audit":
 		runAudit(os.Args[2:])
 	case "context":

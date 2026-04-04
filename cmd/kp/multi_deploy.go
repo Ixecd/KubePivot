@@ -36,6 +36,19 @@ func deployLayers(sm *state.Machine, cfg *deployConfig, env map[string]string, l
 	// secret 存在性检查（只警告，不阻断）
 	checkRequiredSecrets(cfg, root)
 
+	// OPA 策略检查（有 opa 命令才跑，没有静默跳过）
+	if blocked, warns := checkOPAPolicies(root, env); len(blocked) > 0 || len(warns) > 0 {
+		for _, w := range warns {
+			P.Info("⚠️ ", fmt.Sprintf("策略警告: %s", w))
+		}
+		if len(blocked) > 0 {
+			for _, b := range blocked {
+				P.Fail(fmt.Sprintf("策略阻断: %s", b))
+			}
+			return fmt.Errorf("OPA 策略检查失败，部署终止")
+		}
+	}
+
 	// 迁移兼容性检查
 	if err := checkMigrationCompatibility(cfg, root, env); err != nil {
 		return err
