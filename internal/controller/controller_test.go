@@ -602,3 +602,73 @@ func TestCheckAndHeal_ResourceMissing_ScaleDown(t *testing.T) {
 	assert.Nil(t, helm.rollbackCall, "scale-down 不应触发 helm rollback")
 	_ = err
 }
+
+// ── OOMKilled + CrashLoop 纯函数边界 ─────────────────────────────────────────
+
+func TestBumpMemory_Zero(t *testing.T) {
+	// 无法解析时返回原值
+	got := bumpMemory("", 25)
+	if got != "" {
+		t.Errorf("空字符串应返回空, got %q", got)
+	}
+}
+
+func TestBumpMemory_SmallMi(t *testing.T) {
+	// 128Mi → 160Mi（+25%，最小步长 1Mi）
+	got := bumpMemory("128Mi", 25)
+	if got != "160Mi" {
+		t.Errorf("128Mi → 160Mi, got %q", got)
+	}
+}
+
+func TestBumpMemory_LargeGi(t *testing.T) {
+	// 8Gi → 10Gi（+25%）
+	got := bumpMemory("8Gi", 25)
+	if got != "10Gi" {
+		t.Errorf("8Gi → 10Gi, got %q", got)
+	}
+}
+
+func TestClassifyCrashType_MultiKeyword(t *testing.T) {
+	// 同时有 startup 和 runtime 关键词，startup 优先（启动期更保守）
+	logs := "connection refused\npanic: nil pointer"
+	got := classifyCrashLogs(logs)
+	if got != "startup" {
+		t.Errorf("startup 关键词优先, got %q", got)
+	}
+}
+
+func TestClassifyCrashType_EmptyLogs(t *testing.T) {
+	got := classifyCrashLogs("")
+	if got != "unknown" {
+		t.Errorf("空日志应为 unknown, got %q", got)
+	}
+}
+
+// ── on-missing 策略完整路径 ────────────────────────────────────────────────────
+
+func TestCheckAndHeal_AlertStrategy(t *testing.T) {
+	t.Setenv("PROJECT_NAME", "myapp")
+	sm := newRunningMachine(t)
+	detector := newMockDetector().withResource("Deployment", "myapp", "test-ns", false)
+	helm := newMockHelm(1, 2)
+	r := newTestReconciler(sm, detector, helm)
+
+	res := Resource{Kind: "Deployment", Name: "myapp", Namespace: "test-ns", OnMissing: "alert"}
+	err := r.checkAndHeal(res)
+	assert.NoError(t, err, "alert 策略不应返回 error")
+	assert.Nil(t, helm.rollbackCall, "alert 策略不应触发 rollback")
+}
+
+func TestCheckAndHeal_ResourceExists_NoHeal(t *testing.T) {
+	t.Setenv("PROJECT_NAME", "myapp")
+	sm := newRunningMachine(t)
+	detector := newMockDetector().withResource("Deployment", "myapp", "test-ns", true) // 资源存在
+	helm := newMockHelm(1, 2)
+	r := newTestReconciler(sm, detector, helm)
+
+	res := Resource{Kind: "Deployment", Name: "myapp", Namespace: "test-ns", OnMissing: "recreate"}
+	err := r.checkAndHeal(res)
+	assert.NoError(t, err)
+	assert.Nil(t, helm.rollbackCall, "资源存在时不应触发 rollback")
+}
