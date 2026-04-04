@@ -58,8 +58,15 @@ func runRelease(args []string) {
 	}
 	fmt.Printf("✅ 已更新 configs/project.env → VERSION=%s\n", *version)
 
+	// 同步更新 version.go 里的 kpVersion 常量
+	if err := updateKPVersion(root, *version); err != nil {
+		fmt.Fprintf(os.Stderr, "更新 version.go 失败: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("✅ 已更新 cmd/kp/version.go → kpVersion=%s\n", *version)
+
 	// 4. git add + commit
-	if err := runInProject(root, "git", "add", "configs/project.env"); err != nil {
+	if err := runInProject(root, "git", "add", "configs/project.env", "cmd/kp/version.go"); err != nil {
 		fmt.Fprintln(os.Stderr, "git add 失败:", err)
 		os.Exit(1)
 	}
@@ -169,4 +176,33 @@ func runOutputInDir(dir string, cmdArgs ...string) ([]byte, error) {
 	defer os.Chdir(original)
 
 	return runOutput(cmdArgs...)
+}
+
+// updateKPVersion 更新 version.go 里的 kpVersion 常量
+func updateKPVersion(root, version string) error {
+	versionFile := filepath.Join(root, "cmd", "kp", "version.go")
+	data, err := os.ReadFile(versionFile)
+	if err != nil {
+		return fmt.Errorf("读取 version.go 失败: %w", err)
+	}
+
+	var lines []string
+	updated := false
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(strings.TrimSpace(line), "const kpVersion =") {
+			lines = append(lines, fmt.Sprintf(`const kpVersion = "%s"`, version))
+			updated = true
+		} else {
+			lines = append(lines, line)
+		}
+	}
+
+	if !updated {
+		return fmt.Errorf("version.go 中未找到 kpVersion 常量")
+	}
+
+	content := strings.Join(lines, "\n") + "\n"
+	return os.WriteFile(versionFile, []byte(content), 0o644)
 }
