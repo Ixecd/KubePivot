@@ -588,7 +588,6 @@ func runSecretSync(args []string) {
 	P.Done(fmt.Sprintf("Secret %q 已同步（%d 个 key）", *secretName, len(kvData)))
 
 	// 写审计日志
-	// 写审计日志
 	home2, _ := os.UserHomeDir()
 	af, _ := os.OpenFile(
 		filepath.Join(home2, ".kp", "audit", "secret.jsonl"),

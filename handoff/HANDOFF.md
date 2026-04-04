@@ -2,7 +2,7 @@
 
 > 写给下一个 Claude
 > 日期：2026-04-04
-> 版本：v1.8.0
+> 版本：v1.9.0
 
 ---
 
@@ -17,7 +17,7 @@ KubePivot（乾枢）是企业级 K8s 研发脚手架，qc（GitHub: Ixecd，杨
 ## 一、当前状态
 
 **测试**：`go test ./... -race` 全绿
-**版本**：v1.8.0（未 tag，文档完成后打）
+**版本**：v1.9.0（未 tag，文档完成后打）
 
 ---
 
@@ -25,27 +25,34 @@ KubePivot（乾枢）是企业级 K8s 研发脚手架，qc（GitHub: Ixecd，杨
 
 ```
 cmd/kp/
-├── sandbox.go           # kp sandbox start/status/unlock
-├── preview.go           # runPreviewGen, runWarmup, patchTrafficWeight, sampleErrorRate
+├── env.go           # kp context + KPEnv，多集群管理
+├── audit.go         # kp audit，三来源聚合，jsonl/csv/table
+├── policy.go        # kp policy，OPA 策略引擎
+├── sandbox.go       # kp sandbox start/status/unlock
+├── preview.go       # kp deploy --preview, kp warmup
 ├── migrate_snapshot.go  # PVC 快照联动，双层回滚，fix-dirty
-├── drift.go             # kp diff --drift 三级分层
-├── hpa.go               # applyHPA
-├── doctor.go            # 集成 drift 告警
-└── multi_deploy.go      # --force-conflicts, --parallelism
+├── drift.go         # kp diff --drift 三级分层
+├── hpa.go           # applyHPA
+└── multi_deploy.go  # --force-conflicts, --parallelism, OPA check
 
 internal/controller/
-├── sandbox_gc.go        # StartSandboxGCLoop（5m 扫描超期 Session）
-├── heal.go              # on-missing 全策略 + OOMKilled + CrashLoop
-├── drift_sync.go        # StartDriftSyncLoop（30s 扫描）
-├── leader.go            # etcd Leader Election
-└── workqueue.go         # 三集合 WorkQueue
+├── sandbox_gc.go    # StartSandboxGCLoop
+├── heal.go          # on-missing 全策略 + OOMKilled + CrashLoop
+├── drift_sync.go    # StartDriftSyncLoop
+├── leader.go        # etcd Leader Election
+└── workqueue.go     # 三集合 WorkQueue
 
 internal/state/
-└── state.go             # 完整状态机（含 v1.8.0 Sandbox 状态）
+└── state.go         # 完整状态机（含 Sandbox 状态）
+
+examples/policies/
+├── no-latest-tag.rego
+├── require-resource-limits.rego
+└── README.md
 
 docs/design/
-├── sandbox.md           # Operation Sandbox 设计
-└── preview-warmup.md    # Header Preview + Warmup 设计
+├── sandbox.md
+└── preview-warmup.md
 ```
 
 ---
@@ -54,18 +61,17 @@ docs/design/
 
 | 优先级 | 描述 | 计划 |
 |--------|------|------|
-| P1 | SSA `--field-manager`：helm v4 不支持，用 `--force-conflicts` | helm v4 稳定后 |
-| P2 | SIMULATING Job / PVC 快照 / Istio weight / Prometheus | 有对应环境时验证 |
-| P2 | Controller GC 端到端验证 | v1.8.1 |
-| P2 | 蓝绿 timing 统计为 `-` | v1.9.0 顺手 |
-| P3 | `kp upgrade --service` 待 e2e | v1.9.0 |
+| P1 | SSA `--field-manager`：helm v4 不支持 | helm v4 稳定后 |
+| P2 | OPA stdin pipe（input JSON 传递）| v2.0.0 |
+| P2 | drift etcd 审计 stub | v2.0.0 |
+| P2 | kp secret sync curl → Vault SDK | v2.0.0 |
+| P2 | SIMULATING Job / CSI / Istio / Prometheus 待验证 | 有环境时 |
 
 ---
 
-## 四、下一步（v1.9.0）
+## 四、下一步（v2.0.0）
 
-多集群：`kp context add`，`kp deploy --env prod`，`kp status --all-envs`
-企业合规：`kp audit`，OPA 策略，`kp secret sync --from vault`
+企业级插件平台 + 全文档统一大版本更新（README/docs/gotchas 完整过一遍）
 
 ---
 
@@ -76,12 +82,13 @@ cd ~/KubePivot && make dev
 
 cd ~/web3-blitz
 kp deploy
-kp deploy --preview
+kp deploy --env staging --dry-run
+kp status --all-envs
+kp diff --to-env staging
+kp audit --format table
+kp policy check
 kp sandbox start --dry-run
 kp diff --drift
 kp doctor
-kp doctor --perf
-kp warmup --service wallet-service --steps 10,50,100 --interval 2m,5m --dry-run
-kp migrate fix-dirty
 LOG_FORMAT=json kp deploy 2>log
 ```
