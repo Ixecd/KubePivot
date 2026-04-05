@@ -23,16 +23,35 @@
 
 ---
 
-## 🟢 v2.1.0 — 稳定性 + 验证
+## 🟢 v2.1.0 — 稳定性 + 脚手架扩展
 
-> 代码基本完整，这个版本专注验证和补强
+> 代码基本完整，这个版本专注验证、补强、脚手架能力
 
-- [ ] 有 CSI 环境时：验证 PVC 快照联动（`kp migrate run` + `kp upgrade`）
-- [ ] 有 Istio/Nginx 时：验证 patchTrafficWeight + kp warmup 完整流程
-- [ ] 有 Prometheus 时：验证 sampleErrorRate PromQL 查询
-- [ ] Controller GC Loop 端到端验证（长时间运行）
+### 脚手架适配性
+- [ ] `kp sync`：框架文件升级，不动业务代码
+  - 强制覆盖：`Makefile` / `scripts/make-rules/*.mk` / `.githooks/`
+  - 合并更新：`configs/project.env`（新增字段，不覆盖已有值）
+  - 永远不动：`cmd/` / `internal/` / `migrations/` / `go.mod`
+  - 提示用户：`deployments/`（chart 结构变化，人工决定）
+- [ ] `kp sync --dry-run`：预览将要变更的文件，不实际执行
+- [ ] `kp sync --only scripts`：只更新指定类型的框架文件
+
+### 脚手架扩展性
+- [ ] 错误码体系内嵌到 `kp init`
+  - `internal/pkg/code/` 预置标准错误码结构
+  - `codegen` 自动生成错误码文档
+  - HTTP 响应统一封装（`pkg/response/`）
+- [ ] `.githooks/post-receive` 随 `kp init` 生成（GitOps 愿景落地）
+- [ ] `kp init --type minimal`：极简模式，不生成 monitoring/docs/snapshots
+- [ ] `kp init --type full`：完整模式（当前默认）
+
+### 待验证项
+- [ ] 有 CSI 环境时：验证 PVC 快照联动
+- [ ] 有 Istio/Nginx 时：验证 patchTrafficWeight + kp warmup
+- [ ] 有 Prometheus 时：验证 sampleErrorRate PromQL
+- [ ] Controller GC Loop 端到端验证
 - [ ] 蓝绿 timing 统计接入 deployTiming 表格
-- [ ] Vault Go SDK 替换 net/http 实现（可选，当前实现已可用）
+- [ ] Vault Go SDK 替换 net/http 实现
 - [ ] `kp upgrade --service` e2e 验证
 - [ ] drift etcd 审计端到端验证
 
@@ -48,6 +67,7 @@
 - [ ] `SECURITY.md`：安全披露流程
 - [ ] GitHub Issue 模板（bug report / feature request）
 - [ ] 第一批真实用户的 `kp init` 使用反馈
+- [ ] `kp sync` 真实用户验证（v1.x 项目升级到 v2.x 框架）
 
 ---
 
@@ -70,6 +90,7 @@
 - [ ] `kp ai-plan` 规则专家系统（确定性优先于概率）
 - [ ] KWOK 万节点 CI 自动化压测流水线
 - [ ] CNCF Sandbox 申请（需要社区 + 贡献者多样性）
+- [ ] Git 原生内嵌完整实现（post-receive + Controller watch Git）
 
 ---
 
@@ -88,6 +109,10 @@
 - [x] 全文档统一大版本更新（architecture/state-machine/quickstart/commands）
 - [x] GITOPS-MANIFESTO.md（第 329 个 commit，生日数字）
 - [x] 目录结构整理（.DS_Store/.gitignore/dev-toolkit 清理）
+- [x] `kp init` 零配置（embed 模板，go install 后直接可用）
+- [x] CRD 资源自愈支持（isCRDKind + healCRDApply）
+- [x] `make tools` 修复（githooks guard / codegen from GitHub）
+- [x] `kp deploy` 端到端验证（testapp → RUNNING）
 
 ### v1.9.0 多集群联邦 + 企业合规
 - [x] `kp context add/list/remove/show`
@@ -128,25 +153,9 @@
 - [x] 结构化 JSON 日志（LOG_FORMAT=json）
 - [x] KWOK 500 节点压测（DAG P99=40ms，Apiserver P99=562ms）
 
-### v1.5.x Secret 轮转 + StatefulSet + 蓝绿 e2e
-- [x] `kp secret rotate --strategy graceful`（双密码过渡期）
-- [x] `kp secret audit`（TLS 证书过期检测）
-- [x] StatefulSet pod 详情展示
-- [x] etcd 健康监控
-- [x] 蓝绿 e2e 验证 + P1 状态机 bug 修复
-
-### v1.4.0 跨版本迁移（KubePivot 改名）
-- [x] `kp migrate status/plan/run`（golang-migrate + Atlas 自动检测）
-- [x] `kp compat check`（oasdiff API 兼容性）
-- [x] `kp diff --migrate`
-- [x] `kp upgrade` 全链路
-
-### v1.0.0 ~ v1.3.0 封神 🏆
-- [x] DAG 拓扑排序（Kahn 算法）+ 并行部署
-- [x] A2 Reconciliation Controller + etcd 状态机
-- [x] 供应链安全（trivy CVE + cosign 签名）
-- [x] 安全合规基线（Pod Security / Network Policy / RBAC）
-- [x] 143 单测全绿，CI -race
+### v1.5.x ~ v1.0.0
+- [x] Secret 轮转 / StatefulSet / 蓝绿 e2e / 供应链安全 / 安全合规基线
+- [x] DAG 拓扑排序 + A2 Controller + 143 单测全绿
 
 ---
 
