@@ -1,0 +1,13 @@
+#!/bin/bash
+# KubePivot GitOps Hook
+# git push → 自动触发 kp deploy
+# 安装：make tools（自动注册到 .git/hooks/）
+#
+# 只部署有变更的服务，避免不必要的重新部署
+
+set -e
+
+echo "🚀 [KubePivot] git push detected, triggering deploy..."
+kp deploy --changed-only
+
+echo "✅ [KubePivot] deploy triggered"

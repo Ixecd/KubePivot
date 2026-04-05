@@ -11,7 +11,7 @@ import (
 var embeddedTemplates embed.FS
 
 // extractEmbeddedTemplates 把内嵌模板解压到临时目录，返回路径
-func extractEmbeddedTemplates() (string, error) {
+func ExtractEmbeddedTemplates() (string, error) {
 	tmpDir, err := os.MkdirTemp("", "kp-templates-*")
 	if err != nil {
 		return "", err

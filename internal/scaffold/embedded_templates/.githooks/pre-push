@@ -1,0 +1,11 @@
+#!/bin/bash
+# KubePivot Pre-push Hook
+# push 前自动跑测试，失败则阻止 push
+# 如不需要，删除此文件或运行：chmod -x .githooks/pre-push
+
+set -e
+
+echo "🔍 [KubePivot] running tests before push..."
+go test ./... -race -count=1
+
+echo "✅ [KubePivot] tests passed"

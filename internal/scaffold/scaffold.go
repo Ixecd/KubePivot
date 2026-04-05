@@ -29,6 +29,7 @@ type InitOptions struct {
 var (
 	projectNamePattern = regexp.MustCompile(`^[a-z0-9-]+$`)
 	copyEntries        = []string{
+		".githooks",
 		".gitignore",
 		"scripts",
 		"Makefile",
@@ -332,7 +333,7 @@ func resolveTemplateRoot(explicit string) (string, error) {
 		return filepath.Abs(explicit)
 	}
 	// 优先使用内嵌模板（go install 后无需配置）
-	if tmpDir, err := extractEmbeddedTemplates(); err == nil {
+	if tmpDir, err := ExtractEmbeddedTemplates(); err == nil {
 		return tmpDir, nil
 	}
 	// 降级：环境变量覆盖
