@@ -555,8 +555,8 @@ func writeSecretScript(outputDir, name string) error {
 # 幂等：已存在则更新，不存在则创建
 # 用法：./scripts/create-secret.sh
 #
-# 从 .env 文件读取（本地开发），或直接设置环境变量（CI/CD）
-# 注意：K8s 内部服务名和本地开发地址不同，DATABASE_URL 需要使用 K8s Service 名
+# 生产环境：修改下方变量为真实值
+# 开发/demo：直接运行，自动使用安全随机值
 
 set -e
 
@@ -567,21 +567,17 @@ if [ -f .env ]; then
   export $(grep -v '^#' .env | grep -v '^$' | xargs)
 fi
 
-# 必填项检查
-: "${WALLET_HD_SEED:?请设置 WALLET_HD_SEED 环境变量}"
-: "${SMTP_PASS:?请设置 SMTP_PASS 环境变量}"
-
 kubectl create secret generic %s-secret \
   -n "$NAMESPACE" \
-  --from-literal=DATABASE_URL="postgres://blitz:blitz@%s-postgres:5432/blitz?sslmode=disable&search_path=public" \
-  --from-literal=WALLET_HD_SEED="$WALLET_HD_SEED" \
-  --from-literal=SMTP_PASS="$SMTP_PASS" \
+  --from-literal=DATABASE_URL="${DATABASE_URL:-postgres://%s:%s@%s-postgres:5432/%s?sslmode=disable}" \
   --from-literal=JWT_SECRET="${JWT_SECRET:-$(openssl rand -hex 32)}" \
+  --from-literal=APP_SECRET="${APP_SECRET:-$(openssl rand -hex 16)}" \
   --save-config \
   --dry-run=client -o yaml | kubectl apply -f -
 
 echo "✅ %s-secret 已创建/更新（namespace: $NAMESPACE）"
-`, name, name, name, name, name)
+echo "⚠️  生产环境请设置真实的 DATABASE_URL / JWT_SECRET / APP_SECRET"
+`, name, name, name, name, name, name, name, name)
 	return os.WriteFile(path, []byte(content), 0o755)
 }
 

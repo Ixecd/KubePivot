@@ -64,6 +64,8 @@ func runDeploy(args []string) {
 
 	env, _ := readEnvFile(filepath.Join(root, "configs", "project.env"))
 
+	projectName := envOrDefault(env, "PROJECT_NAME", filepath.Base(root))
+
 	// --env 覆盖
 	if *envName != "" {
 		kpEnv, err := loadEnv(*envName)
@@ -86,7 +88,13 @@ func runDeploy(args []string) {
 	}
 
 	printPlan(plan)
-	if cfg.dryRun {
+
+	// Secret 检测：不存在则自动创建 dev Secret
+	if !cfg.dryRun {
+		if err := ensureSecret(cfg, env, projectName); err != nil {
+			P.Info("⚠️ ", fmt.Sprintf("Secret 检测失败: %v", err))
+		}
+	} else {
 		return
 	}
 
@@ -94,7 +102,6 @@ func runDeploy(args []string) {
 
 	// 初始化状态机
 	store := state.NewAutoStore(env["ETCD_ENDPOINTS"])
-	projectName := envOrDefault(env, "PROJECT_NAME", filepath.Base(root))
 
 	sm, err := state.New(store, projectName, cfg.namespace, version)
 	if err != nil {
@@ -623,4 +630,66 @@ func envOrDefault(env map[string]string, key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// ensureSecret 检测 Secret 是否存在，不存在则自动创建 dev Secret
+func ensureSecret(cfg *deployConfig, env map[string]string, projectName string) error {
+	secretName := projectName + "-secret"
+	args := kubectlBaseArgs(cfg.kubeconfig, cfg.context, cfg.namespace)
+	args = append(args, "get", "secret", secretName,
+		"--namespace", cfg.namespace,
+		"--ignore-not-found",
+	)
+	out, err := runOutput(args...)
+	if err != nil {
+		return nil // kubectl 失败不阻断部署
+	}
+	if len(strings.TrimSpace(string(out))) > 0 {
+		return nil // Secret 已存在
+	}
+
+	// Secret 不存在，自动创建 dev Secret
+	P.Info("🔐", fmt.Sprintf("未找到 %s，自动创建 dev Secret（随机值）", secretName))
+
+	// 确保 namespace 存在（幂等）
+	nsArgs := kubectlBaseArgs(cfg.kubeconfig, cfg.context, "")
+	nsArgs = append(nsArgs, "create", "namespace", cfg.namespace, "--dry-run=client", "-o", "yaml")
+	nsYaml, _ := runOutput(nsArgs...)
+	if len(nsYaml) > 0 {
+		applyNsArgs := kubectlBaseArgs(cfg.kubeconfig, cfg.context, "")
+		applyNsArgs = append(applyNsArgs, "apply", "-f", "-")
+		nsCmd := exec.Command(applyNsArgs[0], applyNsArgs[1:]...)
+		nsCmd.Stdin = strings.NewReader(string(nsYaml))
+		nsCmd.CombinedOutput()
+	}
+
+	dbURL := fmt.Sprintf("postgres://%s:%s@%s-postgres:5432/%s?sslmode=disable",
+		projectName, projectName, projectName, projectName)
+
+	createArgs := kubectlBaseArgs(cfg.kubeconfig, cfg.context, cfg.namespace)
+	createArgs = append(createArgs,
+		"create", "secret", "generic", secretName,
+		"--namespace", cfg.namespace,
+		fmt.Sprintf("--from-literal=DATABASE_URL=%s", dbURL),
+		"--from-literal=JWT_SECRET=dev-jwt-secret-change-in-production",
+		"--from-literal=APP_SECRET=dev-app-secret-change-in-production",
+		"--save-config",
+		"--dry-run=client", "-o", "yaml",
+	)
+	yaml, err := runOutput(createArgs...)
+	if err != nil {
+		return nil
+	}
+
+	applyArgs := kubectlBaseArgs(cfg.kubeconfig, cfg.context, cfg.namespace)
+	applyArgs = append(applyArgs, "apply", "-f", "-", "--namespace", cfg.namespace)
+	cmd := exec.Command(applyArgs[0], applyArgs[1:]...)
+	cmd.Stdin = strings.NewReader(string(yaml))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		P.Info("⚠️ ", fmt.Sprintf("自动创建 Secret 失败: %s", string(out)))
+		return nil
+	}
+
+	P.Done(fmt.Sprintf("✅ %s 已自动创建（dev 模式，生产环境请运行 ./scripts/create-secret.sh）", secretName))
+	return nil
 }
