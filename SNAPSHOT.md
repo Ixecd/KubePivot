@@ -1,8 +1,7 @@
 # KubePivot 当前快照
 
-> 版本：v2.0.0
-> 日期：2026-04-04
-> commit：#329（生日数字）
+> 版本：v2.1.0
+> 日期：2026-04-05
 > 状态：✅ 全绿，已发布
 
 ---
@@ -10,9 +9,9 @@
 ## 快速状态
 
 ```
-go test ./... -race  → 全绿（236 个测试）
+go test ./... -race  → 全绿（239 个测试）
 make dev             → build + test + install 一键完成
-当前版本             → v2.0.0（已 tag，已推送）
+当前版本             → v2.1.0
 companion            → github.com/Ixecd/web3-blitz
 ```
 
@@ -22,58 +21,88 @@ companion            → github.com/Ixecd/web3-blitz
 
 ```
 v1.0.0  生日当天 🏆  DAG + A2 Controller + 安全合规基线
-v1.1.0              status 多 release + e2e 验证
-v1.2.0              安全合规基线（trivy + RBAC + Network Policy）
-v1.3.0              供应链安全（cosign + SBOM）
 v1.4.0              跨版本迁移（KubePivot 改名，乾枢）
-v1.5.0              StatefulSet + etcd 健康监控
-v1.5.1              蓝绿 e2e + P1 状态机 bug 修复
-v1.5.2              Secret 轮转（双密码过渡期）
-v1.6.0              Controller HA（Leader Election + WorkQueue）+ 可观测性
+v1.6.0              Controller HA（Leader Election + WorkQueue）
 v1.7.0              状态漂移治理（终态强权）
 v1.8.0              Operation Sandbox + Header Preview + Warmup
 v1.9.0              多集群联邦 + 企业合规（audit + OPA + Vault）
 v2.0.0  #329 🏆     插件平台 + Chaos + GitOps Manifesto
+v2.1.0              脚手架适配性 + 扩展性 + GitOps 愿景落地
 ```
 
 ---
 
-## v2.0.0 新增能力
+## v2.1.0 新增能力
 
+### kp sync — 框架文件升级
 ```bash
-kp version                    # 查看版本（kpVersion 常量，由 kp release 自动更新）
-kp update                     # 自动更新到最新版本（GitHub releases API）
-kp plugin install <name>      # 安装插件（go install + ~/.kp/plugins/ 包装脚本）
-kp plugin list/remove
-kp <unknown>                  # 未知命令自动转发到插件（execPlugin 兜底）
-
-kp chaos inject --service wallet-service --kind pod-kill --dry-run
-kp chaos inject --service wallet-service --kind network-delay --latency 200ms
-kp chaos list / stop / status  # Chaos Mesh API
-
-kp release --version v2.0.0   # 自动同步 kpVersion 常量 + project.env
+kp sync             # 升级框架文件，永远不动业务代码
+kp sync --dry-run   # 预览变更
+kp sync --only scripts  # 只更新 make-rules
 ```
 
-**代码质量修复**：
+文件策略：
+```
+强制覆盖：Makefile / scripts/make-rules/*.mk / .githooks/
+合并更新：configs/project.env（只追加新 key）
+永远不动：cmd/ / internal/ / migrations/ / go.mod
+提示用户：deployments/ / components.yaml / resources.yaml
+```
 
-- OPA stdin pipe：`exec.Command` + `bytes.NewReader(inputJSON)`，input 正确传递
-- drift etcd 审计：`clientv3.WithPrefix` 读 `/kubepivot/<project>/<ns>/drift/`
-- Vault `fetchVaultKV`：`net/http` 替换 curl，无外部依赖
-- `extractTableName`：保留原始大小写（修复 CI 失败）
+### kp init 新增内容
+```
+.githooks/post-receive  → git push → kp deploy --changed-only（GitOps 落地）
+.githooks/pre-push      → push 前自动跑测试
+internal/pkg/code/      → ErrorCode + Error 类型（codegen 兼容注释格式）
+internal/pkg/response/  → OK() / Fail() 统一 HTTP 响应
+make gen                → 自动生成错误码文档
+```
+
+### kp deploy 改进
+```
+自动检测 Secret 是否存在
+  ├── 存在 → 跳过
+  └── 不存在 → 自动创建 namespace + dev Secret
+               生产环境提示运行 ./scripts/create-secret.sh
+```
+
+### 其他修复
+```
+CRD 资源自愈：isCRDKind + healCRDApply（helm manifest → kubectl apply）
+COMPONENT_NAMES：find cmd/ 实现，postgres/etcd 不参与 build
+sed -i 跨平台：sed -i.bak + rm（macOS/Linux 兼容）
+create-secret.sh：去除 web3-blitz 硬编码，通用模板
+```
 
 ---
 
 ## 当前测试覆盖
 
 ```
-cmd/kp：      67  个测试（chaos/migrate/image/plugin/preview/cert）
-controller：  46  个测试（heal/workqueue/leader/sandbox/OOMKilled/CrashLoop）
-state：       58  个测试（FSM/Sandbox/ForceState/持久化/幂等）
+cmd/kp：      70  个测试
+controller：  46  个测试
+state：       58  个测试
 planner：     32  个测试
 scaffold：    30  个测试
 test/：        3  个测试
 ─────────────────────────
-总计：        236  个测试，全部 -race 通过
+总计：        239  个测试，全部 -race 通过
+```
+
+---
+
+## kp init 端到端验证
+
+```bash
+go install github.com/Ixecd/kubepivot/cmd/kp@latest
+kp init --name myapp --module github.com/me/myapp
+cd myapp
+make build   ✅  只编译业务服务，postgres/etcd 跳过
+make test    ✅  全包通过
+make gen     ✅  错误码文档自动生成
+kp deploy    ✅  自动创建 Secret + RUNNING
+kp sync      ✅  框架升级，业务代码不动
+git push     ✅  .githooks/post-receive 触发 kp deploy
 ```
 
 ---
@@ -81,11 +110,14 @@ test/：        3  个测试
 ## 架构一页纸
 
 ```
-kp CLI（25 子命令）
-  ├── 脚手架：kp init（含合规基线）
+kp CLI（26 子命令）
+  ├── 脚手架：kp init（含合规基线 + 错误码 + GitOps hooks）
+  ├── kp sync（框架升级，不动业务代码）
   ├── 部署引擎：OPA → 迁移兼容 → CVE → AI规划 → DAG → 并行部署
+  │            自动创建 dev Secret
   ├── 状态机：13 状态，etcd/本地持久化，零 K8s 依赖
   ├── A2 Controller：Leader Election + WorkQueue + Reconcile/Drift/GC 三 Loop
+  │                  CRD 资源自愈（healCRDApply）
   ├── Operation Sandbox：LOCKED→SNAPSHOTTING→SIMULATING→COMMITTING→RUNNING
   ├── 企业工具链：audit + OPA + Vault + 多集群 + chaos
   └── 插件市场：~/.kp/plugins/，未知命令自动转发
@@ -101,20 +133,5 @@ kp CLI（25 子命令）
 P1  --field-manager：helm v4 不支持，用 --force-conflicts
 P2  SIMULATING Job / PVC 快照 / Istio weight / Prometheus：待对应环境验证
 P2  drift etcd 审计 / Controller GC：待端到端验证
-P3  Vault SDK 深度集成（当前 net/http 实现已可用）
-```
-
----
-
-## 项目文档
-
-```
-README.md           → 项目介绍 + 完整命令速查
-GITOPS-MANIFESTO.md → "CD 从 Pipeline 退化回 Git Commit"
-TODO.md             → 路线图 + 技术债
-SNAPSHOT.md         → 本文件
-handoff/HANDOFF.md  → 给下一个 Claude 的交接文档
-docs/design/        → 架构/状态机/Sandbox/Preview 设计文档
-docs/guide/zh-CN/   → quickstart/commands/gotchas
-snapshots/          → 完整历史快照（从 dtk v0.x 到 KubePivot v2.0.0）
+P3  Vault SDK / kp sync 真实用户验证 / kp init --type minimal/full
 ```
