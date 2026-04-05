@@ -193,6 +193,11 @@ ETCD_ENDPOINTS=
 		return fmt.Errorf("content replacement failed: %w", err)
 	}
 
+	// .githooks/ 不参与模块替换，还原 kp 安装路径
+	_ = replaceInDir(filepath.Join(outputDir, ".githooks"), map[string]string{
+		module: "github.com/Ixecd/kubepivot",
+	})
+
 	if err := replaceInDir(filepath.Join(outputDir, "deployments"), map[string]string{
 		"project": name,
 	}); err != nil {
