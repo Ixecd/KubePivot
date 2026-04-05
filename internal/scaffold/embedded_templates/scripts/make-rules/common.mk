@@ -23,7 +23,7 @@ endif
 # Load components config if present (simple YAML list).
 COMPONENTS_FILE ?= $(ROOT_DIR)/configs/components.yaml
 ifneq ("$(wildcard $(COMPONENTS_FILE))","")
-COMPONENT_NAMES ?= $(shell awk -F': *' '/- name:/{gsub(/"/,"",$$2); print $$2}' $(COMPONENTS_FILE))
+COMPONENT_NAMES ?= $(shell find $(ROOT_DIR)/cmd -maxdepth 1 -mindepth 1 -type d -exec basename {} \;)
 COMPONENT_IMAGES ?= $(shell awk -F': *' '/^ *image:/{gsub(/"/,"",$$2); if ($$2 != "") print $$2}' $(COMPONENTS_FILE))
 endif
 

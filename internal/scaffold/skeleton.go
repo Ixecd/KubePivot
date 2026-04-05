@@ -13,6 +13,7 @@ func writeInternalSkeleton(outputDir, name, module string) error {
 
 import "fmt"
 
+// ErrorCode 业务错误码
 type ErrorCode int
 
 const (
@@ -32,20 +33,85 @@ var errorCodeMessages = map[ErrorCode]string{
 	ErrNotFound:     "not found",
 	ErrInternal:     "internal server error",
 }
-
-func (e ErrorCode) ErrorCodeString() string {
+	func (e ErrorCode) Message() string {
 	if msg, ok := errorCodeMessages[e]; ok {
 		return msg
 	}
 	return fmt.Sprintf("error code %d", int(e))
+}
+
+// Error 业务错误，携带错误码 + 原因
+type Error struct {
+	Code  ErrorCode
+	Cause error
+}
+
+func New(code ErrorCode) *Error { return &Error{Code: code} }
+
+func (e *Error) WithCause(cause error) *Error {
+	e.Cause = cause
+	return e
+}
+
+func (e *Error) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("[%d] %s: %v", e.Code, e.Code.Message(), e.Cause)
+	}
+	return fmt.Sprintf("[%d] %s", e.Code, e.Code.Message())
+}
+`,
+
+		filepath.Join(outputDir, "internal", "pkg", "response", "response.go"): `package response
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"` + module + `/internal/pkg/code"
+)
+
+// Response 统一 HTTP 响应格式
+type Response struct {
+	Code    int         ` + "`json:\"code\"`" + `
+	Message string      ` + "`json:\"message\"`" + `
+	Data    interface{} ` + "`json:\"data,omitempty\"`" + `
+}
+
+func OK(w http.ResponseWriter, data interface{}) {
+	write(w, http.StatusOK, Response{Code: 0, Message: "ok", Data: data})
+}
+
+func Fail(w http.ResponseWriter, err *code.Error) {
+	status := http.StatusInternalServerError
+	switch err.Code {
+	case code.ErrInvalidArg:
+		status = http.StatusBadRequest
+	case code.ErrUnauthorized:
+		status = http.StatusUnauthorized
+	case code.ErrForbidden:
+		status = http.StatusForbidden
+	case code.ErrNotFound:
+		status = http.StatusNotFound
+	}
+	write(w, status, Response{
+		Code:    int(err.Code),
+		Message: err.Code.Message(),
+	})
+}
+
+func write(w http.ResponseWriter, status int, resp Response) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(resp)
 }
 `,
 
 		filepath.Join(outputDir, "internal", "api", "handler.go"): fmt.Sprintf(`package api
 
 import (
-	"encoding/json"
 	"net/http"
+
+	"`+module+`/internal/pkg/response"
 )
 
 type Handler struct{}
@@ -59,7 +125,7 @@ func (h *Handler) Healthz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Home(w http.ResponseWriter, r *http.Request) {
-	json.NewEncoder(w).Encode(map[string]string{
+	response.OK(w, map[string]string{
 		"service": %q,
 		"status":  "ok",
 	})
