@@ -4,6 +4,8 @@ ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /app
 
+RUN apk add --no-cache curl ca-certificates upx binutils
+
 RUN go env -w GOPROXY=https://goproxy.cn,direct
 COPY go.mod go.sum ./
 RUN go mod download
@@ -11,25 +13,46 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags '-s -w -extldflags "-static"' \
-    -o kp ./cmd/kp
+    -o kp ./cmd/kp [cite: 1, 2]
+
+# 动态获取最新 Helm 版本并下载
+RUN HELM_VERSION=$(curl -Ls https://api.github.com/repos/helm/helm/releases/latest | grep '"tag_name"' | cut -d'"' -f4) && \
+    curl -Ls "https://get.helm.sh/helm-${HELM_VERSION}-linux-${TARGETARCH}.tar.gz" | tar -xz && \
+    mv linux-${TARGETARCH}/helm /usr/local/bin/helm && \
+    chmod +x /usr/local/bin/helm
+
+# 下载静态 kubectl
+RUN KUBECTL_VERSION=$(curl -Ls https://dl.k8s.io/release/stable.txt) && \
+    curl -Ls "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
+    -o /usr/local/bin/kubectl && \
+    chmod +x /usr/local/bin/kubectl
+
+# 确保 /tmp 目录存在且能被 COPY
+RUN mkdir -p /tmp && touch /tmp/.keep
+
+# ====================== Optimizer Stage ======================
+FROM alpine:latest AS optimizer
+RUN apk add --no-cache upx binutils
+COPY --from=builder /app/kp /opt/kp
+# 只暴力精简 kp，不对 kubectl 和 helm 动手，规避 OOMKill 风险
+RUN strip --strip-all /opt/kp && upx --best --lzma /opt/kp
 
 # ====================== Runtime Stage ======================
-# scratch + ca-certificates（零 OS 漏洞，企业合规）
 FROM scratch AS runtime
 
-# OCI 标准标签
-LABEL org.opencontainers.image.source="https://github.com/Ixecd/KubePivot" \
-      org.opencontainers.image.version="v0.1.0" \
-      org.opencontainers.image.vendor="KubePivot" \
-      org.opencontainers.image.title="kubepivot-controller"
+LABEL org.opencontainers.image.source="https://github.com/Ixecd/KubePivot"
 
-# CA 证书（Controller 需要访问 etcd / K8s API）
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
-# 复制二进制
-COPY --from=builder /app/kp /kp
+# 运行环境支撑
+COPY --from=builder --chown=65532:65532 /tmp /tmp
+ENV HOME="/tmp"
+
+# 二进制注入
+COPY --from=optimizer /opt/kp                /usr/local/bin/kp
+COPY --from=builder   /usr/local/bin/kubectl /usr/local/bin/kubectl
+COPY --from=builder   /usr/local/bin/helm    /usr/local/bin/helm
 
 USER 65532:65532
-
-ENTRYPOINT ["/kp"]
+ENTRYPOINT ["/usr/local/bin/kp"]
 CMD ["controller", "start"]
