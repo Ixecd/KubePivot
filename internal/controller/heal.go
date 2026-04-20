@@ -147,10 +147,13 @@ func (r *Reconciler) healRollback(res Resource) error {
 	}
 
 	latest := history[len(history)-1].Revision
-	target := latest - 1
-	if target < 1 {
-		target = 1
+
+	if latest <= 1 {
+		slog.Warn("release 没有历史版本，降级为 redeploy", "release", releaseName)
+		return r.healRecreate(res)   // 或者直接调用 helm upgrade --install
 	}
+
+	target := latest - 1
 
 	slog.Info("执行 helm rollback", "release", releaseName, "from", latest, "to", target)
 	if err := r.helm.Rollback(releaseName, res.Namespace, target); err != nil {

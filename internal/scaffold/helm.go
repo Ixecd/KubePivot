@@ -374,7 +374,7 @@ spec:
           protocol: TCP
 `, name, name)
 
-vsPreview := fmt.Sprintf(`# virtualservice-preview.yaml
+	vsPreview := fmt.Sprintf(`# virtualservice-preview.yaml
 # 仅在 strategy: blue-green 时使用，kp deploy --preview 会自动生成填充版本
 # 需要 Istio 已安装：kubectl get crd virtualservices.networking.istio.io
 #
@@ -469,9 +469,10 @@ dependencies: []
 	vb.WriteString("  # TODO: 替换为你构建的 kubepivot-controller 镜像（需包含 kp 二进制）\n")
 	vb.WriteString("  repository: qingchun22/kubepivot-controller\n")
 	vb.WriteString("  pullPolicy: IfNotPresent\n")
-	vb.WriteString("  tag: v1.7.0-dev\n\n")
+	vb.WriteString("  tag: v2.0.0\n\n")
 	vb.WriteString("# 由 kp deploy 通过 --set-file 自动注入 configs/resources.yaml\n")
 	vb.WriteString("resourcesConfig: \"\"\n")
+	vb.WriteString("replicaCount: 3   # 支持 Leader Election 高可用\n\n")
 
 	rbac := fmt.Sprintf(`{{- if .Values.enabled }}
 apiVersion: v1
@@ -541,7 +542,12 @@ metadata:
   labels:
     app: %s
 spec:
-  replicas: 1
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
   selector:
     matchLabels:
       app: %s
@@ -555,7 +561,8 @@ spec:
         - name: controller
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["kp", "controller", "start"]
+          command: ["/kp"]
+          args: ["controller", "start"]
           env:
             - name: PROJECT_NAME
               value: "%s"
