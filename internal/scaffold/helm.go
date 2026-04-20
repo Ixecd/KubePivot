@@ -445,43 +445,47 @@ vsPreview := fmt.Sprintf(`# virtualservice-preview.yaml
 
 // ── controller 独立 chart ─────────────────────────────────────────────────────
 
+// writeControllerChart 生成 A2 Reconciliation Controller 的 Helm Chart
+// Controller 名字全局固定为 kubepivot-controller（KubePivot 统一标识）
 func writeControllerChart(deploymentsDir, name string) error {
-	dir := filepath.Join(deploymentsDir, name+"-controller", "templates")
+	const controllerName = "kubepivot-controller" // ← 全局固定名称
+
+	dir := filepath.Join(deploymentsDir, controllerName, "templates")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 
 	chartYAML := fmt.Sprintf(`apiVersion: v2
-name: %s-controller
-description: A2 Reconciliation Controller for %s
+name: %s
+description: A2 Reconciliation Controller for %s (KubePivot)
 type: application
 version: 0.1.0
 appVersion: "latest"
 dependencies: []
-`, name, name)
+`, controllerName, name)
 
 	var vb strings.Builder
-	vb.WriteString("# 配置好镜像后将 enabled 改为 true，再重新 dtk deploy\n")
+	vb.WriteString("# 配置好镜像后将 enabled 改为 true，再重新 kp deploy\n")
 	vb.WriteString("enabled: false\n\n")
 	vb.WriteString("image:\n")
-	vb.WriteString("  # TODO: 替换为你构建的 dev-toolkit-controller 镜像（需包含 dtk + kubectl + helm）\n")
-	vb.WriteString("  repository: your-registry/dev-toolkit-controller\n")
+	vb.WriteString("  # TODO: 替换为你构建的 kubepivot-controller 镜像（需包含 kp 二进制）\n")
+	vb.WriteString("  repository: your-registry/kubepivot-controller\n")
 	vb.WriteString("  pullPolicy: IfNotPresent\n")
 	vb.WriteString("  tag: latest\n\n")
-	vb.WriteString("# 由 dtk deploy 通过 --set-file 自动注入 configs/resources.yaml\n")
+	vb.WriteString("# 由 kp deploy 通过 --set-file 自动注入 configs/resources.yaml\n")
 	vb.WriteString("resourcesConfig: \"\"\n")
 
-	rbac := `{{- if .Values.enabled }}
+	rbac := fmt.Sprintf(`{{- if .Values.enabled }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: kubepivot-controller
+  name: %s
   namespace: {{ .Release.Namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: kubepivot-controller
+  name: %s
 rules:
   # 核心资源：deployments/statefulsets/pods 自愈用
   - apiGroups: ["apps"]
@@ -506,54 +510,54 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: kubepivot-controller
+  name: %s
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: kubepivot-controller
+  name: %s
 subjects:
   - kind: ServiceAccount
-    name: kubepivot-controller
+    name: %s
     namespace: {{ .Release.Namespace }}
 {{- end }}
-`
+`, controllerName, controllerName, controllerName, controllerName, controllerName)
 
-	configmap := `{{- if .Values.enabled }}
+	configmap := fmt.Sprintf(`{{- if .Values.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: dev-toolkit-controller-resources
+  name: %s-resources
   namespace: {{ .Release.Namespace }}
 data:
   resources.yaml: |
 {{ .Values.resourcesConfig | indent 4 }}
 {{- end }}
-`
+`, controllerName)
 
 	deployment := fmt.Sprintf(`{{- if .Values.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: dev-toolkit-controller
+  name: %s
   namespace: {{ .Release.Namespace }}
   labels:
-    app: dev-toolkit-controller
+    app: %s
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: dev-toolkit-controller
+      app: %s
   template:
     metadata:
       labels:
-        app: dev-toolkit-controller
+        app: %s
     spec:
-      serviceAccountName: dev-toolkit-controller
+      serviceAccountName: %s
       containers:
-        - name: dev-toolkit-controller
+        - name: controller
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["dtk", "controller", "start"]
+          command: ["kp", "controller", "start"]
           env:
             - name: PROJECT_NAME
               value: "%s"
@@ -571,16 +575,16 @@ spec:
       volumes:
         - name: resources-config
           configMap:
-            name: dev-toolkit-controller-resources
+            name: %s-resources
 {{- end }}
-`, name, name)
+`, controllerName, controllerName, controllerName, controllerName, controllerName, name, name, controllerName)
 
 	return writeFiles(map[string]string{
-		filepath.Join(deploymentsDir, name+"-controller", "Chart.yaml"):  chartYAML,
-		filepath.Join(deploymentsDir, name+"-controller", "values.yaml"): vb.String(),
-		filepath.Join(dir, "rbac.yaml"):                                  rbac,
-		filepath.Join(dir, "configmap.yaml"):                             configmap,
-		filepath.Join(dir, "deployment.yaml"):                            deployment,
+		filepath.Join(deploymentsDir, controllerName, "Chart.yaml"):  chartYAML,
+		filepath.Join(deploymentsDir, controllerName, "values.yaml"): vb.String(),
+		filepath.Join(dir, "rbac.yaml"):                              rbac,
+		filepath.Join(dir, "configmap.yaml"):                         configmap,
+		filepath.Join(dir, "deployment.yaml"):                        deployment,
 	})
 }
 
