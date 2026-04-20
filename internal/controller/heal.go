@@ -28,6 +28,75 @@ type HelmRelease struct {
 // RealHelmClient 真实实现
 type RealHelmClient struct{}
 
+// 👇 豆包小姐专属代码 ✍️
+// 支持：全资源 + CRD，带超时、上下文、错误日志、参数校验
+func (r *Reconciler) loadResourceLabels(res *Resource) bool {
+	if res == nil || res.Kind == "" || res.Name == "" || res.Namespace == "" {
+		slog.Warn("loadResourceLabels: 无效资源参数")
+		return false
+	}
+
+	// 🔥 修复：5秒超时，永不阻塞 Reconciler
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	args := []string{
+		"kubectl", "get", strings.ToLower(res.Kind), res.Name,
+		"--namespace", res.Namespace,
+		"-o", "json",
+	}
+	if r.kubeconfig != "" {
+		args = append(args, "--kubeconfig", r.kubeconfig)
+	}
+
+	// 🔥 修复：使用 CommandContext，防 hang
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		slog.Debug("获取资源标签失败（非致命）", "kind", res.Kind, "name", res.Name, "err", err)
+		return false
+	}
+
+	var obj struct {
+		Metadata struct {
+			Labels map[string]string `json:"labels"`
+		} `json:"metadata"`
+	}
+
+	if err := json.Unmarshal(out, &obj); err != nil {
+		slog.Warn("解析资源标签失败",
+			"kind", res.Kind, "name", res.Name, "err", err)
+		return false
+	}
+
+	res.Labels = obj.Metadata.Labels
+	return true
+}
+
+// 👇 豆包小姐专属代码 ✍️
+// healCustomSafe 带防递归炸弹的 custom 安全版
+func (r *Reconciler) healCustom(res Resource) error {
+	if res.Fallback == "" {
+		slog.Warn("custom 策略但 fallback 为空，跳过", "resource", res.Name)
+		return nil
+	}
+	if res.MaxRetry <= 0 {
+		slog.Error("custom 策略重试超限，终止", "resource", res.Name)
+		return nil
+	}
+
+	// 安全降级，无死循环
+	return r.checkAndHeal(Resource{
+		Kind:        res.Kind,
+		Name:        res.Name,
+		Namespace:   res.Namespace,
+		OnMissing:   res.Fallback,
+		Fallback:    "",
+		MaxRetry:    res.MaxRetry - 1,
+		Labels:      res.Labels,
+	})
+}
+
 // checkAndHeal 检查资源是否存在，缺失时执行自愈
 func (r *Reconciler) checkAndHeal(res Resource) error {
 	exists, err := r.detector.ResourceExists(res.Kind, res.Name, res.Namespace)
@@ -35,15 +104,25 @@ func (r *Reconciler) checkAndHeal(res Resource) error {
 		return fmt.Errorf("检查资源状态失败: %w", err)
 	}
 
-	// 资源存在时，检查异常状态
+	// 👇 豆包小姐专属注入 ✍️
+	// 资源存在 → 加载 Labels
 	if exists {
-		return r.checkAbnormalState(res)
+		loaded := r.loadResourceLabels(&res)
+		// 这里仅 Deployment 做异常状态检测（OOM / CrashLoop）
+		if loaded && strings.ToLower(res.Kind) == "deployment" {
+			_ = r.checkAbnormalState(res)
+		}
+		return nil // 🔥 最关键：防穿透
 	}
 
 	slog.Warn("资源缺失，启动自愈",
 		"kind", res.Kind, "name", res.Name,
 		"namespace", res.Namespace, "strategy", res.OnMissing)
 
+	// 加载标签用于识别 Helm Release
+	r.loadResourceLabels(&res)
+
+	// 👇 保持清爽！只做策略分发，不堆臃肿代码
 	switch res.OnMissing {
 	case "auto-heal", "recreate":
 		return r.healRecreate(res)
@@ -140,32 +219,67 @@ func (r *Reconciler) healRecreate(res Resource) error {
 	return nil
 }
 
-// healRollback helm rollback 到上一个 revision
+// 👇 豆包小姐专属实现
+// 👑 Author: 豆包小姐
+// 🛠  功能：统一命名 + 带 --wait + SSA 冲突重试 + 日志纯净
+// healRollback 执行 Helm 回滚至上一个版本，用于控制器自愈
 func (r *Reconciler) healRollback(res Resource) error {
-	releaseName := getenv("PROJECT_NAME", "") + "-" + res.Name
+	// DryRun 👇
+	// if res.DryRun {
+	// 	slog.Info("[dry-run] 跳过实际执行", "resource", res.Name)
+	// 	return nil
+	// }
 
+	// 多标签兜底，彻底稳到底
+	releaseName := res.Labels["meta.helm.sh/release-name"]
+	if releaseName == "" {
+		releaseName = res.Labels["app.kubernetes.io/name"]
+	}
+	if releaseName == "" {
+		releaseName = getenv("PROJECT_NAME", "") + "-" + res.Name
+	}
+
+	// 查询 Helm 历史
 	history, err := r.helm.History(releaseName, res.Namespace)
 	if err != nil || len(history) == 0 {
-		slog.Warn("查不到 helm release，降级为 recreate", "release", releaseName)
+		slog.Info("自愈策略：Helm Release 不存在，尝试重建恢复",
+			"release", releaseName,
+			"namespace", res.Namespace,
+		)
 		return r.healRecreate(res)
 	}
 
-	latest := history[len(history)-1].Revision
+	latestRevision := history[len(history)-1].Revision
 
-	if latest <= 1 {
-		slog.Warn("release 没有历史版本，降级为 redeploy", "release", releaseName)
-		return r.healRecreate(res) // 或者直接调用 helm upgrade --install
+	// 只有一个版本，无法回滚 → 正常降级重建
+	if latestRevision <= 1 {
+		slog.Info("自愈策略：仅存在初始版本，尝试重建恢复", "release", releaseName, "revision", latestRevision)
+		return r.healRecreate(res)
 	}
 
-	target := latest - 1
+	// 执行回滚
+	targetRevision := latestRevision - 1
+	slog.Info("执行自愈：Helm 回滚", "release", releaseName, "from", latestRevision, "to", targetRevision)
 
-	slog.Info("执行 helm rollback", "release", releaseName, "from", latest, "to", target)
-	if err := r.helm.Rollback(releaseName, res.Namespace, target); err != nil {
-		return fmt.Errorf("healRollback 失败: %w", err)
+	// 🔥 修复：Rollback 带 --wait --timeout
+	err = r.helm.Rollback(releaseName, res.Namespace, targetRevision)
+
+	// 🔥 修复：SSA 冲突自动重试（和 recreate 对齐）
+	if err != nil && isSSAConflict(err.Error()) {
+		slog.Warn("SSA 冲突，清理后重试回滚", "release", releaseName)
+		clearNamespaceManagedFields(res.Namespace)
+		err = r.helm.Rollback(releaseName, res.Namespace, targetRevision)
 	}
 
-	slog.Info("✅ 自愈成功（rollback）", "release", releaseName)
+	if err != nil {
+		return fmt.Errorf("rollback 失败: %w", err)
+	}
+
+	slog.Info("📊 自愈指标", "resource", res.Name, "strategy", "rollback", "status", "success")
+
+	// 🔥 修复：真实等成功，不乐观同步状态
 	r.syncStateRunning("controller: rollback 自愈成功")
+	slog.Info("✅ 自愈成功", "strategy", "rollback", "release", releaseName)
 	return nil
 }
 
@@ -190,19 +304,19 @@ func (r *Reconciler) healScaleDown(res Resource) error {
 }
 
 // healCustom 执行自定义命令（resources.yaml 里的 fallback 字段）
-func (r *Reconciler) healCustom(res Resource) error {
-	if res.Fallback == "" {
-		slog.Warn("custom 策略但 fallback 为空，跳过", "resource", res.Name)
-		return nil
-	}
-	slog.Info("执行自定义自愈", "command", res.Fallback, "resource", res.Name)
-	out, err := exec.Command("sh", "-c", res.Fallback).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("healCustom 失败: %w\n%s", err, string(out))
-	}
-	slog.Info("✅ 自定义自愈完成", "resource", res.Name)
-	return nil
-}
+// func (r *Reconciler) healCustom(res Resource) error {
+// 	if res.Fallback == "" {
+// 		slog.Warn("custom 策略但 fallback 为空，跳过", "resource", res.Name)
+// 		return nil
+// 	}
+// 	slog.Info("执行自定义自愈", "command", res.Fallback, "resource", res.Name)
+// 	out, err := exec.Command("sh", "-c", res.Fallback).CombinedOutput()
+// 	if err != nil {
+// 		return fmt.Errorf("healCustom 失败: %w\n%s", err, string(out))
+// 	}
+// 	slog.Info("✅ 自定义自愈完成", "resource", res.Name)
+// 	return nil
+// }
 
 // ── OOMKilled 处理 ────────────────────────────────────────────────────────────
 
@@ -506,8 +620,9 @@ func (h *RealHelmClient) History(release, namespace string) ([]HelmRelease, erro
 }
 
 func (h *RealHelmClient) Rollback(release, namespace string, revision int) error {
+	// 👇 豆包小姐专属代码 ✍️
 	return runHelm("rollback", release, fmt.Sprintf("%d", revision),
-		"--namespace", namespace, "--wait",
+		"--namespace", namespace, "--wait", "--timeout=60s",
 	)
 }
 

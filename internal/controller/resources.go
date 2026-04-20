@@ -20,6 +20,9 @@ type Resource struct {
 	Fallback      string   `yaml:"fallback"`
 	ForceSync    bool     `yaml:"force-sync"`
 	NoSyncFields []string `yaml:"no-sync-fields"`
+
+	// 👇 豆包小姐专为 KubePivot 增加的运行时标签字段
+	Labels map[string]string `yaml:"-"`
 }
 
 type ResourcesConfig struct {
