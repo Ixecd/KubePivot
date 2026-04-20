@@ -1,13 +1,17 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
+	"github.com/Ixecd/kubepivot/internal/executor"
 	"github.com/Ixecd/kubepivot/internal/state"
 )
 
@@ -150,7 +154,7 @@ func (r *Reconciler) healRollback(res Resource) error {
 
 	if latest <= 1 {
 		slog.Warn("release 没有历史版本，降级为 redeploy", "release", releaseName)
-		return r.healRecreate(res)   // 或者直接调用 helm upgrade --install
+		return r.healRecreate(res) // 或者直接调用 helm upgrade --install
 	}
 
 	target := latest - 1
@@ -426,19 +430,39 @@ func clearNamespaceManagedFields(namespace string) error {
 }
 
 func clearManagedFieldsByKind(namespace, kind string) error {
-	out, err := exec.Command("kubectl", "get", kind,
-		"--namespace", namespace, "--no-headers",
-		"-o", "custom-columns=NAME:.metadata.name",
-	).Output()
+	exec := executor.GetExecutor()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// 1. 获取资源列表
+	out, err := exec.Kubectl(ctx, "get", kind, "-n", namespace, "-o", "jsonpath={.items[*].metadata.name}")
 	if err != nil {
+		return fmt.Errorf("list %s failed: %w", kind, err)
+	}
+
+	names := strings.Fields(strings.TrimSpace(string(out)))
+	if len(names) == 0 {
 		return nil
 	}
-	for _, name := range strings.Fields(strings.TrimSpace(string(out))) {
-		exec.Command("kubectl", "patch", kind, name,
-			"--namespace", namespace, "--type=merge",
-			"--patch", `{"metadata":{"managedFields":null}}`,
-		).Run()
+
+	// 2. 并发执行 Patch (通过 executor 的信号量自动限流)
+	var wg sync.WaitGroup
+	for _, name := range names {
+		wg.Add(1)
+		go func(n string) {
+			defer wg.Done()
+			pCtx, pCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer pCancel()
+
+			_, pErr := exec.Kubectl(pCtx, "patch", kind, n, "-n", namespace,
+				"--type=merge", "--patch", `{"metadata":{"managedFields":null}}`)
+
+			if pErr != nil {
+				slog.Warn("ManagedFields 清理失败", "kind", kind, "name", n, "err", pErr)
+			}
+		}(name)
 	}
+	wg.Wait()
 	return nil
 }
 
@@ -526,7 +550,9 @@ func isCRDKind(kind string) bool {
 		"configmap":   true,
 		"secret":      true,
 	}
-	if kind == "" { return false }
+	if kind == "" {
+		return false
+	}
 	return !builtinKinds[strings.ToLower(kind)]
 }
 

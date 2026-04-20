@@ -492,7 +492,7 @@ rules:
     verbs: ["get", "list", "watch", "update", "patch"]
   - apiGroups: [""]
     resources: ["pods", "services", "endpoints", "persistentvolumeclaims"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "patch"]
   # Leader Election：leases 读写权
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
@@ -557,12 +557,21 @@ spec:
         app: %s
     spec:
       serviceAccountName: %s
+      # 企业合规：强化 Pod 安全上下文
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
       containers:
         - name: controller
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["/kp"]
+          # 既然是 scratch 镜像，直接调用二进制，不依赖 shell
+          command: ["/usr/local/bin/kp"]
           args: ["controller", "start"]
+          securityContext:
+            readOnlyRootFilesystem: true  # 确保 kubectl 运行在不可变环境中
+            allowPrivilegeEscalation: false
           env:
             - name: PROJECT_NAME
               value: "%s"
@@ -577,10 +586,16 @@ spec:
           volumeMounts:
             - name: resources-config
               mountPath: /etc/controller
+            # 如果 kubectl 需要临时缓存，可以挂载一个内存盘
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: resources-config
           configMap:
             name: %s-resources
+        - name: tmp
+          emptyDir:
+            medium: Memory
 {{- end }}
 `, controllerName, controllerName, controllerName, controllerName, controllerName, name, name, controllerName)
 
