@@ -1,19 +1,35 @@
-FROM golang:1.25-alpine AS builder
+# ====================== Builder Stage ======================
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /app
-COPY . .
+
 RUN go env -w GOPROXY=https://goproxy.cn,direct
-RUN go mod tidy
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o kp ./cmd/kp
+COPY go.mod go.sum ./
+RUN go mod download
 
-FROM alpine:3.20
-WORKDIR /app
+COPY . .
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags '-s -w -extldflags "-static"' \
+    -o kp ./cmd/kp
 
-RUN apk add --no-cache ca-certificates tzdata curl bash openssl && \
-    curl -LO "https://dl.k8s.io/release/v1.32.0/bin/linux/$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')/kubectl" && \
-    chmod +x kubectl && mv kubectl /usr/local/bin/
+# ====================== Runtime Stage ======================
+# scratch + ca-certificates（零 OS 漏洞，企业合规）
+FROM scratch AS runtime
 
-RUN curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+# OCI 标准标签
+LABEL org.opencontainers.image.source="https://github.com/Ixecd/KubePivot" \
+      org.opencontainers.image.version="v0.1.0" \
+      org.opencontainers.image.vendor="KubePivot" \
+      org.opencontainers.image.title="kubepivot-controller"
 
-COPY --from=builder /app/kp /usr/local/bin/kp
+# CA 证书（Controller 需要访问 etcd / K8s API）
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
-CMD ["kp", "controller", "start"]
+# 复制二进制
+COPY --from=builder /app/kp /kp
+
+USER 65532:65532
+
+ENTRYPOINT ["/kp"]
+CMD ["controller", "start"]

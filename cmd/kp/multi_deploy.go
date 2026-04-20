@@ -189,6 +189,10 @@ func deployService(cfg *deployConfig, env map[string]string, plan planner.Plan, 
 	release := releaseName(projectName, plan.Name)
 	chartPath := filepath.Join(root, "deployments", projectName, plan.Name)
 
+	if strings.Contains(plan.Name, "kubepivot-controller") {
+		chartPath = filepath.Join(root, "deployments", projectName, "kubepivot-controller")
+	}
+
 	// image 为空且 chart 不存在 → CLI 工具，跳过
 	if plan.Image == "" {
 		if _, err := os.Stat(chartPath); err != nil {
@@ -344,11 +348,21 @@ func buildHelmArgs(cfg *deployConfig, release, chartPath string, env map[string]
 		}
 	}
 
-	// controller chart 注入 resources.yaml
-	resourcesPath := filepath.Join(root(chartPath), "configs", "resources.yaml")
-	if _, err := os.Stat(resourcesPath); err == nil {
-		args = append(args, "--set-file", fmt.Sprintf("resourcesConfig=%s", resourcesPath))
+	if strings.Contains(release, "kubepivot-controller") || strings.Contains(chartPath, "kubepivot-controller") {
+		resourcesPath := filepath.Join(root(chartPath), "configs", "resources.yaml")
+		if _, err := os.Stat(resourcesPath); err == nil {
+			args = append(args, "--set-file", fmt.Sprintf("resourcesConfig=%s", resourcesPath))
+		}
+		// 读取 values.yaml，判断用户是否明确设置为 false
+		valuesPath := filepath.Join(chartPath, "values.yaml")
+		content, err := os.ReadFile(valuesPath)
+		isExplicitlyDisabled := err == nil && strings.Contains(string(content), "enabled: false")
+
+		if !isExplicitlyDisabled {
+			args = append(args, "--set", "enabled=true")
+		}
 	}
+
 	return args
 }
 

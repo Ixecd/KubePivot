@@ -446,7 +446,6 @@ vsPreview := fmt.Sprintf(`# virtualservice-preview.yaml
 // ── controller 独立 chart ─────────────────────────────────────────────────────
 
 // writeControllerChart 生成 A2 Reconciliation Controller 的 Helm Chart
-// Controller 名字全局固定为 kubepivot-controller（KubePivot 统一标识）
 func writeControllerChart(deploymentsDir, name string) error {
 	const controllerName = "kubepivot-controller" // ← 全局固定名称
 
@@ -465,13 +464,12 @@ dependencies: []
 `, controllerName, name)
 
 	var vb strings.Builder
-	vb.WriteString("# 配置好镜像后将 enabled 改为 true，再重新 kp deploy\n")
-	vb.WriteString("enabled: false\n\n")
+	vb.WriteString("enabled: true   # 默认开启，kp deploy 会自动部署 Controller\n\n")
 	vb.WriteString("image:\n")
 	vb.WriteString("  # TODO: 替换为你构建的 kubepivot-controller 镜像（需包含 kp 二进制）\n")
-	vb.WriteString("  repository: your-registry/kubepivot-controller\n")
+	vb.WriteString("  repository: qingchun22/kubepivot-controller\n")
 	vb.WriteString("  pullPolicy: IfNotPresent\n")
-	vb.WriteString("  tag: latest\n\n")
+	vb.WriteString("  tag: v1.7.0-dev\n\n")
 	vb.WriteString("# 由 kp deploy 通过 --set-file 自动注入 configs/resources.yaml\n")
 	vb.WriteString("resourcesConfig: \"\"\n")
 

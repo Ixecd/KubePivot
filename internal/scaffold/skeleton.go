@@ -587,6 +587,7 @@ func writeComponentsConfig(path, name string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+
 	content := fmt.Sprintf(`components:
   # 基础设施层（无 image，只部署 helm chart，无需 build/push）
   - name: %s-postgres
@@ -606,7 +607,19 @@ func writeComponentsConfig(path, name string) error {
       - %s-etcd
     # strategy: rolling       # rolling（默认）/ blue-green / canary
     # api_version: v1         # 对外 API 版本，用于 kp compat 依赖检查
-`, name, name, name, name, name, name)
+
+# ==================== KubePivot A2 Reconciliation Controller ====================
+# 运维大脑：负责漂移治理、自愈、状态调谐等功能
+# 开启方式（必须同时修改两个地方）：
+# 1. 把下面 enabled 改为 true
+# 2. 同时修改 deployments/%s/kubepivot-controller/values.yaml 中的 enabled: true
+# 改完后执行 kp deploy 即可启动
+  - name: kubepivot-controller
+    type: helm
+    chart: ./kubepivot-controller
+    enabled: true
+`, name, name, name, name, name, name, name)
+
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
