@@ -6,6 +6,25 @@
 
 ---
 
+## 必须做（简单）
+1. 全局清理剩余 exec.Command("kubectl"/"helm")
+2. 统一替换为 executor.GetExecutor()
+3. 确认所有文件已导入 executor 包
+
+## 优化项（先生说下午改）
+4. 重构 kubectlBaseArgs() 移除重复 --kubeconfig
+5. 确保所有命令只注入一次 kubeconfig
+6. 清理无用注释、格式化代码
+
+## 验证（最后一步）
+7. 本地构建 bin/kp 测试
+8. 检查日志无 kubectl not found
+9. 资源对账 & 自愈功能正常
+
+## 小细节
+10. 去掉 Sh() 相关风险调用（scratch 无 sh）
+11. Generic 执行器保持白名单安全机制
+
 ## ⚠️ 已知技术债（诚实清单）
 
 | 优先级 | 描述 | 原因 | 计划 |
