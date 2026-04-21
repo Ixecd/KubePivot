@@ -242,7 +242,7 @@ ETCD_ENDPOINTS=
 	}
 
 	// 自动安装依赖
-	if err := runInDir(outputDir, "git", "init"); err != nil {
+	if err := runInDir(outputDir, "git", "init", "--initial-branch=Master"); err != nil {
 		fmt.Fprintf(opts.Stdout, "[WARN] git init 失败，请手动执行\n")
 	}
 	if err := runInDir(outputDir, "git", "add", "."); err != nil {
