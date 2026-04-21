@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -179,6 +180,13 @@ func deployLayers(sm *state.Machine, cfg *deployConfig, env map[string]string, l
 	return nil
 }
 
+// toKebab 把 CamelCase / PascalCase 转为 kebab-case（内部使用）
+func toKebab(s string) string {
+	re := regexp.MustCompile(`([a-z0-9])([A-Z])`)
+	s = re.ReplaceAllString(s, `$1-$2`)
+	return strings.ToLower(s)
+}
+
 // deployService 部署单个服务
 // - chart 不存在：直接报错，不重试
 // - build/push 只做一次
@@ -187,7 +195,8 @@ func deployService(cfg *deployConfig, env map[string]string, plan planner.Plan, 
 	var t deployTiming
 
 	release := releaseName(projectName, plan.Name)
-	chartPath := filepath.Join(root, "deployments", projectName, plan.Name)
+	// 路径强制使用小写 kebab 名称（机器友好）
+	chartPath := filepath.Join(root, "deployments", toKebab(projectName), toKebab(plan.Name))
 
 	if strings.Contains(plan.Name, "kubepivot-controller") {
 		chartPath = filepath.Join(root, "deployments", projectName, "kubepivot-controller")
@@ -368,7 +377,7 @@ func buildHelmArgs(cfg *deployConfig, release, chartPath string, env map[string]
 
 // root 从 chart 路径推断项目根目录
 func root(chartPath string) string {
-	return filepath.Dir(filepath.Dir(filepath.Dir(chartPath)))   // 往上跳 3 级
+	return filepath.Dir(filepath.Dir(filepath.Dir(chartPath))) // 往上跳 3 级
 }
 
 // buildMakeEnvForService 构建单个服务的 make 环境变量
