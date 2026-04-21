@@ -411,7 +411,7 @@ spec:
 	vb.WriteString("replicaCount: 1\n\n")
 	vb.WriteString("image:\n")
 	vb.WriteString("  repository: qingchun22/" + name + "-arm64\n")
-	vb.WriteString("  pullPolicy: IfNotPresent\n")
+	vb.WriteString("  pullPolicy: Always\n")
 	vb.WriteString("  tag: \"\"\n\n")
 	vb.WriteString("service:\n")
 	vb.WriteString("  type: ClusterIP\n")
@@ -468,7 +468,7 @@ dependencies: []
 	vb.WriteString("image:\n")
 	vb.WriteString("  # TODO: 替换为你构建的 kubepivot-controller 镜像（需包含 kp 二进制）\n")
 	vb.WriteString("  repository: qingchun22/kubepivot-controller\n")
-	vb.WriteString("  pullPolicy: IfNotPresent\n")
+	vb.WriteString("  pullPolicy: Always\n")
 	vb.WriteString("  tag: v2.0.0\n\n")
 	vb.WriteString("# 由 kp deploy 通过 --set-file 自动注入 configs/resources.yaml\n")
 	vb.WriteString("resourcesConfig: \"\"\n")
@@ -573,6 +573,8 @@ spec:
             readOnlyRootFilesystem: true  # 确保 kubectl 运行在不可变环境中
             allowPrivilegeEscalation: false
           env:
+            - name: PATH
+              value: "/usr/local/bin"
             - name: PROJECT_NAME
               value: "%s"
             - name: KUBE_NAMESPACE
