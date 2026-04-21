@@ -69,7 +69,7 @@ func InitProject(opts InitOptions) (err error) {
 	kebabName := toKebab(name)   // ← 内部统一使用 kebab-case
 	module := strings.TrimSpace(opts.Module)
 	if module == "" {
-		module = name
+		module = kebabName
 	}
 	if opts.Stdout == nil {
 		opts.Stdout = io.Discard
@@ -125,40 +125,40 @@ func InitProject(opts InitOptions) (err error) {
 	if err := writeServiceMain(filepath.Join(outputDir, "cmd", name, "main.go"), name); err != nil {
 		return err
 	}
-	if err := writeComponentsConfig(filepath.Join(outputDir, "configs", "components.yaml"), name); err != nil {
+	if err := writeComponentsConfig(filepath.Join(outputDir, "configs", "components.yaml"), kebabName); err != nil {
 		return err
 	}
-	if err := writeResourcesConfig(outputDir, name); err != nil {
+	if err := writeResourcesConfig(outputDir, kebabName); err != nil {
 		return err
 	}
-	if err := writeTestScript(filepath.Join(outputDir, "scripts", "test_api.sh"), name); err != nil {
+	if err := writeTestScript(filepath.Join(outputDir, "scripts", "test_api.sh"), kebabName); err != nil {
 		return err
 	}
-	if err := writeSecretScript(outputDir, name); err != nil {
+	if err := writeSecretScript(outputDir, kebabName); err != nil {
 		return err
 	}
-	if err := writeInternalSkeleton(outputDir, name, module); err != nil {
+	if err := writeInternalSkeleton(outputDir, kebabName, module); err != nil {
 		return err
 	}
-	if err := writeMigrationSkeleton(outputDir, name); err != nil {
+	if err := writeMigrationSkeleton(outputDir, kebabName); err != nil {
 		return err
 	}
 	if err := writeAuthPackage(outputDir); err != nil {
 		return err
 	}
-	if err := writeMetricsSkeleton(outputDir, name); err != nil {
+	if err := writeMetricsSkeleton(outputDir, kebabName); err != nil {
 		return err
 	}
-	if err := writeMonitoringSkeleton(outputDir, name); err != nil {
+	if err := writeMonitoringSkeleton(outputDir, kebabName); err != nil {
 		return err
 	}
-	if err := writeTestSkeleton(outputDir, name, module); err != nil {
+	if err := writeTestSkeleton(outputDir, kebabName, module); err != nil {
 		return err
 	}
 	if err := writeSnapshotSkeleton(outputDir, name); err != nil {
 		return err
 	}
-	if err := writeSwaggerSpec(outputDir, name); err != nil {
+	if err := writeSwaggerSpec(outputDir, kebabName); err != nil {
 		return err
 	}
 	if err := writeHandoffSkeleton(outputDir, name, module, opts.WithFrontend); err != nil {
@@ -185,31 +185,31 @@ REGISTRY_PREFIX=qingchun22
 ARCH=%s
 VERSION=v0.1.0
 ETCD_ENDPOINTS=
-`, name, name, module, arch)
+`, kebabName, kebabName, module, arch)
 	if err := os.WriteFile(configsPath, []byte(envContent), 0644); err != nil {
 		return fmt.Errorf("gen project.env: %w", err)
 	}
 
-	if err := renameDir(filepath.Join(outputDir, "build", "docker", "helloworld"), filepath.Join(outputDir, "build", "docker", name)); err != nil {
+	if err := renameDir(filepath.Join(outputDir, "build", "docker", "helloworld"), filepath.Join(outputDir, "build", "docker", kebabName)); err != nil {
 		return err
 	}
 	if err := renameDir(filepath.Join(outputDir, "build", "docker", "dtk"), filepath.Join(outputDir, "build", "docker", name)); err != nil {
 		// ignore if not exist
 	}
-	if err := renameDir(filepath.Join(outputDir, "deployments", "project"), filepath.Join(outputDir, "deployments", name)); err != nil {
+	if err := renameDir(filepath.Join(outputDir, "deployments", "project"), filepath.Join(outputDir, "deployments", kebabName)); err != nil {
 		return err
 	}
 
-	if err := writeDockerfile(filepath.Join(outputDir, "build", "docker", name, "Dockerfile"), name); err != nil {
+	if err := writeDockerfile(filepath.Join(outputDir, "build", "docker", kebabName, "Dockerfile"), kebabName); err != nil {
 		return err
 	}
-	if err := writeBuildSh(filepath.Join(outputDir, "build", "docker", name, "build.sh"), name); err != nil {
+	if err := writeBuildSh(filepath.Join(outputDir, "build", "docker", kebabName, "build.sh"), kebabName); err != nil {
 		return err
 	}
 
 	replacements := map[string]string{
 		"github.com/Ixecd/kubepivot": module,
-		"dev-toolkit":                name,
+		"dev-toolkit":                kebabName,
 	}
 
 	if err := replaceInDir(outputDir, replacements); err != nil {
@@ -228,7 +228,7 @@ ETCD_ENDPOINTS=
 	}
 
 	// after replaceInDir
-	fixChartYAMLs(outputDir, name)
+	fixChartYAMLs(outputDir, kebabName)
 
 	// 🔥 ADD dir renames漏
 	if err := renameDir(filepath.Join(outputDir, "deployments", "dev-toolkit"), filepath.Join(outputDir, "deployments", name)); err != nil {
@@ -280,7 +280,7 @@ ETCD_ENDPOINTS=
 	fmt.Fprintf(opts.Stdout, "  make build   # 编译\n")
 	fmt.Fprintf(opts.Stdout, "  make test    # 测试\n")
 	fmt.Fprintf(opts.Stdout, "\n⚠️  上线前请检查：\n")
-	fmt.Fprintf(opts.Stdout, "  deployments/%s/templates/controller-rbac.yaml\n", name)
+	fmt.Fprintf(opts.Stdout, "  deployments/%s/templates/controller-rbac.yaml\n", kebabName)
 	fmt.Fprintf(opts.Stdout, "  → 当前为全量权限，请按实际需要收紧 ClusterRole rules\n")
 	fmt.Fprintf(opts.Stdout, "  deployments/%s/templates/controller-deployment.yaml\n", name)
 	fmt.Fprintf(opts.Stdout, "  → 替换 controller.image.repository 为你构建的镜像\n")
