@@ -122,7 +122,7 @@ func InitProject(opts InitOptions) (err error) {
 	if err := writeGoMod("", filepath.Join(outputDir, "go.mod"), module); err != nil {
 		return err
 	}
-	if err := writeServiceMain(filepath.Join(outputDir, "cmd", name, "main.go"), name); err != nil {
+	if err := writeServiceMain(filepath.Join(outputDir, "cmd", kebabName, "main.go"), name); err != nil {
 		return err
 	}
 	if err := writeComponentsConfig(filepath.Join(outputDir, "configs", "components.yaml"), kebabName); err != nil {
@@ -222,7 +222,7 @@ ETCD_ENDPOINTS=
 	})
 
 	if err := replaceInDir(filepath.Join(outputDir, "deployments"), map[string]string{
-		"project": name,
+		"project": kebabName,
 	}); err != nil {
 		return fmt.Errorf("fix helm chart templates: %w", err)
 	}
@@ -231,13 +231,13 @@ ETCD_ENDPOINTS=
 	fixChartYAMLs(outputDir, kebabName)
 
 	// 🔥 ADD dir renames漏
-	if err := renameDir(filepath.Join(outputDir, "deployments", "dev-toolkit"), filepath.Join(outputDir, "deployments", name)); err != nil {
+	if err := renameDir(filepath.Join(outputDir, "deployments", "dev-toolkit"), filepath.Join(outputDir, "deployments", kebabName)); err != nil {
 		// ignore if not exist
 	}
-	if err := renameDir(filepath.Join(outputDir, "build", "docker", "dev-toolkit"), filepath.Join(outputDir, "build", "docker", name)); err != nil {
+	if err := renameDir(filepath.Join(outputDir, "build", "docker", "dev-toolkit"), filepath.Join(outputDir, "build", "docker", kebabName)); err != nil {
 	}
 
-	if err := writeHelmTemplateSkeleton(outputDir, name); err != nil {
+	if err := writeHelmTemplateSkeleton(outputDir, kebabName); err != nil {
 		return err
 	}
 
@@ -268,12 +268,12 @@ ETCD_ENDPOINTS=
 	}
 
 	// 友好路径显示（~/myproject 而不是绝对路径）
-	friendly := friendlyPath(outputDir)
+	friendly := strings.Replace(friendlyPath(outputDir), kebabName, name, -1)
 
 	fmt.Fprintf(opts.Stdout, "✅ 项目已成功生成！\n\n")
 	fmt.Fprintf(opts.Stdout, "  路径    %s\n", friendly)
 	fmt.Fprintf(opts.Stdout, "  模块    %s\n", module)
-	fmt.Fprintf(opts.Stdout, "  入口    cmd/%s\n\n", name)
+	fmt.Fprintf(opts.Stdout, "  入口    cmd/%s\n\n", kebabName)
 	fmt.Fprintf(opts.Stdout, "下一步：\n")
 	fmt.Fprintf(opts.Stdout, "  cd %s\n", friendly)
 	fmt.Fprintf(opts.Stdout, "  make tools   # 安装所有工具\n")
@@ -282,7 +282,7 @@ ETCD_ENDPOINTS=
 	fmt.Fprintf(opts.Stdout, "\n⚠️  上线前请检查：\n")
 	fmt.Fprintf(opts.Stdout, "  deployments/%s/templates/controller-rbac.yaml\n", kebabName)
 	fmt.Fprintf(opts.Stdout, "  → 当前为全量权限，请按实际需要收紧 ClusterRole rules\n")
-	fmt.Fprintf(opts.Stdout, "  deployments/%s/templates/controller-deployment.yaml\n", name)
+	fmt.Fprintf(opts.Stdout, "  deployments/%s/templates/controller-deployment.yaml\n", kebabName)
 	fmt.Fprintf(opts.Stdout, "  → 替换 controller.image.repository 为你构建的镜像\n")
 
 	if opts.WithFrontend {
