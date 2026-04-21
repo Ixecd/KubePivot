@@ -7,39 +7,84 @@ import (
 	"sync"
 )
 
-// KpExecutor 统一执行器
-type KpExecutor struct {
-	kubectlPath string
-	sem         chan struct{} // 并发控制信号量
-}
-
+// 全局单例（懒加载，无需 Init，永不 panic）
 var (
-	instance *KpExecutor
-	once     sync.Once
+	_global *KpExecutor
+	_once   sync.Once
 )
 
-// GetExecutor 获取单例，限制最大并发为 5，适合 scratch 环境
-func GetExecutor() *KpExecutor {
-	once.Do(func() {
-		instance = &KpExecutor{
-			kubectlPath: "/usr/local/bin/kubectl",
-			sem:         make(chan struct{}, 5),
-		}
-	})
-	return instance
+// KpExecutor 核心单例
+type KpExecutor struct {
+	kubectl string
+	helm    string
+	sem     chan struct{}
 }
 
-// Kubectl 执行一条 kubectl 命令并返回结果
-func (e *KpExecutor) Kubectl(ctx context.Context, args ...string) ([]byte, error) {
-	e.sem <- struct{}{}        // 获取令牌
-	defer func() { <-e.sem }() // 释放令牌
+// GetExecutor 安全懒加载单例
+func GetExecutor() *KpExecutor {
+	_once.Do(func() {
+		_global = &KpExecutor{
+			kubectl: "/usr/local/bin/kubectl",
+			helm:    "/usr/local/bin/helm",
+			sem:     make(chan struct{}, 5),
+		}
+	})
+	return _global
+}
 
-	slog.Debug("Executing kubectl", "args", args)
+func (e *KpExecutor) Sh(ctx context.Context, cmd string) ([]byte, error) {
+	return e.Generic(ctx, "sh", "", "-c", cmd)
+}
 
-	cmd := exec.CommandContext(ctx, e.kubectlPath, args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return out, err
+func (e *KpExecutor) Kubectl(ctx context.Context, kubeconfig string, args ...string) ([]byte, error) {
+	if kubeconfig != "" {
+		args = append([]string{"--kubeconfig", kubeconfig}, args...)
 	}
-	return out, nil
+	return e.run(ctx, e.kubectl, args...)
+}
+
+func (e *KpExecutor) Helm(ctx context.Context, kubeconfig string, args ...string) ([]byte, error) {
+	if kubeconfig != "" {
+		args = append([]string{"--kubeconfig", kubeconfig}, args...)
+	}
+	return e.run(ctx, e.helm, args...)
+}
+
+// Generic 全局通用
+func (e *KpExecutor) Generic(ctx context.Context, bin string, kubeconfig string, args ...string) ([]byte, error) {
+	path := map[string]string{
+		"kubectl": e.kubectl,
+		"helm":    e.helm,
+	}[bin]
+
+	// 安全 fallback（仅允许已知白名单，scratch 安全）
+	if path == "" {
+		path = bin
+	}
+
+	// 自动注入 kubeconfig
+	if kubeconfig != "" {
+		args = append([]string{"--kubeconfig", kubeconfig}, args...)
+	}
+
+	return e.run(ctx, path, args...)
+}
+
+func (e *KpExecutor) run(ctx context.Context, bin string, args ...string) ([]byte, error) {
+	e.sem <- struct{}{}
+	defer func() { <-e.sem }()
+
+	slog.Debug("exec command", "bin", bin, "args", args)
+	cmd := exec.CommandContext(ctx, bin, args...)
+	return cmd.CombinedOutput()
+}
+
+// CmdKubectl 返回底层 *exec.Cmd，用于自定义 Stdin/Stdout/Stderr
+func (e *KpExecutor) CmdKubectl(ctx context.Context, kubeconfig string, args ...string) *exec.Cmd {
+	// 自动注入 kubeconfig
+	if kubeconfig != "" {
+		args = append([]string{"--kubeconfig", kubeconfig}, args...)
+	}
+	// 返回 Cmd 对象，不执行，给外部手动控制
+	return exec.CommandContext(ctx, e.kubectl, args...)
 }

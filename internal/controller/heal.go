@@ -595,11 +595,11 @@ func getLatestRevision(releaseName, namespace string) (int, error) {
 }
 
 func runHelmOutput(args ...string) ([]byte, error) {
-	return exec.Command("helm", args...).Output()
+	return exec.Command("/usr/local/bin/helm", args...).Output()
 }
 
 func runHelm(args ...string) error {
-	cmd := exec.Command("helm", args...)
+	cmd := exec.Command("/usr/local/bin/helm", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w\n%s", err, string(out))

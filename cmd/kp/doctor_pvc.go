@@ -8,7 +8,7 @@ import (
 
 // checkVolumeSnapshotCRD 检查 VolumeSnapshot CRD 是否安装
 func checkVolumeSnapshotCRD() checkResult {
-	out, err := exec.Command("kubectl", "get", "crd",
+	out, err := exec.Command("/usr/local/bin/kubectl", "get", "crd",
 		"volumesnapshots.snapshot.storage.k8s.io",
 		"--ignore-not-found",
 		"-o", "name",
@@ -31,7 +31,7 @@ func checkVolumeSnapshotCRD() checkResult {
 
 // checkVolumeSnapshotClass 检查是否有可用的 VolumeSnapshotClass
 func checkVolumeSnapshotClass() checkResult {
-	out, err := exec.Command("kubectl", "get", "volumesnapshotclass",
+	out, err := exec.Command("/usr/local/bin/kubectl", "get", "volumesnapshotclass",
 		"--ignore-not-found",
 		"-o", "jsonpath={.items[*].metadata.name}",
 	).Output()
@@ -55,7 +55,7 @@ func checkVolumeSnapshotClass() checkResult {
 		}
 	}
 	// 检查是否有默认 class
-	defaultOut, _ := exec.Command("kubectl", "get", "volumesnapshotclass",
+	defaultOut, _ := exec.Command("/usr/local/bin/kubectl", "get", "volumesnapshotclass",
 		"-o", "jsonpath={.items[?(@.metadata.annotations.snapshot\\.storage\\.kubernetes\\.io/is-default-class==\"true\")].metadata.name}",
 	).Output()
 	defaultClass := strings.TrimSpace(string(defaultOut))

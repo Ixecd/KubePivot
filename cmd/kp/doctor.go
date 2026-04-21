@@ -179,7 +179,7 @@ func checkDocker() checkResult {
 }
 
 func checkKubectl() checkResult {
-	out, err := exec.Command("kubectl", "version", "--client", "--output=yaml").Output()
+	out, err := exec.Command("/usr/local/bin/kubectl", "version", "--client", "--output=yaml").Output()
 	if err != nil {
 		return checkResult{
 			name: "kubectl", ok: false, isError: true,
@@ -211,7 +211,7 @@ func checkHelm() checkResult {
 }
 
 func checkK8sCluster() checkResult {
-	out, err := exec.Command("kubectl", "cluster-info", "--request-timeout=3s").Output()
+	out, err := exec.Command("/usr/local/bin/kubectl", "cluster-info", "--request-timeout=3s").Output()
 	if err != nil {
 		return checkResult{
 			name: "K8s 集群", ok: false, isError: false,

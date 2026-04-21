@@ -1,19 +1,25 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"os/exec"
+	"log/slog"
 	"path/filepath"
 	"strings"
 
+	"github.com/Ixecd/kubepivot/internal/executor"
 	"github.com/Ixecd/kubepivot/internal/planner"
 )
 
 func detectChangedServices(root string, plans []planner.Plan) (map[string]bool, error) {
-	out, err := exec.Command("git", "-C", root, "diff", "--name-only", "HEAD~1", "HEAD").Output()
+	ctx := context.Background()
+	out, err := executor.GetExecutor().Generic(ctx, "git", "", "-C", root, "diff", "--name-only", "HEAD~1", "HEAD")
 	if err != nil {
+		slog.Debug("git diff fail", "err", err)
 		return nil, nil
 	}
+	slog.Debug("git diff files", "count", len(strings.Fields(string(out))))
+
 	files := strings.Fields(strings.TrimSpace(string(out)))
 	if len(files) == 0 {
 		return map[string]bool{}, nil
@@ -70,7 +76,8 @@ func printChangedSummary(all []planner.Plan, changed map[string]bool) {
 
 // gitRoot 获取 git 仓库根目录
 func gitRoot(path string) string {
-	out, err := exec.Command("git", "-C", path, "rev-parse", "--show-toplevel").Output()
+	ctx := context.Background()
+	out, err := executor.GetExecutor().Generic(ctx, "git", "", "-C", path, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return path
 	}
@@ -79,10 +86,12 @@ func gitRoot(path string) string {
 
 // hasGitHistory 检查是否有足够的 git 历史（至少 2 个 commit）
 func hasGitHistory(root string) bool {
-	out, err := exec.Command("git", "-C", root, "rev-list", "--count", "HEAD").Output()
+	ctx := context.Background()
+	out, err := executor.GetExecutor().Generic(ctx, "git", "", "-C", root, "rev-list", "--count", "HEAD")
 	if err != nil {
 		return false
 	}
+
 	count := strings.TrimSpace(string(out))
 	return count != "0" && count != "1"
 }

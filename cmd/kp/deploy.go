@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Ixecd/kubepivot/internal/controller"
+	"github.com/Ixecd/kubepivot/internal/executor"
 	"github.com/Ixecd/kubepivot/internal/planner"
 	"github.com/Ixecd/kubepivot/internal/state"
 )
@@ -585,7 +588,9 @@ func buildMakeEnv(env map[string]string, cfg *deployConfig, plan []planner.Plan)
 
 	arch := envOrDefault(env, "ARCH", "")
 	if arch == "" {
-		if out, err := exec.Command("go", "env", "GOARCH").Output(); err == nil {
+		ctx := context.Background()
+		out, err := executor.GetExecutor().Generic(ctx, "go", "", "env", "GOARCH")
+		if err == nil {
 			arch = strings.TrimSpace(string(out))
 		}
 	}
@@ -656,11 +661,20 @@ func ensureSecret(cfg *deployConfig, env map[string]string, projectName string) 
 	nsArgs = append(nsArgs, "create", "namespace", cfg.namespace, "--dry-run=client", "-o", "yaml")
 	nsYaml, _ := runOutput(nsArgs...)
 	if len(nsYaml) > 0 {
-		applyNsArgs := kubectlBaseArgs(cfg.kubeconfig, cfg.context, "")
-		applyNsArgs = append(applyNsArgs, "apply", "-f", "-")
-		nsCmd := exec.Command(applyNsArgs[0], applyNsArgs[1:]...)
-		nsCmd.Stdin = strings.NewReader(string(nsYaml))
-		nsCmd.CombinedOutput()
+		execer := executor.GetExecutor()
+		ctx := context.Background()
+
+		// 构造 kubectl 参数
+		args := kubectlBaseArgs(cfg.kubeconfig, cfg.context, "")
+		args = append(args, "apply", "-f", "-")
+
+		cmd := execer.CmdKubectl(ctx, cfg.kubeconfig, args...)
+		cmd.Stdin = strings.NewReader(string(nsYaml))
+		// 执行并获取输出
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			slog.Error("apply namespace failed", "err", err, "out", string(out))
+		}
 	}
 
 	dbURL := fmt.Sprintf("postgres://%s:%s@%s-postgres:5432/%s?sslmode=disable",

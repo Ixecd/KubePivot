@@ -469,7 +469,7 @@ dependencies: []
 	vb.WriteString("  # TODO: 替换为你构建的 kubepivot-controller 镜像（需包含 kp 二进制）\n")
 	vb.WriteString("  repository: qingchun22/kubepivot-controller\n")
 	vb.WriteString("  pullPolicy: Always\n")
-	vb.WriteString("  tag: v2.0.0\n\n")
+	vb.WriteString("  tag: v2.1.0\n\n")
 	vb.WriteString("# 由 kp deploy 通过 --set-file 自动注入 configs/resources.yaml\n")
 	vb.WriteString("resourcesConfig: \"\"\n")
 	vb.WriteString("replicaCount: 3   # 支持 Leader Election 高可用\n\n")

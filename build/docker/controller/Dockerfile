@@ -15,17 +15,22 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags '-s -w -extldflags "-static"' \
     -o kp ./cmd/kp
 
-# 动态获取最新 Helm 版本（安全、不硬编码）
+# 🔥 先生钦点修复：HELM 跨架构下载 + 强校验
 RUN HELM_VERSION=$(curl -Ls https://api.github.com/repos/helm/helm/releases/latest | grep '"tag_name"' | cut -d'"' -f4) && \
-    curl -Ls "https://get.helm.sh/helm-${HELM_VERSION}-linux-${TARGETARCH}.tar.gz" | tar -xz && \
-    mv linux-${TARGETARCH}/helm /usr/local/bin/helm && \
+    ARCH=${TARGETARCH} && \
+    curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCH}.tar.gz" -o helm.tgz && \
+    tar -xzOf helm.tgz "linux-${ARCH}/helm" > /usr/local/bin/helm && \
     chmod +x /usr/local/bin/helm
 
-# 动态获取最新 kubectl 版本
-RUN KUBECTL_VERSION=$(curl -Ls https://dl.k8s.io/release/stable.txt) && \
-    curl -Ls "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
+# 🔥 先生钦点修复：KUBECTL 跨架构下载 + 强校验
+RUN KUBECTL_VERSION=$(curl -fsSL https://dl.k8s.io/release/stable.txt) && \
+    ARCH=${TARGETARCH} && \
+    curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl" \
     -o /usr/local/bin/kubectl && \
     chmod +x /usr/local/bin/kubectl
+
+# 🔥 先生要求：验证！必须验证！（防止空文件/下载失败）
+RUN /usr/local/bin/kubectl version --client && /usr/local/bin/helm version
 
 RUN mkdir -p /tmp && touch /tmp/.keep
 
@@ -33,24 +38,16 @@ RUN mkdir -p /tmp && touch /tmp/.keep
 FROM alpine:latest AS optimizer
 RUN apk add --no-cache upx binutils
 COPY --from=builder /app/kp /opt/kp
-
-# 🔥 只压缩 kp，绝对不压 helm / kubectl（防崩溃、防segfault）
 RUN strip --strip-all /opt/kp && upx --best --lzma /opt/kp
 
 # ====================== Runtime Stage ======================
 FROM scratch AS runtime
 
-LABEL org.opencontainers.image.source="https://github.com/Ixecd/KubePivot"
-
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-
 COPY --from=builder --chown=65532:65532 /tmp /tmp
 ENV HOME="/tmp"
+ENV PATH="/usr/local/bin"
 
-# 🔥 生产级必加：PATH 必须有！！（主凶修复）
-ENV PATH="/usr/local/bin:$PATH"
-
-# 二进制文件（保持干净、不压缩、不损坏）
 COPY --from=optimizer /opt/kp                /usr/local/bin/kp
 COPY --from=builder   /usr/local/bin/kubectl /usr/local/bin/kubectl
 COPY --from=builder   /usr/local/bin/helm    /usr/local/bin/helm

@@ -13,7 +13,7 @@ func checkTLSSecretExpiry(namespace string) []checkResult {
 		return nil
 	}
 
-	out, err := exec.Command("kubectl", "get", "secret",
+	out, err := exec.Command("/usr/local/bin/kubectl", "get", "secret",
 		"--namespace", namespace,
 		"--field-selector", "type=kubernetes.io/tls",
 		"-o", "jsonpath={range .items[*]}{.metadata.name}{'\\n'}{end}",
@@ -45,7 +45,7 @@ func checkTLSSecretExpiry(namespace string) []checkResult {
 }
 
 func checkSingleTLSSecret(namespace, name string) checkResult {
-	out, err := exec.Command("kubectl", "get", "secret", name,
+	out, err := exec.Command("/usr/local/bin/kubectl", "get", "secret", name,
 		"--namespace", namespace,
 		"-o", "jsonpath={.data.tls\\.crt}",
 	).Output()
