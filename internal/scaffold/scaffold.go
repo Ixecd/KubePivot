@@ -36,14 +36,37 @@ var (
 	}
 )
 
+// validateProjectName 支持大写字母（CamelCase / PascalCase），用户友好
+func validateProjectName(name string) error {
+	if name == "" {
+		return errors.New("project name cannot be empty")
+	}
+	if len(name) > 63 {
+		return fmt.Errorf("project name too long (max 63 characters)")
+	}
+	// 允许字母、数字、'-'
+	if !regexp.MustCompile(`^[a-zA-Z0-9-]+$`).MatchString(name) {
+		return fmt.Errorf(`invalid project name %q: only letters, numbers and '-' are allowed`, name)
+	}
+	return nil
+}
+
+// toKebab 把 CamelCase / PascalCase 转为 kebab-case（内部使用）
+func toKebab(s string) string {
+	re := regexp.MustCompile(`([a-z0-9])([A-Z])`)
+	s = re.ReplaceAllString(s, `$1-$2`)
+	return strings.ToLower(s)
+}
+
 func InitProject(opts InitOptions) (err error) {
 	name := strings.TrimSpace(opts.Name)
 	if name == "" {
 		return errors.New("missing project name: use --name")
 	}
-	if !projectNamePattern.MatchString(name) {
-		return fmt.Errorf("invalid project name %q: use lowercase letters, numbers, and '-' only", name)
+	if err := validateProjectName(name); err != nil {
+		return err
 	}
+	kebabName := toKebab(name)   // ← 内部统一使用 kebab-case
 	module := strings.TrimSpace(opts.Module)
 	if module == "" {
 		module = name
@@ -57,7 +80,7 @@ func InitProject(opts InitOptions) (err error) {
 		return err
 	}
 
-	outputDir, err := resolveOutputDir(opts.OutputDir, name)
+	outputDir, err := resolveOutputDir(opts.OutputDir, kebabName)
 	if err != nil {
 		return err
 	}
