@@ -20,14 +20,30 @@ type KpExecutor struct {
 	sem     chan struct{}
 }
 
+// resolveBin 优先用容器内的绝对路径（scratch），否则用 PATH
+func resolveBin(name string) string {
+	abs := "/usr/local/bin/" + name
+	// 容器内先检查绝对路径是否存在
+	if _, err := exec.LookPath(abs); err == nil {
+		return abs
+	}
+	// 本机走 PATH
+	if p, err := exec.LookPath(name); err == nil {
+		return p
+	}
+	// 降级，让执行时自然报错
+	return name
+}
+
 // GetExecutor 安全懒加载单例
 func GetExecutor() *KpExecutor {
 	_once.Do(func() {
 		_global = &KpExecutor{
-			kubectl: "/usr/local/bin/kubectl",
-			helm:    "/usr/local/bin/helm",
+			kubectl: resolveBin("kubectl"),
+			helm:    resolveBin("helm"),
 			sem:     make(chan struct{}, 5),
 		}
+		slog.Debug("executor initialized", "kubectl", _global.kubectl, "helm", _global.helm)
 	})
 	return _global
 }

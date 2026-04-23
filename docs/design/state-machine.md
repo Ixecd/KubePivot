@@ -171,7 +171,7 @@ helm diff --three-way-merge 对比 live 集群 vs chart 期望值
 
 ## 持久化
 
-**etcd 优先**，key 格式：`dtk/<project>/<namespace>/state`
+**etcd 优先**，key 格式：`kubepivot/<project>/<namespace>/state`
 
 **本地文件降级**：无 etcd 时自动降级到 `~/.kp/state/<project>/<namespace>.json`
 

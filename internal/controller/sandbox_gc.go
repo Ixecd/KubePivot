@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
+
+	"github.com/Ixecd/kubepivot/internal/executor"
 )
 
 const sandboxSessionTTL = time.Hour
@@ -99,16 +100,15 @@ func (r *Reconciler) cleanExpiredSandbox(session sandboxSessionFile, sessionPath
 	// 清理带 sandbox-id label 的资源
 	kinds := []string{"job", "pod", "configmap"}
 	for _, kind := range kinds {
-		args := []string{
-			"kubectl", "delete", kind,
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		out, err := executor.GetExecutor().Kubectl(ctx, r.kubeconfig,
+			"delete", kind,
 			"--namespace", ns,
-			"-l", "kubepivot.io/sandbox-id=" + session.ID,
+			"-l", "kubepivot.io/sandbox-id="+session.ID,
 			"--ignore-not-found",
-		}
-		if r.kubeconfig != "" {
-			args = append(args, "--kubeconfig", r.kubeconfig)
-		}
-		if out, err := runKubectl(args...); err != nil {
+		)
+		cancel()
+		if err != nil {
 			slog.Warn("清理 Sandbox 资源失败",
 				"kind", kind, "err", string(out))
 		} else {
@@ -118,7 +118,7 @@ func (r *Reconciler) cleanExpiredSandbox(session sandboxSessionFile, sessionPath
 	}
 
 	// 强制解锁状态机（如果还在 Sandbox 状态）
-	r.forceUnlockIfSandboxState(session.Project, ns, session.ID)
+	r.forceUnlockIfSandboxState(session.ID)
 
 	// 删除 session 文件
 	os.Remove(sessionPath)
@@ -126,7 +126,7 @@ func (r *Reconciler) cleanExpiredSandbox(session sandboxSessionFile, sessionPath
 }
 
 // forceUnlockIfSandboxState 检查状态机，如果还在 Sandbox 状态则强制回 IDLE
-func (r *Reconciler) forceUnlockIfSandboxState(project, namespace, sandboxID string) {
+func (r *Reconciler) forceUnlockIfSandboxState(sandboxID string) {
 	if r.sm == nil {
 		return
 	}
@@ -147,10 +147,4 @@ func (r *Reconciler) forceUnlockIfSandboxState(project, namespace, sandboxID str
 		"controller: sandbox GC 超期强制解锁 id="+sandboxID); err != nil {
 		slog.Error("强制解锁失败", "err", err)
 	}
-}
-
-// runKubectl 执行 kubectl 命令，返回输出和错误
-func runKubectl(args ...string) ([]byte, error) {
-	out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
-	return out, err
 }

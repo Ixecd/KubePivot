@@ -486,25 +486,61 @@ kind: ClusterRole
 metadata:
   name: %s
 rules:
-  # 核心资源：deployments/statefulsets/pods 自愈用
+  # 核心资源：deployments/statefulsets/pods 自愈 + patch + 重建
   - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets", "replicasets"]
-    verbs: ["get", "list", "watch", "update", "patch"]
+    resources: ["deployments", "statefulsets", "replicasets", "daemonsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Pod/Service/PVC/ConfigMap 全权限
   - apiGroups: [""]
-    resources: ["pods", "services", "endpoints", "persistentvolumeclaims"]
-    verbs: ["get", "list", "watch", "patch"]
-  # Leader Election：leases 读写权
+    resources: ["pods", "pods/log", "services", "endpoints", "persistentvolumeclaims", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Namespace 创建（kp deploy ensureSecret 会自动建 namespace）
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create"]
+
+  # Secret 完整 CRUD：
+  # 1. helm release state 存在 Secret（type=helm.sh/release.v1）
+  # 2. ensureSecret 自动创建 dev Secret
+  # 3. kp secret rotate 改密码
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Leader Election（lease）
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # helm rollback 用
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "list", "watch"]
+
   # 事件记录
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["create", "patch"]
+
+  # HPA 管理
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # NetworkPolicy/Ingress（helm upgrade 时同步）
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies", "ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # ServiceAccount/Role/RoleBinding（helm upgrade 涉及）
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # CRD 自愈（healCRDApply）
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

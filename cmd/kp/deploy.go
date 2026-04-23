@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -695,9 +694,15 @@ func ensureSecret(cfg *deployConfig, env map[string]string, projectName string) 
 		return nil
 	}
 
-	applyArgs := kubectlBaseArgs(cfg.kubeconfig, cfg.context, cfg.namespace)
-	applyArgs = append(applyArgs, "apply", "-f", "-", "--namespace", cfg.namespace)
-	cmd := exec.Command(applyArgs[0], applyArgs[1:]...)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	applyArgs := []string{"apply", "-f", "-", "--namespace", cfg.namespace}
+	if cfg.context != "" {
+		applyArgs = append([]string{"--context", cfg.context}, applyArgs...)
+	}
+
+	cmd := executor.GetExecutor().CmdKubectl(ctx, cfg.kubeconfig, applyArgs...)
 	cmd.Stdin = strings.NewReader(string(yaml))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		P.Info("⚠️ ", fmt.Sprintf("自动创建 Secret 失败: %s", string(out)))

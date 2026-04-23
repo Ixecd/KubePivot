@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/Ixecd/kubepivot/internal/executor"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
@@ -85,30 +85,26 @@ func (r *Reconciler) scanAndSync(ctx context.Context) {
 
 // detectDrift 用 helm diff 检测单个资源的漂移
 func detectDrift(kubeconfig, namespace string, res Resource) ([]string, error) {
-	// 找到对应的 helm release
 	release := findReleaseForResource(kubeconfig, namespace, res)
 	if release == "" {
 		return nil, nil
 	}
 
-	args := []string{
-		"helm", "diff", "upgrade", release,
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	out, _ := executor.GetExecutor().Helm(ctx, kubeconfig,
+		"diff", "upgrade", release,
 		"--namespace", namespace,
 		"--no-hooks",
 		"--suppress-secrets",
 		"--three-way-merge",
-	}
-	if kubeconfig != "" {
-		args = append(args, "--kubeconfig", kubeconfig)
-	}
-
-	out, _ := exec.Command(args[0], args[1:]...).CombinedOutput()
+	)
 	output := strings.TrimSpace(string(out))
 	if output == "" {
 		return nil, nil
 	}
 
-	// 简单解析：找出 replicas/image 等关键字段的变化
 	var diffs []string
 	for _, line := range strings.Split(output, "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -137,18 +133,16 @@ func (r *Reconciler) forceSync(namespace string, res Resource) error {
 		return fmt.Errorf("找不到对应的 helm release")
 	}
 
-	args := []string{
-		"helm", "upgrade", release,
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
+	defer cancel()
+
+	out, err := executor.GetExecutor().Helm(ctx, r.kubeconfig,
+		"upgrade", release,
 		"--namespace", namespace,
 		"--reuse-values",
 		"--wait",
 		"--timeout", "120s",
-	}
-	if r.kubeconfig != "" {
-		args = append(args, "--kubeconfig", r.kubeconfig)
-	}
-
-	out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
+	)
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, string(out))
 	}

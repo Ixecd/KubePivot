@@ -387,7 +387,7 @@ func TestNew_FreshMachineDefaults(t *testing.T) {
 
 func TestEtcdKey_Format(t *testing.T) {
 	key := EtcdKey("myapp", "production")
-	assert.Equal(t, "dtk/myapp/production/state", key)
+	assert.Equal(t, "kubepivot/myapp/production/state", key)
 }
 
 func TestEtcdKey_DifferentProjectsProduceDifferentKeys(t *testing.T) {
@@ -401,7 +401,7 @@ func TestEtcdKey_DifferentProjectsProduceDifferentKeys(t *testing.T) {
 
 func TestEtcdKey_ContainsAllParts(t *testing.T) {
 	key := EtcdKey("web3-blitz", "web3-blitz")
-	assert.True(t, strings.HasPrefix(key, "dtk/"))
+	assert.True(t, strings.HasPrefix(key, "kubepivot/"))
 	assert.True(t, strings.Contains(key, "web3-blitz"))
 	assert.True(t, strings.HasSuffix(key, "/state"))
 }
@@ -700,7 +700,7 @@ func TestLocalPath_DifferentProjects(t *testing.T) {
 
 func TestEtcdKeyFunc_Format(t *testing.T) {
 	key := etcdKey("myapp", "production")
-	assert.Equal(t, "dtk/myapp/production/state", key)
+	assert.Equal(t, "kubepivot/myapp/production/state", key)
 }
 
 // ── marshalRecord / unmarshalRecord ───────────────────────────────────────────

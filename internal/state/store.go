@@ -170,7 +170,7 @@ func NewAutoStore(etcdEndpoints string) Store {
 // ── 工具函数 ────────────────────────────────────────────────────────────────
 
 func etcdKey(project, namespace string) string {
-	return fmt.Sprintf("dtk/%s/%s/state", project, namespace)
+	return fmt.Sprintf("kubepivot/%s/%s/state", project, namespace)
 }
 
 func localPath(project, namespace string) (string, error) {

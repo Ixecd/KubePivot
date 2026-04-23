@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,20 +39,14 @@ func (r *Reconciler) loadResourceLabels(res *Resource) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	args := []string{
-		"kubectl", "get", strings.ToLower(res.Kind), res.Name,
+	out, err := executor.GetExecutor().Kubectl(ctx, r.kubeconfig,
+		"get", strings.ToLower(res.Kind), res.Name,
 		"--namespace", res.Namespace,
 		"-o", "json",
-	}
-	if r.kubeconfig != "" {
-		args = append(args, "--kubeconfig", r.kubeconfig)
-	}
-
-	// 🔥 修复：使用 CommandContext，防 hang
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-	out, err := cmd.CombinedOutput()
+	)
 	if err != nil {
-		slog.Debug("获取资源标签失败（非致命）", "kind", res.Kind, "name", res.Name, "err", err)
+		slog.Debug("获取资源标签失败（非致命）",
+			"kind", res.Kind, "name", res.Name, "err", err)
 		return false
 	}
 
@@ -87,13 +80,13 @@ func (r *Reconciler) healCustom(res Resource) error {
 
 	// 安全降级，无死循环
 	return r.checkAndHeal(Resource{
-		Kind:        res.Kind,
-		Name:        res.Name,
-		Namespace:   res.Namespace,
-		OnMissing:   res.Fallback,
-		Fallback:    "",
-		MaxRetry:    res.MaxRetry - 1,
-		Labels:      res.Labels,
+		Kind:      res.Kind,
+		Name:      res.Name,
+		Namespace: res.Namespace,
+		OnMissing: res.Fallback,
+		Fallback:  "",
+		MaxRetry:  res.MaxRetry - 1,
+		Labels:    res.Labels,
 	})
 }
 
@@ -286,37 +279,22 @@ func (r *Reconciler) healRollback(res Resource) error {
 // healScaleDown 缩容到 0（保留资源但停止服务）
 func (r *Reconciler) healScaleDown(res Resource) error {
 	slog.Info("执行 scale-down", "resource", res.Name, "namespace", res.Namespace)
-	args := []string{
-		"kubectl", "scale",
-		strings.ToLower(res.Kind) + "/" + res.Name,
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	out, err := executor.GetExecutor().Kubectl(ctx, r.kubeconfig,
+		"scale",
+		strings.ToLower(res.Kind)+"/"+res.Name,
 		"--namespace", res.Namespace,
 		"--replicas=0",
-	}
-	if r.kubeconfig != "" {
-		args = append(args, "--kubeconfig", r.kubeconfig)
-	}
-	out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
+	)
 	if err != nil {
 		return fmt.Errorf("healScaleDown 失败: %w\n%s", err, string(out))
 	}
 	slog.Info("✅ 已缩容到 0", "resource", res.Name)
 	return nil
 }
-
-// healCustom 执行自定义命令（resources.yaml 里的 fallback 字段）
-// func (r *Reconciler) healCustom(res Resource) error {
-// 	if res.Fallback == "" {
-// 		slog.Warn("custom 策略但 fallback 为空，跳过", "resource", res.Name)
-// 		return nil
-// 	}
-// 	slog.Info("执行自定义自愈", "command", res.Fallback, "resource", res.Name)
-// 	out, err := exec.Command("sh", "-c", res.Fallback).CombinedOutput()
-// 	if err != nil {
-// 		return fmt.Errorf("healCustom 失败: %w\n%s", err, string(out))
-// 	}
-// 	slog.Info("✅ 自定义自愈完成", "resource", res.Name)
-// 	return nil
-// }
 
 // ── OOMKilled 处理 ────────────────────────────────────────────────────────────
 
@@ -330,16 +308,17 @@ type podStatus struct {
 
 // getPodsForResource 获取 deployment 下所有 pod 的状态
 func getPodsForResource(kubeconfig, namespace, name string) ([]podStatus, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	args := []string{
-		"kubectl", "get", "pods",
+		"get", "pods",
 		"--namespace", namespace,
 		"-l", fmt.Sprintf("app=%s", name),
 		"-o", "json",
 	}
-	if kubeconfig != "" {
-		args = append(args, "--kubeconfig", kubeconfig)
-	}
-	out, err := exec.Command(args[0], args[1:]...).Output()
+
+	out, err := executor.GetExecutor().Kubectl(ctx, kubeconfig, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -414,16 +393,16 @@ func (r *Reconciler) handleOOMKilled(res Resource, pod podStatus) error {
 		`{"spec":{"template":{"spec":{"containers":[{"name":"%s","resources":{"limits":{"memory":"%s"}}}]}}}}`,
 		res.Name, newLimit,
 	)
-	args := []string{
-		"kubectl", "patch", "deployment", res.Name,
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	out, err := executor.GetExecutor().Kubectl(ctx, r.kubeconfig,
+		"patch", "deployment", res.Name,
 		"--namespace", res.Namespace,
 		"--type=merge",
 		fmt.Sprintf("--patch=%s", patch),
-	}
-	if r.kubeconfig != "" {
-		args = append(args, "--kubeconfig", r.kubeconfig)
-	}
-	out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
+	)
 	if err != nil {
 		return fmt.Errorf("调整 memory limit 失败: %w\n%s", err, string(out))
 	}
@@ -469,22 +448,19 @@ const (
 
 // analyzeCrashType 分析 CrashLoopBackOff 是启动错误还是运行时错误
 func analyzeCrashType(kubeconfig, namespace, podName string) crashType {
-	args := []string{
-		"kubectl", "logs", podName,
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	out, err := executor.GetExecutor().Kubectl(ctx, kubeconfig,
+		"logs", podName,
 		"--namespace", namespace,
 		"--previous",
 		"--tail=50",
-	}
-	if kubeconfig != "" {
-		args = append(args, "--kubeconfig", kubeconfig)
-	}
-	out, err := exec.Command(args[0], args[1:]...).Output()
+	)
 	if err != nil {
 		return crashUnknown
 	}
-	logs := strings.ToLower(string(out))
-
-	return classifyCrashLogs(logs)
+	return classifyCrashLogs(strings.ToLower(string(out)))
 }
 
 // handleCrashLoop CrashLoopBackOff 处理逻辑
@@ -512,11 +488,15 @@ func (r *Reconciler) handleCrashLoop(res Resource, pod podStatus, ct crashType) 
 // ── 辅助函数 ──────────────────────────────────────────────────────────────────
 
 func (r *Reconciler) syncStateRunning(reason string) {
-	if r.sm.State() != state.StateRunning {
-		if err := r.sm.Transition(state.StateRunning, reason); err != nil {
-			slog.Error("状态机同步失败", "err", err)
-		}
+	cur := r.sm.State()
+	if cur == state.StateRunning {
+		return // 已经是 RUNNING，无需转换
 	}
+
+	// Controller 的自愈只负责资源层，不强行推动状态机
+	// 状态机应该由 kp deploy 驱动，或由 controller 启动时从 etcd 恢复
+	slog.Debug("自愈成功，当前状态机状态非 RUNNING，不强行推动",
+		"current", cur, "reason", reason)
 }
 
 func isSSAConflict(errMsg string) bool {
@@ -595,12 +575,13 @@ func getLatestRevision(releaseName, namespace string) (int, error) {
 }
 
 func runHelmOutput(args ...string) ([]byte, error) {
-	return exec.Command("/usr/local/bin/helm", args...).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	return executor.GetExecutor().Helm(ctx, "", args...)
 }
 
 func runHelm(args ...string) error {
-	cmd := exec.Command("/usr/local/bin/helm", args...)
-	out, err := cmd.CombinedOutput()
+	out, err := runHelmOutput(args...)
 	if err != nil {
 		return fmt.Errorf("%w\n%s", err, string(out))
 	}
@@ -676,23 +657,25 @@ func (r *Reconciler) healCRDApply(res Resource) error {
 	slog.Info("CRD 资源缺失，尝试重新 apply",
 		"kind", res.Kind, "name", res.Name, "namespace", res.Namespace)
 
-	// 从 helm get manifest 提取该资源的 yaml
 	projectName := getenv("PROJECT_NAME", "")
 	releaseName := projectName + "-" + res.Name
 
-	args := []string{"helm", "get", "manifest", releaseName,
-		"--namespace", res.Namespace}
-	if r.kubeconfig != "" {
-		args = append(args, "--kubeconfig", r.kubeconfig)
-	}
-	out, err := runKubectl(args...)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	exec := executor.GetExecutor()
+
+	// helm get manifest
+	out, err := exec.Helm(ctx, r.kubeconfig,
+		"get", "manifest", releaseName,
+		"--namespace", res.Namespace,
+	)
 	if err != nil || len(out) == 0 {
 		slog.Warn("无法获取 helm manifest，跳过 CRD 自愈",
 			"release", releaseName, "err", err)
 		return nil
 	}
 
-	// 过滤出对应 kind 和 name 的资源块（简单字符串匹配）
 	manifest := string(out)
 	if !strings.Contains(manifest, "kind: "+res.Kind) {
 		slog.Warn("manifest 中未找到该 CRD，告警等待人工",
@@ -700,13 +683,11 @@ func (r *Reconciler) healCRDApply(res Resource) error {
 		return nil
 	}
 
-	// kubectl apply -f - 重新应用
-	applyArgs := []string{"kubectl", "apply", "-f", "-",
-		"--namespace", res.Namespace}
-	if r.kubeconfig != "" {
-		applyArgs = append(applyArgs, "--kubeconfig", r.kubeconfig)
-	}
-	cmd := exec.Command(applyArgs[0], applyArgs[1:]...)
+	// kubectl apply -f -（需要 stdin，用 CmdKubectl）
+	cmd := exec.CmdKubectl(ctx, r.kubeconfig,
+		"apply", "-f", "-",
+		"--namespace", res.Namespace,
+	)
 	cmd.Stdin = strings.NewReader(manifest)
 	applyOut, err := cmd.CombinedOutput()
 	if err != nil {

@@ -1,23 +1,25 @@
 package controller
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"strings"
+	"time"
 
+	"github.com/Ixecd/kubepivot/internal/executor"
 	"github.com/Ixecd/kubepivot/internal/state"
 	"gopkg.in/yaml.v3"
 )
 
 type Resource struct {
-	Kind      string `yaml:"kind"`
-	Name      string `yaml:"name"`
-	Namespace string `yaml:"namespace"`
-	OnMissing string `yaml:"on-missing"`
-	MaxRetry  int    `yaml:"max-retry"`
-	Fallback      string   `yaml:"fallback"`
+	Kind         string   `yaml:"kind"`
+	Name         string   `yaml:"name"`
+	Namespace    string   `yaml:"namespace"`
+	OnMissing    string   `yaml:"on-missing"`
+	MaxRetry     int      `yaml:"max-retry"`
+	Fallback     string   `yaml:"fallback"`
 	ForceSync    bool     `yaml:"force-sync"`
 	NoSyncFields []string `yaml:"no-sync-fields"`
 
@@ -80,16 +82,15 @@ func LoadResources(path string) (*ResourcesConfig, error) {
 
 // DetectResourceExists 用 kubectl CLI 检查单个资源是否存在
 func DetectResourceExists(kubeconfig, namespace, kind, name string) (bool, error) {
-	args := []string{"kubectl"}
-	if kubeconfig != "" {
-		args = append(args, "--kubeconfig", kubeconfig)
-	}
-	args = append(args,
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	args := []string{
 		"get", strings.ToLower(kind), name,
 		"--namespace", namespace,
 		"--ignore-not-found",
-	)
-	out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
+	}
+	out, err := executor.GetExecutor().Kubectl(ctx, kubeconfig, args...)
 	if err != nil {
 		return false, fmt.Errorf("kubectl get 失败: %w\n%s", err, out)
 	}

@@ -16,7 +16,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     -o kp ./cmd/kp
 
 # 🔥 先生钦点修复：HELM 跨架构下载 + 强校验
-RUN HELM_VERSION=$(curl -Ls https://api.github.com/repos/helm/helm/releases/latest | grep '"tag_name"' | cut -d'"' -f4) && \
+RUN HELM_VERSION="v3.17.1" && \
     ARCH=${TARGETARCH} && \
     curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCH}.tar.gz" -o helm.tgz && \
     tar -xzOf helm.tgz "linux-${ARCH}/helm" > /usr/local/bin/helm && \

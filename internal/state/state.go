@@ -161,7 +161,7 @@ func (m *Machine) ResumeFromValidating(reason string) error {
 
 // EtcdKey 返回 etcd 存储 key，供 controller 使用
 func EtcdKey(project, namespace string) string {
-	return fmt.Sprintf("dtk/%s/%s/state", project, namespace)
+	return fmt.Sprintf("kubepivot/%s/%s/state", project, namespace)
 }
 
 // ForceState 强制设置状态，跳过转换表检查

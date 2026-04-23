@@ -1,26 +1,48 @@
 package main
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
+	"time"
+
+	"github.com/Ixecd/kubepivot/internal/executor"
 )
 
-// runOutput 执行命令并返回 stdout
+// runOutput 兼容旧签名：第一个参数是 "kubectl" 或 "helm"，剥离后走 executor
 func runOutput(cmdArgs ...string) ([]byte, error) {
 	if len(cmdArgs) == 0 {
 		return nil, fmt.Errorf("命令不能为空")
 	}
-	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("命令执行失败 %v: %w\nstderr: %s",
-			cmdArgs, err, stderr.String())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	bin := cmdArgs[0]
+	rest := cmdArgs[1:]
+
+	// 剥离 --kubeconfig（由 executor 处理）
+	var kubeconfig string
+	var cleaned []string
+	for i := 0; i < len(rest); i++ {
+		if rest[i] == "--kubeconfig" && i+1 < len(rest) {
+			kubeconfig = rest[i+1]
+			i++
+			continue
+		}
+		cleaned = append(cleaned, rest[i])
 	}
-	return stdout.Bytes(), nil
+
+	exec := executor.GetExecutor()
+	switch bin {
+	case "kubectl":
+		return exec.Kubectl(ctx, kubeconfig, cleaned...)
+	case "helm":
+		return exec.Helm(ctx, kubeconfig, cleaned...)
+	default:
+		// 其他命令走 Generic（白名单外 fallback 到 bin 本身）
+		return exec.Generic(ctx, bin, kubeconfig, cleaned...)
+	}
 }
 
 // namespaceExists 检查 K8s namespace 是否已存在
@@ -41,7 +63,6 @@ func deleteNamespace(kubeconfig, kubeContext, namespace string) error {
 
 // helmRollback 执行 helm rollback，revision=0 表示回滚到上一个版本
 func helmRollback(kubeconfig, kubeContext, namespace, release string) error {
-	// 先查当前 revision
 	histArgs := []string{"helm", "history", release, "--namespace", namespace, "--output", "json"}
 	if kubeconfig != "" {
 		histArgs = append(histArgs, "--kubeconfig", kubeconfig)
@@ -83,6 +104,7 @@ func helmRollback(kubeconfig, kubeContext, namespace, release string) error {
 }
 
 // buildKubectlArgs 构建 kubectl 基础参数
+// 注意：返回数组不包含 "kubectl" 前缀，由 runOutput 根据第一个元素判断走哪个 executor
 func buildKubectlArgs(kubeconfig, kubeContext, namespace string) []string {
 	var args []string
 	if kubeconfig != "" {
@@ -98,8 +120,6 @@ func buildKubectlArgs(kubeconfig, kubeContext, namespace string) []string {
 }
 
 // helmReleaseExists 检查 helm release 是否已有历史版本
-// 比 namespaceExists 更准确：helm --create-namespace 会自动建 namespace，
-// 导致首次部署失败后 namespaceExists 返回 true，误判为更新。
 func helmReleaseExists(kubeconfig, kubeContext, namespace, release string) bool {
 	args := []string{"helm", "history", release, "--namespace", namespace, "--max", "1"}
 	if kubeconfig != "" {
