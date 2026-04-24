@@ -109,10 +109,11 @@ func main() {
 		runSandbox(os.Args[2:])
 	case "controller":
 		if len(os.Args) > 2 && os.Args[2] == "start" {
-			controller.Start()
+			// pod 内部运行：启动 Reconciliation Loop
+			controller.Start(os.Args[3:]...) // 跳过 "kp controller start"，剩下的传给 Start
 		} else {
-			fmt.Fprintln(os.Stderr, "用法: kp controller start")
-			os.Exit(1)
+			// CLI 管理命令：install / uninstall / status / enroll / projects
+			runController(os.Args[2:])
 		}
 	default:
 		// 未知命令 → 尝试作为插件执行
@@ -184,7 +185,11 @@ func printUsage() {
   kp compat   check [--base] [--revision] [--output-json]  检测 API 破坏性变更
   kp migrate  run   [--dry-run] [--full-sql] [--target N]   执行数据库迁移
   kp pvc      backup/restore/list --service <name>   PVC 快照备份和恢复（需要 CSI） 
-  kp controller start   （在 controller pod 内部运行，启动 Reconciliation Loop）
+  kp controller install    安装全局 KubePivot Controller 到集群（kubepivot-system）
+  kp controller status     查看 controller 状态 + 被管理的项目数量
+  kp controller enroll     当前项目接入全局 controller（在项目根目录运行）
+  kp controller uninstall  卸载 controller（危险操作，会清理整个 kubepivot-system）
+  kp controller start      （pod 内部使用）启动 Reconciliation Loop
 
 示例:
   kp init --name demo-svc --module github.com/you/demo-svc

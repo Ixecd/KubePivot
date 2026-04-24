@@ -483,6 +483,13 @@ validating:
 	}
 
 	P.Info("✅", fmt.Sprintf("部署完成，状态: RUNNING (version=%s)", version))
+	
+	// Phase 2.6: 如果项目已 enroll 到 global controller，顺带同步 resources.yaml
+	// 降级不阻断：失败只 warn，不影响部署结果
+	if err := autoSyncResourcesIfEnrolled(cfg); err != nil {
+		P.Info("⚠️ ", fmt.Sprintf("resources.yaml 同步跳过: %v", err))
+	}
+
 	return nil
 }
 
@@ -712,3 +719,53 @@ func ensureSecret(cfg *deployConfig, env map[string]string, projectName string) 
 	P.Done(fmt.Sprintf("✅ %s 已自动创建（dev 模式，生产环境请运行 ./scripts/create-secret.sh）", secretName))
 	return nil
 }
+
+// autoSyncResourcesIfEnrolled 在 kp deploy 成功后，如果当前 namespace 已 enroll
+// 到全局 controller（label=kubepivot.io/managed=true），则自动把 configs/resources.yaml
+// 同步到 ConfigMap kubepivot-resources。
+//
+// 设计：
+//   - 降级不阻断：namespace 未 enroll / resources.yaml 不存在 / 同步失败都返回 err，
+//     调用方只打 warn，不影响部署状态
+//   - 幂等：sha256 由 controller watcher 在接收侧比对，这里直接 apply
+//   - 静默：未 enroll 时返回 nil，不打 log 噪音
+func autoSyncResourcesIfEnrolled(cfg *deployConfig) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	exec := executor.GetExecutor()
+
+	// 1. 检查 namespace 是否有 managed=true label
+	out, err := exec.Kubectl(ctx, cfg.kubeconfig,
+		"get", "namespace", cfg.namespace,
+		"-o", "jsonpath={.metadata.labels.kubepivot\\.io/managed}",
+	)
+	if err != nil {
+		return nil // 静默：读 namespace 失败就不管（可能权限不够）
+	}
+	if strings.TrimSpace(string(out)) != "true" {
+		return nil // 未 enroll，静默跳过
+	}
+
+	// 2. 找 resources.yaml
+	root, err := projectRoot()
+	if err != nil {
+		return fmt.Errorf("找项目根目录: %w", err)
+	}
+	resourcesPath := filepath.Join(root, "configs", "resources.yaml")
+	data, err := os.ReadFile(resourcesPath)
+	if err != nil {
+		return fmt.Errorf("读取 %s: %w", resourcesPath, err)
+	}
+
+	// 3. 同步到 ConfigMap
+	hash := sha256Hex(data)
+	if err := syncResourcesConfigMap(ctx, cfg.kubeconfig, cfg.context,
+		cfg.namespace, string(data), hash); err != nil {
+		return fmt.Errorf("sync ConfigMap: %w", err)
+	}
+
+	P.Info("🔄", fmt.Sprintf("resources.yaml 已同步到 controller（sha256=%s...）", hash[:8]))
+	return nil
+}
+

@@ -133,6 +133,7 @@ func newRunningMachine(t *testing.T) *state.Machine {
 func newTestReconciler(sm *state.Machine, detector Detector, helm HelmClient) *Reconciler {
 	return &Reconciler{
 		sm:        sm,
+		project:   "myapp",
 		resources: &ResourcesConfig{},
 		detector:  detector,
 		helm:      helm,

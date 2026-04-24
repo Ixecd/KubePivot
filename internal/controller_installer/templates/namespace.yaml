@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kubepivot-system
+  labels:
+    kubepivot.io/system: "true"
+    # 保护：这个 namespace 本身在 controller 黑名单里，永不被自己 reconcile
+    app.kubernetes.io/name: kubepivot-system
+    app.kubernetes.io/managed-by: kp

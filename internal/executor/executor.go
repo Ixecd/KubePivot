@@ -48,6 +48,17 @@ func GetExecutor() *KpExecutor {
 	return _global
 }
 
+// KubectlPath 返回 kubectl 二进制的绝对路径
+// 用于 Watcher 等场景下直接构造 exec.CommandContext
+func (e *KpExecutor) KubectlPath() string {
+	return e.kubectl
+}
+
+// HelmPath 返回 helm 二进制的绝对路径
+func (e *KpExecutor) HelmPath() string {
+	return e.helm
+}
+
 func (e *KpExecutor) Sh(ctx context.Context, cmd string) ([]byte, error) {
 	return e.Generic(ctx, "sh", "", "-c", cmd)
 }

@@ -54,4 +54,4 @@ COPY --from=builder   /usr/local/bin/helm    /usr/local/bin/helm
 
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/kp"]
-CMD ["controller", "start"]
+CMD ["controller", "start", "--global"]

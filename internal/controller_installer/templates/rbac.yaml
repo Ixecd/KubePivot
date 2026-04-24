@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubepivot-controller
+  namespace: kubepivot-system
+  labels:
+    app.kubernetes.io/name: kubepivot-controller
+    app.kubernetes.io/managed-by: kp
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubepivot-controller
+  labels:
+    app.kubernetes.io/name: kubepivot-controller
+    app.kubernetes.io/managed-by: kp
+rules:
+  # Deployment/StatefulSet 全权（cross-namespace）
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "replicasets", "daemonsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Pod/Service/PVC/ConfigMap/Endpoints 全权
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "services", "endpoints", "persistentvolumeclaims", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Namespace 发现（watch managed label）
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+
+  # Secret 完整 CRUD（helm release state）
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Leader Election（lease）
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # 事件记录
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+
+  # HPA / NetworkPolicy / Ingress（helm upgrade 涉及）
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies", "ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # ServiceAccount/Role/RoleBinding
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # CRD 只读（healCRDApply）
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubepivot-controller
+  labels:
+    app.kubernetes.io/name: kubepivot-controller
+    app.kubernetes.io/managed-by: kp
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubepivot-controller
+subjects:
+  - kind: ServiceAccount
+    name: kubepivot-controller
+    namespace: kubepivot-system

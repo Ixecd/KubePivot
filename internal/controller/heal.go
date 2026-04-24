@@ -180,7 +180,7 @@ func (r *Reconciler) healRecreate(res Resource) error {
 		return r.healCRDApply(res)
 	}
 
-	releaseName := getenv("PROJECT_NAME", "") + "-" + res.Name
+	releaseName := r.project + "-" + res.Name
 
 	history, err := r.helm.History(releaseName, res.Namespace)
 	if err != nil || len(history) == 0 {
@@ -229,7 +229,7 @@ func (r *Reconciler) healRollback(res Resource) error {
 		releaseName = res.Labels["app.kubernetes.io/name"]
 	}
 	if releaseName == "" {
-		releaseName = getenv("PROJECT_NAME", "") + "-" + res.Name
+		releaseName = r.project + "-" + res.Name
 	}
 
 	// 查询 Helm 历史
@@ -660,7 +660,7 @@ func (r *Reconciler) healCRDApply(res Resource) error {
 	slog.Info("CRD 资源缺失，尝试重新 apply",
 		"kind", res.Kind, "name", res.Name, "namespace", res.Namespace)
 
-	projectName := getenv("PROJECT_NAME", "")
+	projectName := r.project
 	releaseName := projectName + "-" + res.Name
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

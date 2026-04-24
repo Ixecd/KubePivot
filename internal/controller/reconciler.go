@@ -13,6 +13,7 @@ import (
 type Reconciler struct {
 	sm         *state.Machine
 	kubeconfig string
+	project    string
 	resources  *ResourcesConfig
 	detector   Detector
 	helm       HelmClient
@@ -28,6 +29,7 @@ func NewReconciler(sm *state.Machine, kubeconfig string) *Reconciler {
 	return &Reconciler{
 		sm:         sm,
 		kubeconfig: kubeconfig,
+		project:    getenv("PROJECT_NAME", ""),
 		resources:  resources,
 		detector:   NewKubectlDetector(kubeconfig),
 		helm:       &RealHelmClient{},

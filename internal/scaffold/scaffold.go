@@ -279,11 +279,11 @@ ETCD_ENDPOINTS=
 	fmt.Fprintf(opts.Stdout, "  make tools   # 安装所有工具\n")
 	fmt.Fprintf(opts.Stdout, "  make build   # 编译\n")
 	fmt.Fprintf(opts.Stdout, "  make test    # 测试\n")
-	fmt.Fprintf(opts.Stdout, "\n⚠️  上线前请检查：\n")
-	fmt.Fprintf(opts.Stdout, "  deployments/%s/templates/controller-rbac.yaml\n", kebabName)
-	fmt.Fprintf(opts.Stdout, "  → 当前为全量权限，请按实际需要收紧 ClusterRole rules\n")
-	fmt.Fprintf(opts.Stdout, "  deployments/%s/templates/controller-deployment.yaml\n", kebabName)
-	fmt.Fprintf(opts.Stdout, "  → 替换 controller.image.repository 为你构建的镜像\n")
+	fmt.Fprintf(opts.Stdout, "\n🔱 接入 KubePivot Controller（自愈 / 漂移治理）：\n")
+	fmt.Fprintf(opts.Stdout, "  1. 集群级安装（一次性）: kp controller install\n")
+	fmt.Fprintf(opts.Stdout, "  2. 项目接入: kp controller enroll\n")
+	fmt.Fprintf(opts.Stdout, "  3. 查看状态: kp controller status\n")
+	fmt.Fprintf(opts.Stdout, "  按需编辑 configs/resources.yaml 声明要保护的资源\n")
 
 	if opts.WithFrontend {
 		if err := writeFrontendSkeleton(outputDir, name); err != nil {
