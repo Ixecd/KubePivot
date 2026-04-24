@@ -357,3 +357,33 @@ kp deploy --parallelism 4   # P99 > 500ms 时推荐
 kp deploy --parallelism 2   # P99 > 1s 时推荐
 kp deploy --parallelism 1   # P99 > 2s 时推荐
 ```
+
+
+---
+
+## 部署后：自动同步到 Controller（v2.3.0+）
+
+如果当前项目已通过 `kp controller enroll` 接入全局 Controller，
+`kp deploy` 成功后会**自动把 `configs/resources.yaml` 同步到集群里的 ConfigMap**，
+Controller 秒级热加载新配置。
+
+这个机制消除了"改了 resources.yaml 忘记推送给 Controller"的低级错误。
+
+### 行为规则
+
+- 检查当前 namespace 是否有 `kubepivot.io/managed=true` label
+- 有 → 读本地 `configs/resources.yaml` → 写 ConfigMap `kubepivot-resources`（含 sha256 annotation）
+- 没有 → 静默跳过（未接入 Controller 的项目不受影响）
+
+### 降级不阻断
+
+同步失败只 warn，不影响部署成功状态。比如你有 `kp deploy` 的权限但没有
+`configmaps write` 的权限，部署依然会成功，只是同步步骤提示失败。
+
+### 看到这样的日志说明同步成功
+
+```
+🔄 resources.yaml 已同步到 controller（sha256=ec7753b4...）
+```
+
+完整 Controller 使用见 [controller.md](controller.md)。

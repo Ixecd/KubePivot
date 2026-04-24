@@ -276,3 +276,29 @@ LOG_FORMAT=json kp deploy    # 结构化日志（接入 ELK/Loki）
 **helm upgrade 报 pending-rollback**：参考 [常见问题](gotchas.md)。
 
 更多问题参考 [常见问题](gotchas.md)。
+
+
+---
+
+## 第 N 步（可选）：接入全局 Controller 获得自动自愈
+
+> v2.3.0 新功能。部署完业务之后，可选择接入集群全局 Controller，
+> 让服务在资源意外缺失时（比如有人误删 Deployment）自动恢复。
+
+```bash
+# 1. 集群级一次性安装（一辈子只跑一次）
+kp controller install
+
+# 2. 当前项目接入
+kp controller enroll
+
+# 3. 验证
+kp controller status
+```
+
+Controller 会监听本项目 `configs/resources.yaml` 声明的资源，缺失了自动 `helm rollback` 恢复。
+
+以后修改 `resources.yaml` 推送 `kp deploy` 时会自动同步，无需手工做额外操作。
+
+完整使用见 [controller.md](controller.md)。
+

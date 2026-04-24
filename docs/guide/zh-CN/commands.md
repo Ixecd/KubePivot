@@ -1,6 +1,6 @@
 # KubePivot 命令参考
 
-> 版本：v2.0.0
+> 版本：v2.3.0
 > CLI 二进制：`kp`
 > 模块：`github.com/Ixecd/kubepivot`
 
@@ -718,6 +718,98 @@ kp controller [flags]
 
 ---
 
+## kp controller — 全局 Controller 管理（v2.3.0+）
+
+v2.3.0 引入全局单一 Controller，为所有项目提供集中式自愈。一次性集群级安装，
+项目通过 `kubepivot.io/managed=true` label 接入。
+
+详细使用指南：[controller.md](controller.md)
+
+### kp controller install
+
+集群级一次性安装 Controller 到 `kubepivot-system` namespace。
+
+```bash
+kp controller install [flags]
+```
+
+| Flag | 说明 | 默认 |
+|------|------|------|
+| `--namespace` | 部署 namespace | `kubepivot-system` |
+| `--image` | Controller 镜像 | `qingchun22/kubepivot-controller:<kpVersion>` |
+| `--wait` | 等待 Deployment ready | true |
+| `--wait-timeout` | 等待超时 | 120s |
+| `--kubeconfig` | kubeconfig 路径 | 空 |
+| `--context` | kube context | 空 |
+
+### kp controller enroll
+
+在项目根目录运行，接入当前项目到全局 Controller。
+
+```bash
+cd myproject
+kp controller enroll [flags]
+```
+
+| Flag | 说明 | 默认 |
+|------|------|------|
+| `--namespace` | 项目 namespace | 读 `configs/project.env` 的 `KUBE_NAMESPACE` |
+| `--resources` | resources.yaml 路径 | `configs/resources.yaml` |
+| `--kubeconfig` | kubeconfig 路径 | 空 |
+| `--context` | kube context | 空 |
+
+执行三件事：
+1. `kubectl label ns <n> kubepivot.io/managed=true --overwrite`
+2. 读 `configs/resources.yaml`
+3. 写 ConfigMap `kubepivot-resources`（带 sha256 annotation）
+
+### kp controller unenroll
+
+解除当前项目的接入，**不会删除项目资源**。
+
+```bash
+kp controller unenroll [--namespace <ns>]
+```
+
+### kp controller status
+
+查看 Controller 全局状态。
+
+```bash
+kp controller status
+```
+
+输出示例：
+
+```
+🔱 KubePivot Controller 状态
+
+  ✓ 已安装
+  Namespace:           kubepivot-system
+  Deployment Ready:    3/3
+  Managed Projects:    1 个
+```
+
+### kp controller projects
+
+列出所有被管理的项目 + 各自 `resources.yaml` 的 sha256。
+
+```bash
+kp controller projects
+```
+
+### kp controller uninstall
+
+卸载全局 Controller（删除 `kubepivot-system` namespace + ClusterRole/Binding）。
+
+```bash
+kp controller uninstall [--force]
+```
+
+⚠️ 不会动被管理项目的 namespace label，彻底清理需要每个项目跑 `kp controller unenroll`。
+
+---
+
 ## 命令速查表
 
 | 命令 | 说明 |
@@ -754,4 +846,10 @@ kp controller [flags]
 | `kp release` | 发布版本 |
 | `kp version` | 查看版本 |
 | `kp update` | 自动更新 |
+| `kp controller install` | 集群级安装全局 Controller |
+| `kp controller enroll` | 当前项目接入 Controller |
+| `kp controller unenroll` | 解除当前项目接入 |
+| `kp controller status` | Controller 状态 |
+| `kp controller projects` | 列出管理的项目 |
+| `kp controller uninstall` | 卸载 Controller |
 | `kp plugin install` | 安装插件 |
