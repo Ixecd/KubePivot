@@ -602,8 +602,11 @@ func (h *RealHelmClient) History(release, namespace string) ([]HelmRelease, erro
 
 func (h *RealHelmClient) Rollback(release, namespace string, revision int) error {
 	// 👇 豆包小姐专属代码 ✍️
+	// --history-max=10: 限制 revision 历史，防止自愈累积导致 helm release secret 撑爆
 	return runHelm("rollback", release, fmt.Sprintf("%d", revision),
-		"--namespace", namespace, "--wait", "--timeout=60s",
+		"--namespace", namespace,
+		"--wait", "--timeout=60s",
+		"--history-max", "10",
 	)
 }
 

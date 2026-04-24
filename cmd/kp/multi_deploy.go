@@ -338,6 +338,7 @@ func buildHelmArgs(cfg *deployConfig, release, chartPath string, env map[string]
 		"--wait",
 		"--force-conflicts",
 		"--timeout", "120s",
+		"--history-max", "10",   // ← 加这行，防 revision 堆积
 	}
 	if cfg.kubeconfig != "" {
 		args = append(args, "--kubeconfig", cfg.kubeconfig)

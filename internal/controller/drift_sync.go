@@ -142,6 +142,7 @@ func (r *Reconciler) forceSync(namespace string, res Resource) error {
 		"--reuse-values",
 		"--wait",
 		"--timeout", "120s",
+		"--history-max", "10",
 	)
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, string(out))
