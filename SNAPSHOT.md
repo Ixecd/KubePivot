@@ -1,20 +1,21 @@
 # KubePivot 当前快照
 
-> 版本：v2.2.0
-> 日期：2026-04-23
-> 状态：✅ 全绿，真实集群自愈闭环通过
+> 版本：v2.3.0
+> 日期：2026-04-24
+> 状态：✅ 全绿，真实集群自愈闭环（global 架构）通过
 
 ---
 
 ## 快速状态
 
 ```
-go test ./... -race  → 全绿（239+ 个测试）
+go test ./... -race  → 全绿（v2.3.0 新增 22 个测试）
 make dev             → build + test + install 一键完成
-当前版本             → v2.2.0
+当前版本             → v2.3.0
 companion            → github.com/Ixecd/web3-blitz
                        github.com/Ixecd/Feelings-Server
-自愈验证             → 2026-04-23 真实集群端到端 <10 秒闭环
+自愈验证             → 2026-04-24 真实集群 global 架构 ~12 秒闭环
+controller 镜像      → qingchun22/kubepivot-controller:v2.3.0（arm64 + amd64）
 ```
 
 ---
@@ -30,144 +31,140 @@ v1.8.0              Operation Sandbox + Header Preview + Warmup
 v1.9.0              多集群联邦 + 企业合规（audit + OPA + Vault）
 v2.0.0  #329 🏆     插件平台 + Chaos + GitOps Manifesto
 v2.1.0              脚手架适配性 + 扩展性 + GitOps 愿景落地
-v2.2.0  🔱          真实集群自愈闭环 + scratch 容器化全量改造
+v2.2.0  #365 🔱     真实集群自愈闭环 + scratch 容器化全量改造
+v2.3.0  #367 🌐     全局单一 HA Controller 架构级跃迁
 ```
 
 ---
 
-## v2.2.0 核心成就
+## v2.3.0 核心成就
 
-### 1. 真实集群自愈闭环第一次跑通
-
-```
-2026-04-23 15:43:44  kubectl delete deployment feelings-server
-2026-04-23 15:43:44  controller 检测缺失 → auto-heal
-2026-04-23 15:43:44  helm rollback revision=4
-2026-04-23 15:43:51  Deployment 恢复 Running
-
-耗时 <10 秒，零告警，零人工介入，日志零 ERROR
-```
-
-这是从 v1.0.0 到今天第一次证明整条设计链路成立：状态机 + Sandbox + Drift 治理 + Reconciliation Controller + 自愈。
-
-### 2. KpExecutor 统一子进程执行层
-
-`internal/executor/executor.go` 新增模块：
-
-- 单例 + 信号量限流（sem=5，防 fork bomb OOM）
-- `resolveBin()` 自动识别 scratch 容器 / 本机开发环境路径
-- `Kubectl / Helm / Generic / CmdKubectl` 四接口
-- kubeconfig 自动注入，调用方零感知
-
-### 3. 全量去裸 exec.Command
-
-scratch 容器里所有 `exec.Command("kubectl", ...)` 都会失败（无 PATH 查找机制）。v2.2.0 全量替换：
+### 1. 架构换血：per-project → cluster-scoped
 
 ```
-必改（controller 运行在 scratch 容器）：
-  internal/controller/heal.go / drift_sync.go / resources.go / sandbox_gc.go
-  cmd/kp/deploy.go ensureSecret / cmd/kp/runner.go runOutput
-
-不改（本机 CLI，PATH 必然有）：
-  cmd/kp/version.go / doctor*.go / plugin.go / policy.go / secret.go
+v2.2.0：每项目 3 副本 controller        10 项目 = 30 pod
+v2.3.0：集群唯一 3 副本 controller       10 项目 =  3 pod
+                                         省 27 pod
 ```
 
-### 4. etcd key 统一：dtk/ → kubepivot/
+Controller 部署到 `kubepivot-system` namespace，一次性安装（`kp controller install`），
+所有项目通过 `kp controller enroll` 接入。
 
-KubePivot 最早叫 dev-toolkit，v1.4.0 改名后 etcd 路径一直是遗留。v2.2.0 直接破坏性升级（用户数 0，成本最低）。
-
-### 5. RBAC 权限补全
-
-核心修复：**secrets 完整 CRUD**（helm v3 release state 存在 Secret 里，rollback 需完整权限）。
-
-补全内容：deployments/statefulsets/services/configmaps/namespaces/networking/RBAC 全部 CRUD。
-
-### 6. Dockerfile 升级
+### 2. 双层接入协议
 
 ```
-Go 1.25.x → 1.26        消除 stdlib HIGH CVE
-helm 硬编码 v3.17.1      避免 GitHub API 限流 404
-kubectl 动态获取          dl.k8s.io/stable.txt 稳定
-scratch runtime          零 OS 漏洞
-多架构 manifest list     amd64 + arm64，tag 不带架构后缀
-upx 只压 kp              kubectl/helm 不压（避免解压 OOM）
+内核层：kubectl label ns <n> kubepivot.io/managed=true
+交互层：kp controller enroll
+分发：   ConfigMap kubepivot-resources（含 sha256 annotation）
+热加载：sha256 变化触发 reconcile，内容未变静默跳过
 ```
 
-### 7. syncStateRunning 尊重状态机契约
+### 3. 关键哲学决策：不引入 client-go
 
-controller 自愈成功**不再**强行推 IDLE → RUNNING。状态机应该由 kp deploy 驱动，controller 只管资源层。消除 ERROR 日志噪音。
+保持 KubePivot "只用 CLI 不吃 K8s SDK" 的架构纯粹性。自己实现的 Watcher 层：
 
----
+- `exec.CommandContext` 绑进程生命周期
+- `json.NewDecoder` 流式解析 `kubectl --watch --output-watch-events=true`
+- 30s 无事件心跳守卫 + 指数退避重连（1s → 30s 封顶）
+- `Watcher` 接口抽象，未来规模上来可平替 client-go
 
-## 当前测试覆盖
+### 4. 真实集群端到端验证
 
 ```
-cmd/kp：      70+ 个测试
-controller：  46+ 个测试
-state：       58+ 个测试
-planner：     32  个测试
-scaffold：    30  个测试
-test/：        3  个测试
-─────────────────────────
-总计：        239+ 个测试，全部 -race 通过
+场景：删除 feelings-server Deployment，观察自愈
+
+09:14:06  资源缺失，启动自愈    kind=Deployment name=feelings-server
+09:14:06  执行 helm rollback   release=feelings-server-feelings-server revision=8
+09:14:18  ✅ 自愈成功（recreate）
+pod 恢复   feelings-server-64df876dc7-8m59c  Running  22s
+
+自愈延迟 ~12 秒（kubectl watch 感知 + 任务入队 + worker 消费 +
+helm rollback + Deployment rollout 就绪）
+```
+
+### 5. 三道 namespace 黑名单护栏
+
+即使用户误给 `kube-system` 打上 `managed=true` label，controller 在三处代码层面物理拒绝：
+
+```
+1. Worker Pool Enqueue 入队前       worker_pool.go
+2. handleTask 执行前（二次）         global.go
+3. GlobalState UpsertProject 前     global_state.go
 ```
 
 ---
 
-## kp init 端到端验证
+## 架构图
 
-```bash
-go install github.com/Ixecd/kubepivot/cmd/kp@latest
-kp init --name myapp --module github.com/me/myapp
-cd myapp
-make build   ✅  只编译业务服务
-make test    ✅  全包通过
-make gen     ✅  错误码文档自动生成
-kp deploy    ✅  自动创建 Secret + RUNNING
-              ✅  kubepivot-controller 三副本 Leader Election
-              ✅  RBAC secrets CRUD 权限就位
-              ✅  真实自愈可触发
+```
+kubepivot-system ns
+  └── kubepivot-controller（3 副本 HA）
+      ├── Leader Election（/kubepivot/global/leader）
+      └── 成为 Leader 后：
+          ├── Namespace Watcher     （label=kubepivot.io/managed=true）
+          ├── ConfigMap Watcher     （all-ns, name=kubepivot-resources）
+          ├── Reconcile Loop        （8s 周期，扫所有 managed 项目）
+          └── Worker Pool           （20 goroutine，固定大小）
+
+每项目 ns：
+  label:                      kubepivot.io/managed=true
+  ConfigMap kubepivot-resources：
+    labels:       kubepivot.io/managed: "true"
+    annotations:  kubepivot.io/sha256: <hex>
+    data.resources.yaml:      用户声明的监控资源清单
 ```
 
 ---
 
-## 架构一页纸
+## 新命令家族
 
 ```
-kp CLI（26+ 子命令）
-  ├── 脚手架：kp init（含合规基线 + 错误码 + GitOps hooks）
-  ├── kp sync（框架升级，不动业务代码）
-  ├── 部署引擎：OPA → 迁移兼容 → CVE → AI规划 → DAG → 并行部署
-  │            自动创建 dev Secret
-  ├── 状态机：13 状态，etcd/本地持久化，key: kubepivot/<p>/<ns>/state
-  ├── A2 Controller：Leader Election + WorkQueue + Reconcile/Drift/GC 三 Loop
-  │                  scratch 容器，kp + kubectl + helm 三二进制
-  │                  ⭐ v2.2.0 真实集群自愈通过
-  ├── Operation Sandbox：LOCKED → SNAPSHOTTING → SIMULATING → COMMITTING → RUNNING
-  ├── 企业工具链：audit + OPA + Vault + 多集群 + chaos
-  └── 插件市场：~/.kp/plugins/，未知命令自动转发
-
-统一子进程层：
-  internal/executor/
-    ├── 单例 + sem=5 限流
-    ├── scratch/本机路径自动解析
-    └── kubectl / helm / generic / CmdKubectl
-
-核心原则：只保护不越权 / 降级不阻断 / 确定性优先
+kp controller install       集群级一次性安装
+kp controller uninstall     卸载
+kp controller status        查看状态 + 管理项目数
+kp controller projects      列出所有被管理的项目
+kp controller enroll        当前项目接入
+kp controller unenroll      解除接入
+kp controller start [--global]   pod 内部使用
 ```
 
 ---
 
-## 技术债（诚实）
+## 单元测试覆盖
+
+v2.3.0 新增 22 个测试：
 
 ```
-P0  controller 启动从 etcd 恢复状态机（根治 IDLE → RUNNING）→ v2.3.0
-P0  全局单一 HA controller（cluster-scoped）→ v2.3.0
-P0  helm --history-max 限制 revision 堆积 → v2.3.0
-P1  rbac.yaml 迁移到 embedded template file → v2.3.0
-P1  Dockerfile 多架构 GitHub API 容错 → v2.3.0
-P1  helm v4 --field-manager：当前用 --force-conflicts 替代
-P2  SIMULATING Job / PVC 快照 / Istio weight / Prometheus：待对应环境
-P2  web3-blitz 蓝绿 release 名解析（-blue/-green 后缀）
-P3  Vault SDK / kp sync 真实用户验证 / kp init --type minimal/full
+namespace_blacklist_test.go     2  （黑名单 + 环境变量扩展）
+worker_pool_test.go             5  （分发 / 黑名单拒绝 / panic 恢复 / 环境变量 / 降级）
+watcher_test.go                 4  （WatchEvent.Meta + buildArgs 三种 namespace 场景）
+global_state_test.go           11  （upsert / sha256 dedup / remove / protected ns / 坏 YAML /
+                                     list / copy-on-read / 并发 race / fingerprint 2 个）
 ```
+
+全部绿色通过，`make dev` 一键完成。
+
+---
+
+## 从 v2.2.0 迁移
+
+```
+1. helm uninstall <project>-kubepivot-controller     # 卸老 controller
+2. kp controller install                              # 装全局 controller
+3. cd <project> && kp controller enroll               # 接入项目
+4. 后续 kp deploy 自动同步 resources.yaml
+```
+
+`kp init` 生成的新项目骨架默认不再包含 per-project controller chart。
+
+---
+
+## 下一步
+
+v2.3.0 剩余问题写入 v2.4.0 TODO：
+
+- Leader Election 无 etcd 时的降级策略（当前 3 pod 都当 leader，冗余但不致命）
+- Controller 启动从 etcd 恢复状态机（global 模式语义待重设计）
+- Dockerfile 多架构 GitHub API 限流容错
+- web3-blitz 蓝绿 release 名解析
+- rbac.yaml 从字符串拼接重构为 embedded template file

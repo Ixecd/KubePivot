@@ -2,197 +2,157 @@
 
 > 企业级 Kubernetes 研发脚手架 + 部署运维工具链
 > 乾为天、为尊，枢为核心枢纽
-> 当前：v2.2.0 ✅ 真实集群自愈闭环通过
+> 当前：v2.3.0 ✅ 全局单一 HA Controller 架构级跃迁
 
 ---
 
-## 🔴 v2.3.0 — 架构级跃迁
+## 🔴 v2.4.0 — 稳固 global controller
 
-> 这一版不是补丁，是架构调整。资源模型从"每项目独立"重构为"集群唯一"。
+> v2.3.0 打通了架构换血，v2.4.0 的任务是把残留的边缘问题全部抹平。
+> 没有大动作，只有把事情做到位的地方。
 
-### P0 — Controller 全局单一 HA（核心）
+### P0 — Leader Election 无 etcd 降级策略
 
-**现状**：每个项目都部署自己的 controller（namespace-scoped），3 副本。多项目场景严重浪费。
+**现状**：global.go 里 `runGlobalLeaderElection` 当 `ETCD_ENDPOINTS=""` 时降级为单机模式，
+但 deployment 是 3 副本，三个 pod 各自调用 `runAsLeader`，都自称 Leader。冗余但不致命。
 
-**目标**：集群单一 controller（cluster-scoped），所有项目共享。
+- [ ] 无 etcd 时改为：3 副本启动后通过 K8s Lease API 做 leader 选举
+      （K8s 原生，不用 etcd，走 kubectl 而非 client-go）
+- [ ] 或者：检测到无 etcd 直接副本数缩为 1（operator-style）
+- [ ] 真实集群验证有 etcd 场景下 `/kubepivot/global/leader` 争抢逻辑
 
-- [ ] ClusterRole 升级（cross-namespace list/watch 所有资源）
-- [ ] controller 新部署位置：`kubepivot-system` namespace
-- [ ] 项目接入方式：通过 annotation 或 label 自声明
-  - `kubepivot.io/managed=true`（全局开关）
-  - `kubepivot.io/project=<name>`（项目维度）
-  - `kubepivot.io/reconcile=enabled`（per-resource 细粒度开关）
-- [ ] Label/annotation selector watch（替代现有的 resources.yaml 配置）
-- [ ] Leader Election 从 namespace 级升到 cluster 级
-- [ ] 状态机 key 从 `kubepivot/<project>/<ns>/state` 改为更通用格式
-- [ ] `kp init` 默认不再在项目里部署 controller（除非 `--standalone-controller`）
-- [ ] 迁移指南：v2.2.0 → v2.3.0 如何从 per-project 迁到 global
+### P0 — Controller 启动从 etcd 恢复状态机
 
-**收益估算**：
-```
-3 个项目场景：
-  v2.2.0：3 × 3 = 9 个 controller pod
-  v2.3.0：      3     个 controller pod
-  节省：6 个 pod（~2GB 内存）
-  
-10 个项目场景：
-  v2.2.0：30 个 pod（~10GB 内存）
-  v2.3.0：3 个 pod（~1GB 内存）
-  节省：27 个 pod，~9GB
-```
+**现状**：v2.2.0 残留问题，global 模式下状态机（IDLE → RUNNING）的 per-project 语义需重新设计。
+当前 handleTask 每次都 `state.New` 新建状态机，没利用 etcd 里的历史状态。
 
-### P0 — Controller 启动状态恢复
+- [ ] 设计 global 模式下状态机 key 结构（当前：`kubepivot/<project>/<ns>/state`）
+- [ ] Controller 启动时从 etcd 恢复所有 managed 项目的状态机
+- [ ] handleTask 复用已恢复的状态机实例，而不是每次新建
 
-**现状**：controller 启动时状态机默认 IDLE，不知道上次 kp deploy 完成到哪个阶段。自愈成功后尝试 IDLE → RUNNING 触发状态机转换错误。
+### P1 — Dockerfile 多架构 GitHub API 限流容错
 
-**目标**：controller 启动时从 etcd 读取最后一次状态，恢复内存状态机。
+**现状**：Dockerfile 里 `curl -fsSL https://dl.k8s.io/release/stable.txt` 拉最新 kubectl 版本。
+GitHub API 无 token 时限流严格（60 次/小时/IP），CI 并发高时易 429。
 
-- [ ] `loadStateFromEtcd()` 启动时读 key `kubepivot/<project>/<ns>/state`
-- [ ] 如果 etcd 无记录 → 保持 IDLE
-- [ ] 如果 etcd 有记录 → `sm.ForceState(lastState, "controller: 从 etcd 恢复")`
-- [ ] 恢复 syncStateRunning 的正常转换逻辑（不再需要"尊重契约"的降级策略）
+- [ ] 允许通过 `ARG KUBECTL_VERSION` 显式传版本，避免线上动态查询
+- [ ] 降级逻辑：stable.txt 拉失败 → 用固定 fallback 版本
 
-### P0 — helm --history-max 限制
+### P1 — web3-blitz 蓝绿 release 名解析
 
-**现状**：每次自愈都执行一次 helm rollback，revision 数量不断累积。`release=feelings-server-feelings-server revision=4` 已经到 4 了，一个周末能到几十上百。helm release secret 会撑爆 namespace。
+**现状**：web3-blitz 用蓝绿部署，release 名形如 `web3-blitz-blue`/`web3-blitz-green`，
+`findReleaseForResource` 只会生成 `web3-blitz-<resource>`，对不上。
 
-**目标**：控制 history 数量，自动清理老旧 revision。
+- [ ] 识别蓝绿 release 名模式
+- [ ] 或者 resources.yaml 里允许显式声明 `helm-release: <name>` 字段
 
-- [ ] helm rollback 命令加 `--history-max=10`
-- [ ] controller 定期 GC：超过阈值的旧 revision 自动删除
-- [ ] 配置项暴露到 values.yaml
+### P1 — rbac.yaml 字符串拼接重构
 
-### P1 — rbac.yaml embedded template
+**现状**：v2.3.0 的 global controller 用 embed.FS 装 namespace/rbac/deployment，清爽。
+但 scaffold 里老的 per-project rbac 还是通过 Go 字符串拼接生成（`internal/scaffold/helm.go`
+删除了 writeControllerChart，但其他 chart 类似模式仍在）。
 
-**现状**：`internal/scaffold/helm.go` 里 rbac 是 Go 源码 fmt.Sprintf 拼接的长字符串。tab/空格缩进被 Go 源码格式污染过一次。
+- [ ] 统一改为 embedded template file，消灭 Go 字符串拼接 YAML 的反模式
 
-**目标**：改用 `embedded_templates/controller/rbac.yaml.tmpl`，text/template 变量替换。
+### P2 — `kp controller migrate-from-v2.2` 迁移工具
 
-- [ ] 创建 `internal/scaffold/embedded_templates/controller/rbac.yaml.tmpl`
-- [ ] `writeControllerChart` 改为 embedded 读取 + 变量替换
-- [ ] 同时做：configmap.yaml / deployment.yaml 一起迁移
+**现状**：v2.2.0 → v2.3.0 目前是手工迁移（helm uninstall + kp controller install + enroll）。
+用户数为 0 时可以这么做，后面接入更多用户时需要自动化。
 
-### P1 — Dockerfile 多架构容错
-
-**现状**：`docker buildx` 拉基础镜像时 GitHub API 经常限流或 auth.docker.io EOF，需要手动重试 3-5 次。
-
-**目标**：构建脚本自动重试 + 国内镜像源降级。
-
-- [ ] `scripts/build-image.sh` 封装多架构构建
-- [ ] 3 次重试逻辑
-- [ ] Docker 镜像加速器配置文档（Daocloud / USTC / 阿里云）
-- [ ] 国内 Helm 源降级（mirrors.aliyun.com/helm/）
-
-### P2 — 顺手修
-
-- [ ] web3-blitz 蓝绿 release 名解析（-blue/-green 后缀支持）
-- [ ] web3-blitz-web3-blitz-controller pending-upgrade secret 清理
-- [ ] 蓝绿 timing 统计接入 deployTiming 表格
-- [ ] Controller GC Loop 端到端验证
-- [ ] drift etcd 审计端到端
+- [ ] 扫描所有 ns 里的 `<project>-kubepivot-controller` release
+- [ ] helm uninstall 全部
+- [ ] 删除 `deployments/.../kubepivot-controller/` 目录
+- [ ] 从 `components.yaml` 删除 controller 段
+- [ ] 自动调用 `kp controller install` + enroll
 
 ---
 
-## ⚠️ 已知技术债（诚实清单）
+## 🟡 v2.5.0 — 扩展自愈能力
 
-| 优先级 | 描述 | 原因 | 计划 |
-|--------|------|------|------|
-| P1 | SSA `--field-manager=kubepivot`：helm v4 不支持，当前用 `--force-conflicts` | helm v4 API 限制 | helm v4 文档稳定后 |
-| P2 | SIMULATING K8s Job：代码完整，待 K8s + postgres + golang-migrate 环境验证 | 无匹配测试环境 | 有环境时 |
-| P2 | PVC 快照联动：待 CSI VolumeSnapshot 环境验证 | 无 CSI 集群 | 有 CSI 时 |
-| P2 | patchIstioWeight / patchNginxWeight：待 Istio/Nginx 集群验证 | 无对应集群 | 有环境时 |
-| P2 | sampleErrorRate Prometheus：待 http_requests_total 指标验证 | 无 Prometheus | 有环境时 |
-| P3 | Vault 深度集成：当前 net/http 实现可用，考虑 Vault Go SDK | 当前实现已够用 | v2.3.0+ |
-| P3 | `kp sync` 真实用户验证：v1.x 项目升级到 v2.x 框架 | 待第一批用户 | v2.3.0 |
-| P3 | `kp init --type minimal/full` | 需求调研 | v2.3.0+ |
+> v2.3.0 的自愈范围仅限"资源缺失"一种情况。v2.5.0 要把 v2.2.0 per-project 模式下
+> 的全部自愈能力（drift 治理、OOM、CrashLoopBackOff）搬到 global 模式。
 
----
+### drift 治理在 global 模式下的语义
 
-## 🟢 v2.4.0 — 社区 + 曝光
+- [ ] global controller 检测 drift 后如何处理 cross-namespace？
+- [ ] `kp audit` 能否展示所有 managed 项目的 drift？
+- [ ] Hard/Managed/Exempted 三层分类在 global 模式下的 key 结构
 
-> 代码已经够用了，这个版本专注让更多人知道
+### OOM 自愈
 
-- [ ] v2.2.0 自愈 demo 录屏（删 Deployment → 10 秒自愈）
-- [ ] 技术博客：v2.3.0 架构跃迁（全局单一 controller 的必要性）
-- [ ] `CONTRIBUTING.md`：贡献指南
-- [ ] `GOVERNANCE.md`：项目治理（CNCF Sandbox 要求）
-- [ ] `SECURITY.md`：安全披露流程
-- [ ] GitHub Issue 模板（bug report / feature request）
-- [ ] 第一批真实用户的 `kp init` 反馈
+- [ ] global.handleTask 检测 Pod OOMKilled → 触发 `kp doctor` 的内存 bump 逻辑
+- [ ] per-project 的 memory-bump 策略如何统一
+
+### CrashLoopBackOff 分析
+
+- [ ] global.handleTask 检测到 CrashLoopBackOff → 抓日志 → classifyCrashLogs → 决策
 
 ---
 
-## 🔵 v3.0.0 — Feelings 基础设施
+## 🟢 v3.0.0 — KubePivot 开源社区化
 
-> KubePivot 作为 Feelings 的底层 CD 平台
+> 代码质量已经达到 CNCF Sandbox 门槛（v2.0.0 时评估），缺的是社区和 contributors。
 
-- [ ] `kp feelings init`：专为 Feelings 项目定制的脚手架
-- [ ] 神经接口服务的部署模板（低延迟、高可用）
-- [ ] Feelings Controller：感受数据的实时调谐
-- [ ] 多集群跨地域同步（感受数据不能有 SLA 问题）
+### 社区
 
----
+- [ ] 公开 GitHub 仓库（当前已公开但未推广）
+- [ ] DeepWiki 生成 + 固定链接
+- [ ] CNCF Sandbox 申请材料起草
+- [ ] 接受第一个外部 PR 的门槛：至少 3 个 contributor guide 文档
 
-## 🔵 长期愿景
+### 稳定性 / 规模
 
-- [ ] Web UI：部署状态可视化 + 实时 Drift 监控
-- [ ] Terraform Provider：`kubepivot_project` resource
-- [ ] 服务级 FSM（当前是项目级）
-- [ ] `kp ai-plan` 规则专家系统（确定性优先于概率）
-- [ ] KWOK 万节点 CI 自动化压测流水线
-- [ ] CNCF Sandbox 申请（需要社区 + 贡献者多样性）
-- [ ] Git 原生内嵌完整实现（post-receive + Controller watch Git）
+- [ ] 100+ 项目规模压测（目前验证上限 2 项目）
+- [ ] kubectl watch 子进程数量控制（如果 50 项目 × 若干 watch = 几百个进程会爆）
+- [ ] client-go 可选集成（保留 exec 默认路径，client-go 作为 `--backend=informer` 可选）
 
 ---
 
-## ✅ 已完成（v1.0.0 → v2.2.0）
+## ✅ 已完成
 
-### v2.2.0 真实集群自愈闭环 🔱
-- [x] `internal/executor/executor.go`：单例 + 信号量限流子进程执行层
-- [x] `resolveBin()` 自动识别 scratch 容器 / 本机开发环境路径
-- [x] controller 包全量替换 exec.Command（heal / drift_sync / resources / sandbox_gc）
-- [x] `cmd/kp/runner.go` runOutput 兼容层走 executor，调用方零改动
-- [x] `cmd/kp/deploy.go` ensureSecret CmdKubectl + --context 支持
-- [x] etcd key 破坏性升级：`dtk/` → `kubepivot/`
-- [x] RBAC 权限补全：secrets 完整 CRUD（helm release state 修复）
-- [x] RBAC 补全：deployments/services/configmaps/namespaces/networking 等完整 CRUD
-- [x] Dockerfile：Go 1.26 + scratch + helm v3.17.1 硬编码
-- [x] 多架构镜像构建（amd64 + arm64 manifest list）
-- [x] `syncStateRunning` 尊重状态机契约（不再强行 IDLE → RUNNING）
-- [x] `forceUnlockIfSandboxState` 参数瘦身
-- [x] 真实集群验证：2026-04-23 <10 秒自愈闭环
+### v2.3.0（2026-04-24）
 
-### v2.1.0 脚手架适配性 + 扩展性
-- [x] `kp sync`：框架文件升级，不动业务代码
-- [x] `.githooks/post-receive`：git push → kp deploy（GitOps 愿景落地）
-- [x] 错误码体系内嵌 `kp init`（code + response + handler）
-- [x] `make gen`：自动生成错误码文档
-- [x] `kp deploy` 自动创建 dev Secret
-- [x] `COMPONENT_NAMES`：find cmd/ 实现
-- [x] `sed -i` 跨平台兼容（macOS/Linux）
-- [x] CRD 资源自愈（`isCRDKind` + `healCRDApply`）
+- [x] 全局单一 HA Controller 架构（kubepivot-system namespace，3 副本）
+- [x] 双层接入协议（ns label + kp controller enroll）
+- [x] ConfigMap 分发 + sha256 指纹热加载
+- [x] Watcher 层（exec kubectl --watch + 心跳守卫 + 指数退避）
+- [x] Worker Pool（固定大小 goroutine + 黑名单护栏）
+- [x] Namespace 黑名单三道护栏（kube-system 等 5 个系统 ns）
+- [x] kp controller CLI 命令家族（install/uninstall/status/enroll/unenroll/projects）
+- [x] kp deploy 顺带同步 resources.yaml（消灭忘记同步）
+- [x] kp init 剥离 controller（components.yaml + helm.go 清理）
+- [x] helm --history-max=10（防 release secret 撑爆）
+- [x] 真实集群 ~12 秒自愈闭环验证通过
 
-### v2.0.0 企业级插件平台
-- [x] `kp version` + `kp update`（GitHub releases API self-update）
-- [x] `kp plugin install/list/remove`（插件市场）
-- [x] `kp chaos`（Chaos Mesh API，4 种混沌类型）
-- [x] OPA stdin pipe / drift etcd 审计 / Vault net/http 实现
-- [x] GITOPS-MANIFESTO.md（第 329 个 commit，生日数字）
+### v2.2.0（2026-04-23）
 
-### v1.9.0 ~ v1.0.0
-- [x] 多集群联邦 + 企业合规（audit/OPA/Vault/context）
-- [x] Operation Sandbox + Header Preview + Warmup
-- [x] 状态漂移治理（Hard/Managed/Exempted）
-- [x] Controller HA（Leader Election + WorkQueue）
-- [x] Secret 轮转 / StatefulSet / 蓝绿 e2e
-- [x] DAG 拓扑排序 + A2 Controller + 安全合规基线
+- [x] 真实集群自愈闭环（per-project 模式）
+- [x] scratch 容器化全量改造
+- [x] kp doctor 集成（OOM / CrashLoopBackOff 分析）
+- [x] etcd key dtk/ → kubepivot/ 迁移
+
+### v2.1.0（2026-04-05）
+
+- [x] 脚手架适配性 + 扩展性
+- [x] GitOps 愿景落地
+
+### v2.0.0（2026-04-04，commit #329）
+
+- [x] 插件平台（kp plugin install/list/remove）
+- [x] Chaos Mesh 集成（kp chaos inject/list/stop/status）
+- [x] GitOps Manifesto 文档
+
+### v1.x 历程
+
+见 `snapshots/` 目录历史 SNAPSHOT 文件。
 
 ---
 
-> 乾枢不是名字，是承诺。
-> 2026-04-23 15:43:51，承诺第一次在真实集群里兑现：
-> 删除 Deployment，10 秒内无人介入恢复 Running。
->
-> 从生日的第一行代码，到 329 commit，到 v2.2.0 自愈闭环，
-> 每一行都在问同一个问题：
-> 怎样让系统自己解决问题，而不是 AI 告诉你有问题。
+## 开发准则（不写进版本，是永久约束）
+
+- **设计先对齐，再动手**。大版本开工前必须列设计清单、逐条拍板。
+- **小步快跑，每步 make dev**。一个 commit 解决一件事。
+- **不搞技术债**。宁可 TODO + 完整设计也不临时方案。
+- **真实集群验证不可跳过**。单测绿 ≠ 能跑。
+- **爽感 = 逆势成立**。有争议时诚实对比、帮权衡、让人拍板。
+- **"只保护，不越权"** 是贯穿整个项目的哲学。
