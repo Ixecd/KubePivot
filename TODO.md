@@ -30,6 +30,19 @@
 - [ ] Controller 启动时从 etcd 恢复所有 managed 项目的状态机
 - [ ] handleTask 复用已恢复的状态机实例，而不是每次新建
 
+### P0 — v2.3.0 性能测试基准（方案 B）
+
+**目标**：实测 v2.3.0 global controller 在 10 项目规模下的资源占用 / 自愈延迟 /
+并发吞吐 / watch 鲁棒性 / 热加载去重。
+
+- [ ] 生成 10 个 mock 项目（pause:3.9 镜像）
+- [ ] scripts/perf/steady-state.sh   30 分钟稳态 CPU/内存
+- [ ] scripts/perf/concurrent-chaos.sh 一次性删 10 个 Deployment
+- [ ] scripts/perf/watch-reconnect.sh 断网 60s 鲁棒性
+- [ ] scripts/perf/hot-reload.sh     sha256 去重验证
+- [ ] docs/design/performance.md 产出数据 + 分析
+- [ ] client-go informer 对比基准留 v2.5.0
+
 ### P1 — Dockerfile 多架构 GitHub API 限流容错
 
 **现状**：Dockerfile 里 `curl -fsSL https://dl.k8s.io/release/stable.txt` 拉最新 kubectl 版本。
