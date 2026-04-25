@@ -38,6 +38,16 @@ PROJECTS=(
     "kp-admin-dashboard"
 )
 
+# v2.5.0：支持自定义项目数（压测大规模分片用）
+# 不传 PROJECT_COUNT → 用上面 10 个真实命名（兼容旧用法）
+# PROJECT_COUNT=50  → 改用 kp-bench-001 ... kp-bench-050
+if [[ -n "${PROJECT_COUNT:-}" ]] && [[ "$PROJECT_COUNT" -gt 10 ]]; then
+    PROJECTS=()
+    for i in $(seq 1 "$PROJECT_COUNT"); do
+        PROJECTS+=("$(printf "kp-bench-%03d" "$i")")
+    done
+fi
+
 ANCHOR_PROJECT="kp-auth-service"
 WORKSPACE="${BENCHMARK_WORKSPACE:-$HOME/kp-benchmark}"
 SKIP_KP_INIT="${SKIP_KP_INIT:-false}"

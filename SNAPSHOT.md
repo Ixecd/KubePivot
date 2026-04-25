@@ -1,167 +1,260 @@
-# SNAPSHOT — KubePivot
+# SNAPSHOT — KubePivot v2.5.0
 
-> 当前版本：**v2.4.0** ✅
-> 上次更新：2026-04-25
-> 上一版本归档：[v2.3.0 全局架构换血](snapshots/SNAPSHOT-kubepivot-2026-04-24-v2.3.0.md)
-> 本版本归档：[v2.4.0 稳固版](snapshots/SNAPSHOT-kubepivot-2026-04-25-v2.4.0.md)
-
----
-
-## 当前状态
-
-```
-✅ 全局单一 HA Controller（v2.3.0 架构跃迁）
-✅ K8s Lease 选举（v2.4.0，21.7ms 故障转移）
-✅ 状态机缓存（v2.4.0，集群总 CPU -55%）
-✅ Dockerfile 容错（v2.4.0，可重现 build）
-✅ 蓝绿 helm-release 显式声明（v2.4.0）
-✅ 性能基准首版（v2.3.0/v2.4.0 对比数据已落地）
-✅ TODO 路线图 v2.4 → v2.7（清晰）
-```
+> 当前状态精确快照
+> 编写日期：2026-04-25
+> Last commit: 99f316d (待打 v2.5.0 tag)
 
 ---
 
-## 版本线
+## 一、版本与 commit
 
 ```
-v1.0.0  多服务 DAG + A2 Controller + 安全合规基线
-v1.4.0  跨版本迁移（KubePivot 改名）
-v1.5.x  StatefulSet + etcd 健康监控 + 蓝绿 e2e
-v1.6.0  Controller HA（Leader Election + WorkQueue）
-v1.7.0  状态漂移治理 + HPA + on-missing 全策略
-v1.8.0  Operation Sandbox + Header Preview + Warmup
-v1.9.0  多集群联邦 + 企业合规（audit + OPA + Vault）
-v2.0.0  插件平台 + Chaos Mesh + GitOps Manifesto（commit #329）
-v2.1.0  脚手架适配性 + 扩展性
-v2.2.0  真实集群自愈闭环 + scratch 容器化
-v2.3.0  🌐 全局单一 HA Controller 架构级跃迁
-v2.4.0  ⚙  稳固边缘 + 性能基线（消除冗余 -55% CPU）   ← 你在这
-v2.5.0  🚀 A 演进 + B 调研（待开始）
-v2.6.0  🌊 流量层落地（Lars 思路）
-v2.7.0  ✨ 自研 Handwritten Informer
-v3.0.0  🌟 KubePivot 完整体（推迟到 A+B 都成熟）
+当前 branch:        Master
+当前 commit:        99f316d
+last tagged:        v2.4.0
+即将打的 tag:       v2.5.0
+upstream:           https://github.com/Ixecd/KubePivot
 ```
+
+**v2.5.0 核心 commit 链**：
+
+| Commit | 内容 |
+|--------|------|
+| `721ae8d` | feat(sharding): 引入 sharding 子包基础设施（Step 1） |
+| `f3c3291` | feat(controller): v2.5.0 P0 A.1 Step 2 — Controller 分片接入 |
+| `99f316d` | feat(controller): v2.5.0 P0 A.1 Step 3 — 每 pod 自扫孤儿 machine + projects |
 
 ---
 
-## 核心成就（v2.4.0 角度看）
+## 二、代码结构
 
 ```
-✅ Controller 架构纯粹性
-   全程不引入 client-go，全部走 kubectl exec
-   架构差异化：KubePivot 不是"又一个 K8s controller"，是"绕开 K8s 抽象的工具链"
-
-✅ 全局接入协议（双层）
-   内核层：namespace label kubepivot.io/managed=true
-   交互层：kp controller enroll → 自动 label + ConfigMap 分发
-   分发：每个 ns 一个 kubepivot-resources ConfigMap（含 sha256 annotation）
-
-✅ Leader-Dispatch-Worker 并发模型
-   Leader 只做分发（非阻塞 enqueue）
-   Worker Pool 20 goroutine 消费
-   v2.4.0 加了 K8s Lease 选举，3 副本真 HA（之前是 3 leader 冗余）
-
-✅ 状态机缓存 + 并发安全
-   GlobalState 持有 map[ns]*machineEntry（machine + per-instance mutex）
-   reconcile task 复用，不再每次 state.New
-   集群总 CPU -55%
-
-✅ 双层接入协议向后兼容
-   resources.yaml 加可选 helm-release 字段（蓝绿 / 金丝雀场景）
-   不声明则保持 v2.3.0 推断行为
-
-✅ 性能基线 + benchmark 工具链
-   benchmark/scripts/{setup,steady-state}.sh
-   docker stats + docker top 实时采样
-   v2.3.0/v2.4.0 数据已落入 docs/design/performance.md
-
-✅ 可重现 build
-   Dockerfile ARG KUBECTL_VERSION=v1.32.0（默认）
-   --build-arg 可覆盖；网络抖动时 fallback + retry
-```
-
----
-
-## 核心组件（v2.4.0 时态）
-
-```
-internal/controller/
-├── lease.go                    K8s Lease 选举（v2.4.0 新增）
-├── leader.go                   etcd 分布式 Leader（v2.2.0）
-├── global.go                   StartGlobal + runAsLeader 主循环
-├── global_state.go             多项目内存状态 + 状态机缓存（v2.4.0 扩展）
-├── worker_pool.go              固定大小 goroutine 池
-├── watcher.go                  KubectlWatcher（kubectl --watch）
-├── namespace_blacklist.go      5 个系统 ns 黑名单
-├── controller.go               Start(args) 分支
-├── reconciler.go               Reconciler struct
-├── heal.go                     healRecreate / healRollback
-├── drift_sync.go               30s 漂移扫描（v2.4.0 改造 helm-release）
-├── resources.go                Resource struct（v2.4.0 +HelmRelease）
+KubePivot/
+├── cmd/kp/                        kp CLI 入口
+│   ├── main.go
+│   ├── deploy.go
+│   ├── controller.go              ← controller install/enroll/uninstall
+│   └── ...
+│
+├── internal/
+│   ├── controller/                Controller 主体
+│   │   ├── global.go              ← StartGlobal（v2.5.0 重构）
+│   │   ├── global_state.go        ← 含 RemoveOrphanProjects（v2.5.0 新增）
+│   │   ├── lease.go               K8s Lease 选举（v2.4.0）
+│   │   ├── sweeper.go             v2.5.0 新增 Leader-only sweeper
+│   │   ├── orphan_test.go         v2.5.0 新增（4 个测试）
+│   │   ├── controller.go
+│   │   ├── reconciler.go
+│   │   ├── watcher.go
+│   │   ├── worker_pool.go
+│   │   ├── detector.go
+│   │   └── ...
+│   │
+│   ├── sharding/                  ← v2.5.0 新独立包
+│   │   ├── shard.go               FNV-1a hash + ShardSet
+│   │   ├── shard_test.go          4 个测试
+│   │   ├── multi_lease.go         N 个 lease 抢占主循环
+│   │   ├── multi_lease_test.go    5 个测试
+│   │   └── lease_helpers.go       本地 lease 工具（破 import cycle）
+│   │
+│   ├── controller_installer/      Controller 部署模板
+│   │   └── templates/
+│   │       ├── deployment.yaml    ← v2.5.0 加 KUBEPIVOT_SHARDS env
+│   │       ├── configmap.yaml
+│   │       ├── rbac.yaml          ← v2.5.0 加 deployments get
+│   │       └── ...
+│   │
+│   ├── state/                     状态机
+│   ├── planner/                   Planner（部署计划）
+│   ├── scaffold/                  kp init 脚手架
+│   ├── executor/                  kubectl 执行器
+│   ├── bluegreen/                 蓝绿部署
+│   ├── ai/                        AI 集成
+│   ├── code/                      代码生成
+│   ├── logger/                    结构化日志
+│   └── ...
+│
+├── docs/design/                   设计文档
+│   ├── architecture.md
+│   ├── controller.md
+│   ├── sharding.md                ← v2.5.0 新增（605 行）
+│   ├── performance.md             ← v2.5.0 整合（v2.3/v2.4/v2.5 数据）
+│   ├── state-machine.md
+│   ├── bluegreen.md
+│   └── ... 其他
+│
+├── benchmark/scripts/
+│   ├── setup.sh                   ← v2.5.0 加 PROJECT_COUNT 支持
+│   ├── cleanup.sh                 ← v2.5.0 同上
+│   ├── steady-state.sh            稳态采样
+│   ├── concurrent-chaos.sh        并发故障（实测脚本待 debug）
+│   ├── watch-reconnect.sh         watcher 鲁棒（待跑）
+│   └── hot-reload.sh              sha256 验证（脚本有 hang，命令行手测过）
+│
+├── commits/                       v2.5.0 起的工程档案
+│   ├── controller-v2.5.0.txt      Step 2 commit
+│   ├── sharding-step3-orphan-cleanup.txt
+│   └── ...
+│
+├── snapshots/                     永久归档
+│   ├── SNAPSHOT-kubepivot-2026-04-04-v1.0.md
+│   ├── SNAPSHOT-kubepivot-2026-04-25-v2.4.0.md
+│   └── SNAPSHOT-kubepivot-2026-04-25-v2.5.0.md  ← 今天加
+│
+├── archived/                      历史版本
+│   ├── handoff/HANDOFF-v2.X.0.md
+│   ├── snapshot/SNAPSHOT-v2.X.0.md
+│   ├── todo/TODO-v2.X.0.md
+│   └── docs/                      废弃的文档
+│
+├── HANDOFF.md                     接手指南
+├── SNAPSHOT.md (本文件)            当前状态快照
+├── TODO.md                        路线图
+├── README.md                      入门
+├── GITOPS-MANIFESTO.md            GitOps 哲学
 └── ...
-
-internal/controller_installer/   独立包（v2.3.0 起）
-├── installer.go
-└── templates/
-    ├── namespace.yaml
-    ├── rbac.yaml
-    └── deployment.yaml
-
-cmd/kp/
-├── controller.go                kp controller 子命令分发
-└── controller_enroll.go         enroll / unenroll / projects
-
-benchmark/                       性能测试（v2.4.0 落地）
-├── scripts/
-├── manifests/
-└── results/  (.gitignore)
 ```
 
 ---
 
-## 性能数据（10 项目稳态）
+## 三、测试状态
 
-| 指标 | v2.3.0 | v2.4.0 | 变化 |
-|------|--------|--------|------|
-| 集群总 CPU | 41.88% | 18.92% | **-55%** |
-| avg memory / pod | 59 MiB | 36.62 MiB | -38% |
-| peak CPU | 89.95% | 54.25% | -40% |
-| Leader 故障转移延迟 | N/A | 21.7 ms | ✅ |
+```
+make dev:
+  ok  github.com/Ixecd/kubepivot/cmd/kp
+  ok  github.com/Ixecd/kubepivot/internal/controller         (4 个 orphan 测试 + 既有)
+  ok  github.com/Ixecd/kubepivot/internal/controller/...
+  ok  github.com/Ixecd/kubepivot/internal/sharding           (9 个测试)
+  ok  github.com/Ixecd/kubepivot/internal/state
+  ok  github.com/Ixecd/kubepivot/internal/planner
+  ok  github.com/Ixecd/kubepivot/internal/scaffold
+  ok  github.com/Ixecd/kubepivot/test/integration
+```
 
-详见 `docs/design/performance.md`。
+集成测试（真实 orbstack 集群）：
+
+```
+✓ 10 项目场景
+  - 分片分布 4/4/2（符合 quota=4 限制）
+  - 三 pod CPU 趋同（10.84 / 11.81 / 8.59 = avg 10.41%）
+  - 故障转移 ~10 秒
+  - OnShardChanged 回调正确触发
+
+✓ 50 项目场景
+  - setup 50 项目（kp-bench-001..050）一次成功
+  - 单 pod 平均 CPU 46.09%
+  - peak 100.53%（短暂顶 limits）
+  - 集群总 CPU 138.27%
+```
 
 ---
 
-## 下一步：v2.5.0
+## 四、性能数据快照
 
-读 [TODO.md](TODO.md) 的 v2.5.0 章节。简版：
+完整数据见 `docs/design/performance.md`。
 
 ```
-P0  Controller 分片（A.1 — Lars 思路）
-P0  Backoff 队列（A.1.5 — Lars 过载队列 + Probe）
-P0  client-go 对比基准（A.2 — 给 v2.7.0 决策提供数据）
-P1  流量层调研（B.1 — 设计文档不写代码）
-+   v2.4.0 P2 性能基准补全（自愈延迟 / Watcher 鲁棒 / sha256 验证）
+                     v2.3.0     v2.4.0     v2.5.0 (10p)   v2.5.0 (50p)
+集群总 CPU            41.88%    18.92%     31.24%         138.27%
+avg CPU / pod         13.96%     6.30%     10.41%          46.09%
+peak CPU              89.95%    54.25%     87.85%         100.53%
+avg memory / pod      59 MiB    36.62 MiB  52.40 MiB       84.16 MiB
+单 leader 实测成本    -         16.93%     -               -
+sha256 去重           -         100%       100%            -
+故障转移              -         21.7 ms    ~10 sec         -
+```
+
+**故事**：
+
+```
+v2.3.0 → v2.4.0
+  消除"3 leader 冗余降级"，揭示真实成本（13.96 假象 → 16.93 真相）
+  
+v2.4.0 → v2.5.0
+  10 项目过度工程（+65% CPU）
+  50 项目水平扩展可行（5x 项目 → 4.4x CPU，接近线性）
 ```
 
 ---
 
-## 项目边界
+## 五、当前运行的 controller
 
-**做**：应用层（脚手架 / 部署 / 自愈 / 流量层）
-**不做**：基础设施层（集群生命周期 / NodePool / 裸金属——见未来 Cloud 项目）
+```
+Namespace: kubepivot-system
+Image: qingchun22/kubepivot-controller:v2.4.0  (待 v2.5.0 build)
+Replicas: 3
+Pod 状态: 全部 Running
 
-详见 [README.md](README.md) "项目边界（Out of Scope）"节。
+Lease:
+  kubepivot-controller-leader     (1 个，identity = pod-suffix-hex)
+  kubepivot-controller-shard-0..9 (10 个，分布在 3 个 pod 上)
+```
 
 ---
 
-## 开发哲学
+## 六、运行环境
 
 ```
-1. 设计先对齐，再动手
-2. 小步快跑，每步 make dev
-3. 不搞技术债
-4. 真实集群验证不可跳过
-5. 不为做而做（"经核查不需要"也是工程产出）
-6. 只保护，不越权
+开发硬件:    Apple Silicon (M 系列), 16 GB RAM
+集群:        orbstack K8s（单节点，Pod 容量 110）
+Storage:     local-path (rancher.io/local-path)
+Storage 用量: 67 GB free / 460 GB total（PVC 25 GB 完全够）
+Network:     allow-all（开发环境）
+
+CI/CD:       未配置（计划中）
 ```
+
+---
+
+## 七、未提交的本地状态
+
+```
+git status (release 前应清空):
+
+  M HANDOFF.md                    本次更新
+  M SNAPSHOT.md                   本次更新
+  M TODO.md                       本次更新
+  ?? docs/design/sharding.md      v2.5.0 新增
+  ?? docs/design/performance.md   v2.5.0 整合（如有未提交版）
+  ?? snapshots/...-v2.5.0.md      v2.5.0 永久归档
+  ?? archived/handoff/...
+  ?? archived/snapshot/...
+  ?? archived/todo/...
+  ?? commits/v2.5.0-release.txt
+```
+
+---
+
+## 八、关键 metrics（v2.5.0 起追踪）
+
+```
+代码行数（仅 Go 源文件）：
+  internal/controller/      ~3500 行
+  internal/sharding/        ~700 行（v2.5.0 新增）
+  internal/state/           ~1200 行
+  其他 internal/            ~2500 行
+  cmd/kp/                   ~1500 行
+  ─────────────────────────
+  总计                      ~9400 行
+
+测试覆盖：
+  internal/controller/      ~70%
+  internal/sharding/        ~85%
+  集成测试                  10 项目 + 50 项目真实集群
+
+文档行数：
+  docs/design/              ~3000+ 行（含 sharding.md 605 行）
+  HANDOFF + SNAPSHOT + TODO ~600 行（v2.5.0 起）
+  snapshots/ 永久归档       ~1500 行（v1.0 + v2.4.0 + v2.5.0）
+```
+
+---
+
+## 相关文档
+
+- [README.md](README.md)
+- [HANDOFF.md](HANDOFF.md) — 接手指南
+- [TODO.md](TODO.md) — 路线图
+- [GITOPS-MANIFESTO.md](GITOPS-MANIFESTO.md) — GitOps 哲学
+- [docs/design/sharding.md](docs/design/sharding.md) — v2.5.0 分片设计
+- [docs/design/performance.md](docs/design/performance.md) — 性能基准
