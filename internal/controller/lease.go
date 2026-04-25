@@ -105,6 +105,17 @@ func RunWithK8sLeaseElection(
 	}
 }
 
+// TryAcquireOrRenew 是 tryAcquireOrRenew 的导出版本，供 sharding 子包使用。
+// 行为完全等同 tryAcquireOrRenew，独立完成"创建/续约/抢占"全流程。
+func TryAcquireOrRenew(
+	ctx context.Context,
+	leaseName, namespace, identity string,
+	ttl time.Duration,
+	kubeconfig string,
+) (bool, error) {
+	return tryAcquireOrRenew(ctx, leaseName, namespace, identity, ttl, kubeconfig)
+}
+
 // tryAcquireOrRenew 单次尝试获取或续约 lease
 // 返回：是否为 leader, 错误
 func tryAcquireOrRenew(
@@ -249,6 +260,11 @@ func takeOverLease(
 	return true, nil
 }
 
+// GenerateIdentity 是 generateIdentity 的导出版本，供 sharding 子包使用。
+func GenerateIdentity() string {
+	return generateIdentity()
+}
+
 // generateIdentity 生成本 pod 的唯一 holder identity
 // 格式：<hostname>-<random8>
 // hostname 在 K8s pod 里是 pod name，加随机后缀防止 pod 重启时复用旧身份
@@ -262,6 +278,9 @@ func generateIdentity() string {
 	_, _ = rand.Read(buf)
 	return fmt.Sprintf("%s-%s", host, hex.EncodeToString(buf))
 }
+
+// LeaseObject 是 leaseObject 的导出别名，供 sharding 子包使用。
+type LeaseObject = leaseObject
 
 // leaseObject K8s Lease 的最小 JSON 结构
 type leaseObject struct {
