@@ -213,6 +213,42 @@ Lars 思路在流量调度层完整落地。
 
 ---
 
+## ⏳ v2.8.0（候选）
+
+### 数据敏感资源保护
+
+KubePivot 当前 reconcile 逻辑**会** rollback / 重建 / 删除任何资源，
+对数据库等有状态服务存在风险。v2.8 引入"数据敏感资源"机制。
+
+设计草案（待 v2.7 后细化）：
+
+```
+[ ] resources.yaml 加 protect: true 标记
+    - kind: PersistentVolumeClaim
+      name: postgres-data
+      protect: true        ← 新
+
+[ ] reconcile 检测到 protected 资源"应该删除/重建"时：
+    - 不自动 rollback / 重建
+    - 触发警告日志（K8s Event）
+    - 进入"人工 confirm"工作流
+    
+[ ] kp confirm <ns>/<resource> 命令
+    人工 review 确认后才执行
+    
+[ ] kp release 阻断
+    检测到 protected 资源被改动时，要求显式 --confirm-protected 参数
+
+前提条件：
+  - 等到自己（或早期用户）真在生产用过 KubePivot
+  - 知道"什么样的 confirm 体验不烦"再设计
+  - v2.7 自研 informer 落地后才能精确捕获 PVC 删除事件
+```
+
+
+---
+
+
 ## ⏳ v2.8.0+（待规划）
 
 候选方向（按优先级模糊排序）：
