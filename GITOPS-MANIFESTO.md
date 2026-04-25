@@ -2,12 +2,13 @@
 
 > 作者：qc（Ixecd）
 > 项目：[KubePivot](https://github.com/Ixecd/KubePivot)
+> 当前版本：v2.5.0（2026-04-26）
 
 ---
 
 ## 一、传统 CI/CD 的原罪
 
-每个团队都有一套 CI/CD Pipeline。它们通常长这样：
+每个团队都有一套 CI/CD Pipeline，它们大致长这样：
 
 ```
 代码提交
@@ -23,17 +24,17 @@
 
 问题出在哪？
 
-**1. CI 服务器变成了安全边界的漏洞**
+**1. CI 服务器变成安全边界的漏洞**
 
-CI 要直接访问 K8s API，这意味着一旦 CI 被打穿，整个集群的控制权就拱手相让了。最小权限原则在这里成了笑话——你不可能给 CI 只开只读权限。
+CI 要直接访问 K8s API，意味着一旦 CI 被打穿，整个集群的控制权就拱手相让了。最小权限原则在这里成了笑话——你不可能给 CI 只开只读权限。
 
 **2. 状态漂移无人管**
 
-Pipeline 跑完就拍屁股走人了。有人 `kubectl scale` 改了副本数，有人直接 patch 了 ConfigMap，有人手动删了一个 Pod——Pipeline 不知道，也不管。下次部署，可能会覆盖掉这些改动，也可能不会，行为不可预测。
+Pipeline 跑完就拍屁股走人。有人 `kubectl scale` 改了副本数，有人直接 patch 了 ConfigMap，有人手动删了一个 Pod——Pipeline 不知道，也不管。下次部署可能覆盖这些改动，也可能不会，行为不可预测。
 
 **3. 回滚是噩梦**
 
-生产出问题了，先找 Pipeline 日志，再找上一次成功的版本，再手动触发回滚，等集群稳定……期间用户已经看了 5 分钟的 500。
+生产出问题，先找 Pipeline 日志，再找上一次成功的版本，再手动触发回滚，等集群稳定……期间用户已经看了 5 分钟的 500。
 
 **4. 多环境是地狱**
 
@@ -77,7 +78,7 @@ kp deploy 执行一次部署，写入状态机
 A2 Reconciliation Controller 持续运行
   ├── 8s 周期 Reconcile：资源存在吗？健康吗？
   ├── 30s Drift Sync：实际状态和期望一致吗？
-  └── 发现偏差 → 自愈（重新部署/回滚/调整 limits）
+  └── 发现偏差 → 自愈（重新部署 / 回滚 / 调整 limits）
 ```
 
 **模式 B（愿景）：Git 原生内嵌 KubePivot**
@@ -119,7 +120,7 @@ LOCKED → SNAPSHOTTING → SIMULATING → COMMITTING → RUNNING
                           RESTORING（pvc restore + helm rollback）→ IDLE
 ```
 
-COMMITTING 阶段在软件层面禁止 force-unlock——DB 正在迁移的时候，状态机拒绝任何强制中断请求。这个约束写在代码里，不是靠文档靠约定。极端故障场景（节点 crash、etcd 脑裂）需要人工介入，这一点我们诚实地写在 TODO 里。
+COMMITTING 阶段在软件层面禁止 force-unlock——DB 正在迁移的时候，状态机拒绝任何强制中断请求。这个约束写在代码里，不是靠文档靠约定。极端故障场景（节点 crash、etcd 脑裂）需要人工介入，这一点诚实地写在 TODO 里。
 
 ### 漂移治理（Drift Governance）
 
@@ -135,7 +136,9 @@ kp diff --drift
 ℹ️  已豁免：istio-proxy（外部注入，完全忽略）
 ```
 
-Controller 每 30 秒扫描一次，发现硬冲突自动修正。"只保护，不越权"——kp 只管自己声明所有权的字段，不干预 Istio、HPA、云厂商注入的字段。
+Controller 每 30 秒扫描一次，发现硬冲突自动修正。
+
+**"只保护，不越权"**——kp 只管自己声明所有权的字段，不干预 Istio、HPA、云厂商注入的字段。这是 KubePivot 最重要的设计原则之一。
 
 ### 多集群统一视图
 
@@ -170,11 +173,71 @@ resources:
       - replicas   # HPA 管理，kp 不强制同步
 ```
 
-OOMKilled → 自动调整 memory limit +25%。CrashLoopBackOff → 区分启动错误和运行时错误，restarts≥5 自动回滚。
+OOMKilled → 自动调整 memory limit +25%。CrashLoopBackOff → 区分启动错误和运行时错误，restarts ≥ 5 自动回滚。
+
+### 水平扩展（v2.5.0 起）
+
+10 个项目时单 leader 能扛，50 个项目时呢？v2.5.0 引入 Controller 分片机制：
+
+```
+v2.4.0  1 leader 干 100% reconcile      集中式瓶颈，单 pod 16.93% CPU
+v2.5.0  N 副本各干 1/N，按 hash 分片      水平扩展，单 pod 不再是天花板
+```
+
+50 项目实测：5x 项目数 → 4.4x CPU（接近线性扩展），单 pod 平均 46%，不再有"被压垮的 leader"。详见 [docs/design/sharding.md](docs/design/sharding.md)。
 
 ---
 
-## 五、和 ArgoCD/Flux 的区别
+## 五、设计原则与适用边界
+
+KubePivot 是一个有立场的项目。下面这些原则贯穿所有版本，且会写进代码评审：
+
+### 5.1 永久原则
+
+```
+1. 不引入 client-go        所有 K8s 操作通过 kubectl exec
+2. 单二进制                 kp 命令行 + controller 同一份代码
+3. 只保护，不越权           kp 不管自己没声明所有权的字段
+4. 自愈不是越权             状态机失败时 RESTORING 而不是覆盖
+5. 简单 > 完美              拒绝分布式状态机的深坑
+```
+
+### 5.2 适用边界（v2.5.0 当前状态）
+
+KubePivot v2.5.0 适合：
+
+```
+✓ 无状态服务            API 服务、Worker、网关、边缘代理
+✓ 多环境配置统一        dev / staging / prod 三套统一管理
+✓ 中小项目数            10-100 个微服务（v2.5.0 实测 50 项目稳定）
+✓ Go 后端团队           CI 不做 K8s 操作的 GitOps 模式
+```
+
+KubePivot v2.5.0 **当前不适合**：
+
+```
+✗ 数据库等有状态服务的生产管理
+   - PVC 重建会丢数据，KubePivot 当前没有"数据敏感资源"保护
+   - reconcile 检测到 PVC "缺失" 时会触发自愈，可能覆盖数据
+   - v2.8.0 计划引入 protect: true 标记机制 + kp confirm 工作流
+   - 当前请用专用 K8s Operator 管理：
+       PostgreSQL → CloudNativePG / postgres-operator
+       MySQL → MySQL Operator / Vitess
+       Redis → Redis Operator
+   - KubePivot 管 stateless 层，Operator 管 stateful 层
+   
+✗ 强合规审计场景
+   - 当前审计依赖 K8s Events，不是独立持久化的审计日志
+   - SOC 2 / ISO 27001 全套合规需要外部审计系统配合
+   
+✗ 超大规模（1000+ 项目）
+   - v2.5.0 分片机制在 50/100/200 项目级别验证过
+   - 1000+ 项目场景需要 v2.7.0 自研 informer 才能扛住
+```
+
+**写得这么明白是因为**：KubePivot 选择"在自己擅长的范围里做到最好"，而不是"什么都能做但什么都不到位"。
+
+### 5.3 何时选 KubePivot vs ArgoCD/Flux
 
 |  | ArgoCD / Flux | KubePivot |
 |--|--------------|-----------|
@@ -185,9 +248,11 @@ OOMKilled → 自动调整 memory limit +25%。CrashLoopBackOff → 区分启动
 | 漂移治理 | 基础支持 | 三级分层（Hard/Managed/Exempted）|
 | 混沌工程 | 无 | `kp chaos inject`（Chaos Mesh API）|
 | Git 原生集成 | 需要额外配置 | `.githooks/` 开箱即用 |
+| 多 Controller 副本 | Leader-Follower（单 leader 处理全部） | 分片（N 副本各处理 1/N）|
 | 学习成本 | 高（需懂 K8s、Helm、Kustomize）| 低（Go 开发者几分钟上手）|
+| 数据库管理 | 有生态（Argo Rollouts 等扩展） | v2.5.0 不管，v2.8.0 计划 |
 
-KubePivot 不是要替代 ArgoCD，而是**为 Go 后端团队提供更低门槛的 GitOps 路径**。更激进的一点：KubePivot 把 GitOps 的触发器从"平台"还给了"Git"——`kp init` 生成的项目，`git push` 就是部署。
+KubePivot 不是要替代 ArgoCD——**为 Go 后端团队提供更低门槛的 GitOps 路径**。更激进的一点：KubePivot 把 GitOps 的触发器从"平台"还给了"Git"——`kp init` 生成的项目，`git push` 就是部署。
 
 ---
 
@@ -224,17 +289,17 @@ kp release --version v0.2.0
 
 OOMKilled 自动调整 memory limits，CrashLoop 自动分析崩溃类型并回滚，漂移自动修正，Sandbox 自主执行原子性迁移链路——没有人在值班，没有告警轰炸，系统在深夜自己把自己修好了。
 
-AI 是规划者（`kp ai-plan` 扫描代码仓库，规划服务架构），规则是执行者。这才是 Autonomous Operations 的本来面目——不依赖模型的概率，依赖工程判断的确定性。
+AI 是规划者（`kp ai-plan` 扫描代码仓库，规划服务架构），规则是执行者。这才是 Autonomous Operations 的本来面目——**不依赖模型的概率，依赖工程判断的确定性**。
 
 ---
 
-## 尾声
+## 八、尾声
 
 软件工程里有一种误区，把"复杂"等同于"可靠"，把"Pipeline 长"等同于"流程严谨"。
 
 GitOps 告诉我们：**真正的可靠来自系统的自愈能力，而不是 Pipeline 的繁琐程度**。
 
-KubePivot 是这个信念的一次工程实践——一个人和Claude，6天，从生日当天的 v1.0.0 到 v2.0.0，236 个单元测试，每一行代码都在问同一个问题：
+KubePivot 是这个信念的一次工程实践——一个人和 Claude，从生日当天的 v1.0.0 到 v2.5.0 的水平扩展闭环，每一行代码都在问同一个问题：
 
 **怎样让下一个开发者不必再踩我踩过的坑？**
 
