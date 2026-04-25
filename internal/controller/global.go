@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Ixecd/kubepivot/internal/sharding"
 	"github.com/Ixecd/kubepivot/internal/executor"
+	"github.com/Ixecd/kubepivot/internal/sharding"
 )
 
 // StartGlobal 启动 global 模式 controller（v2.5.0+ 分片版）
@@ -43,11 +43,26 @@ func StartGlobal(ctx context.Context) {
 		return handleTask(taskCtx, gs, kubeconfig, task)
 	})
 
-	shardMgr := sharding.NewMultiLeaseManager(sharding.MultiLeaseConfig{
+	var shardMgr *sharding.MultiLeaseManager
+	shardMgr = sharding.NewMultiLeaseManager(sharding.MultiLeaseConfig{
 		TotalShards: totalShards,
 		Replicas:    replicas,
 		Kubeconfig:  kubeconfig,
-		// OnShardChanged 留 nil（v2.5.0 Step 3 commit 再接孤儿 machine 清理）
+		// v2.5.0 Step 3：分片变化时即时清理孤儿（5s grace period）
+		OnShardChanged: func(added, removed []int) {
+			if len(removed) == 0 {
+				return // 仅持有增多 → 无需清理
+			}
+			// Grace period：让正在跑的 reconcile 完成（Q3 决策 B 方案）
+			time.Sleep(5 * time.Second)
+			cleaned := gs.RemoveOrphanProjects(func(ns string) bool {
+				return shardMgr.Shards().OwnsNamespace(ns, totalShards)
+			})
+			if len(cleaned) > 0 {
+				slog.Info("🧹 OnShardChanged 触发的孤儿清理完成",
+					"removed_shards", removed, "cleaned_namespaces", cleaned)
+			}
+		},
 	})
 
 	var wg sync.WaitGroup
@@ -85,6 +100,13 @@ func StartGlobal(ctx context.Context) {
 	go func() {
 		defer wg.Done()
 		reconcileLoop(ctx, gs, pool, shardMgr, totalShards)
+	}()
+
+	// 6. v2.5.0 Step 3：周期性兜底自扫孤儿（防 OnShardChanged 漏触发）
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		orphanSweeper(ctx, gs, shardMgr, totalShards)
 	}()
 
 	// ── Leader 选举（仅为 sweeper）──────────────────────────────────────────────
@@ -286,7 +308,7 @@ func reconcileLoop(
 //     → 此时本 pod 仍会处理这个 task（"过期"投递）
 //     → 接管它的 pod 也会处理 → 两个 pod 同时 reconcile
 //     → 实际无害：reconcile 是幂等的（detect → exists 则 return；
-//        缺失则 helm rollback，多触发一次最多多消耗几次 kubectl）
+//     缺失则 helm rollback，多触发一次最多多消耗几次 kubectl）
 //
 // 设计权衡：双层过滤会引入 import cycle（handleTask 需访问 shardMgr），
 // 而 race 期间的多余 reconcile 在 5s lease 续约周期下最多持续几秒，
@@ -400,4 +422,38 @@ func runGlobalLeaderElection(ctx context.Context, kubeconfig string, run func(ct
 
 	slog.Warn("无 etcd 也无法访问 K8s Lease API，降级单机模式")
 	run(ctx)
+}
+
+// orphanSweeper 周期性兜底自扫，每 30 秒一次
+//
+// v2.5.0 设计要点（Q1 决策 C 方案）：
+//   - OnShardChanged 回调即时清理（响应快）
+//   - orphanSweeper 周期兜底（防回调漏触发或 lease 过期但事件未触发的极端情况）
+//   - 两者协同保证孤儿状态最多 30 秒内被清理
+func orphanSweeper(
+	ctx context.Context,
+	gs *GlobalState,
+	shardMgr *sharding.MultiLeaseManager,
+	totalShards int,
+) {
+	interval := 30 * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	slog.Info("🧹 OrphanSweeper 启动（v2.5.0 兜底）", "interval", interval)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cleaned := gs.RemoveOrphanProjects(func(ns string) bool {
+				return shardMgr.Shards().OwnsNamespace(ns, totalShards)
+			})
+			if len(cleaned) > 0 {
+				slog.Info("🧹 OrphanSweeper 周期兜底清理",
+					"cleaned_namespaces", cleaned)
+			}
+		}
+	}
 }

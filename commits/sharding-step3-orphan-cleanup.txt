@@ -1,0 +1,40 @@
+feat(controller): v2.5.0 P0 A.1 Step 3 — 每 pod 自扫孤儿 machine + projects
+
+分片切换时（pod 失去某 shard）触发清理：
+  - 从 GlobalState.machines 移除非自己 shard 的状态机
+  - 从 GlobalState.projects 移除非自己 shard 的项目状态
+  - 防止内存累积 + 防止陈旧状态影响 re-enroll
+
+代码变更：
+- internal/controller/global_state.go
+  + RemoveOrphanProjects(isOwned func(ns) bool) []string
+    一次性扫所有 projects + machines，按 isOwned 过滤
+    返回被清理的 namespace 列表
+
+- internal/controller/global.go
+  shardMgr 改为 var + 后赋值（解决闭包自引用编译错误）
+  MultiLeaseConfig.OnShardChanged 接入清理回调（5s grace period）
+  + 新增 orphanSweeper goroutine（每 30s 兜底自扫，防 OnShardChanged 漏触发）
+
+- internal/controller/orphan_test.go (新增)
+  TestRemoveOrphanProjects_BasicCleanup        基础场景
+  TestRemoveOrphanProjects_AllOwned_NoOp       全归属本 pod 时不清理
+  TestRemoveOrphanProjects_AllOrphan_AllCleaned  全孤儿时全清理
+  TestRemoveOrphanProjects_Empty_NoCrash       空 state 边界
+
+设计决策（详见对话日志）：
+- Q1 触发时机 = C：OnShardChanged 即时 + 周期 30s 兜底（双保险）
+- Q2 清理范围 = B：projects + machines 都清（同步索引，一起删）
+- Q3 grace period = B：5 秒 sleep 让正在跑的 reconcile 完成
+                      简单代价低于"软删除/标记 stale"等复杂方案
+
+真实集群验证（杀一个 pod 触发分片重洗）：
+✓ 故障转移正常：被杀 pod 的 shard 在 ~10 秒内被其他 pod 抢占
+✓ OnShardChanged removed 事件正确触发
+✓ orphanSweeper 周期日志按预期出现
+✓ 启动期 K8s lease race（"幻觉持有"）由下一轮探测自我纠正
+  这是分布式系统本质 race，不是 bug
+
+后续优化（不在本 commit）：
+- 让每 pod 只 watch 自己 shard 的 ns（减少框架开销，~80 行）
+- 50 项目压测验证分片真实价值

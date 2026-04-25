@@ -255,6 +255,42 @@ func (g *GlobalState) MachineCount() int {
 	return len(g.machines)
 }
 
+
+// ════════════════════════════════════════════════════════════════════════════
+//                  v2.5.0 新增：分片切换时的孤儿清理
+// ════════════════════════════════════════════════════════════════════════════
+
+// RemoveOrphanProjects 清理不再属于本 pod 的分片对应的 projects + machines
+//
+// 参数 isOwned 是回调，输入 namespace 返回是否仍归属本 pod
+// （由调用方用 shardMgr.Shards().OwnsNamespace(ns, totalShards) 实现）
+//
+// 返回被清理的 namespace 列表（用于日志展示）
+func (g *GlobalState) RemoveOrphanProjects(isOwned func(namespace string) bool) []string {
+	g.mu.Lock()
+	orphans := make([]string, 0)
+	for ns := range g.projects {
+		if !isOwned(ns) {
+			orphans = append(orphans, ns)
+		}
+	}
+	for _, ns := range orphans {
+		delete(g.projects, ns)
+	}
+	g.mu.Unlock()
+
+	for _, ns := range orphans {
+		g.removeMachine(ns)
+	}
+
+	if len(orphans) > 0 {
+		slog.Info("🧹 已清理孤儿 projects + machines",
+			"count", len(orphans),
+			"namespaces", orphans)
+	}
+	return orphans
+}
+
 // fingerprint 计算 resources.yaml 内容的 sha256 十六进制
 func fingerprint(content string) string {
 	h := sha256.Sum256([]byte(content))
