@@ -1,0 +1,33 @@
+fix(benchmark): hot-reload.sh 修复 hang 问题 + HANDOFF 加重复踩坑章节
+
+v2.5.1 持续改进：补 v2.4.0 P2 的"100 次幂等 apply"压测脚本。
+
+benchmark/scripts/hot-reload.sh 重写：
+- 去掉 set -e（grep 0 匹配会触发误退出）
+- 去掉 set -u（与多分支判定不兼容）
+- 仅保留 set -o pipefail
+- kubectl logs 输出先存文件再 grep（避免管道 SIGPIPE）
+- count_pattern() 函数统一处理 grep 0 匹配的退出码
+- Phase 2 加进度打印（每 5 次一报）
+- 输出用 tee 同时打印 + 写文件
+- 修变量定界 ${reload_delta} 和 echo 单引号包裹
+
+实测结果（100 次幂等 apply）：
+  基线项目状态更新次数：    1
+  100 次 apply 后：         1
+  增量：                    0
+  
+  ✅ sha256 去重 100% 工作（期望 ≤ 1，实测 = 0）
+  
+  详见 benchmark/results/2026-04-26_070015-hot-reload/
+
+HANDOFF.md 加 3.7 节"重复踩坑记录（教训复利）"：
+  工程哲学：犯了两次及以上的错误都要记录显式化
+  
+  4 条教训：
+  - Bash 严格模式陷阱（set -e / set -u）  今天踩了两次
+  - Go 闭包自引用                          v2.5.0 Step 3
+  - Go import cycle 移目录无效             v2.5.0 Step 2
+  - Commit message 特殊字符                v2.5.0 Step 2
+
+每条都有"问题/正确做法/历史踩坑"三段，未来碰到能快速调出来。

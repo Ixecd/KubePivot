@@ -172,6 +172,121 @@ snapshots/SNAPSHOT-kubepivot-{date}-v{version}.md
 
 orbstack 是 KubePivot 的"标准开发集群"，每个工程节点都在它上面验证。
 
+### 3.7 重复踩坑记录（教训复利）
+
+> 工程哲学：**犯了两次及以上的错误都应该记录下来**。
+> 单次错误是偶然，重复错误是认知盲区——必须显式化才能消除。
+
+#### Bash 脚本的严格模式陷阱
+
+`set -e` / `set -u` / `set -o pipefail` 在简单脚本里是好习惯，但在
+benchmark/scripts/ 这类"大量 grep + 条件分支 + 多变量"的脚本里反而是坑：
+
+```
+✗ set -e
+  grep 0 匹配时返回 exit 1
+  即使加了 || true 在 macOS bash 4.x 下也偶尔失效
+  → 脚本"莫名其妙"中途退出，看着像 hang 但其实是早退
+  
+✗ set -u
+  条件分支里变量绑定时机不确定
+  比如 if-elif-else 里在不同分支赋值的变量
+  在某些 bash 版本里会误判"未绑定"
+  
+✓ set -o pipefail
+  这个有用，能正确捕获管道中间命令的失败
+  保留无副作用
+```
+
+**实践规范**（v2.5.1 起）：
+
+```bash
+# benchmark/scripts/ 脚本顶部统一这样写：
+set -o pipefail   # 仅这一项
+
+# 关键变量手动验证：
+result=$(some_command)
+if [[ -z "$result" ]]; then
+    err "some_command 失败或返回空"
+    exit 1
+fi
+
+# grep 0 匹配的标准处理：
+count=$(grep -c "pattern" "$file" 2>/dev/null || echo 0)
+```
+
+历史踩坑：
+
+- 2026-04-25 hot-reload.sh hang 几次（排查发现 set -e + 复杂管道）
+- 2026-04-26 hot-reload.sh 末尾 `reload_delta?: 未绑定的变量`（set -u + 多分支）
+
+#### Go 闭包自引用
+
+声明变量同时在初始化里用 closure 引用自己 → 编译失败：
+
+```go
+// ✗ 错误
+shardMgr := sharding.NewMultiLeaseManager(sharding.MultiLeaseConfig{
+    OnShardChanged: func(...) {
+        shardMgr.Shards()...   // 还没赋值
+    },
+})
+
+// ✓ 正确：先 var 声明，后赋值
+var shardMgr *sharding.MultiLeaseManager
+shardMgr = sharding.NewMultiLeaseManager(sharding.MultiLeaseConfig{
+    OnShardChanged: func(...) {
+        shardMgr.Shards()...   // closure 捕获指针，调用时已赋值
+    },
+})
+```
+
+历史踩坑：
+
+- 2026-04-25 v2.5.0 Step 3 OnShardChanged 编译失败
+
+#### Go 包 import cycle
+
+两个包互相 import = cycle，**移目录不破环**——这是依赖图问题，不是目录问题。
+
+```
+controller    →  imports sharding
+sharding      →  imports controller   ← cycle
+
+破环路径：
+  ✗ 把 sharding 从 internal/controller/sharding 移到 internal/sharding
+    （移目录无效，依赖关系没变）
+  ✓ 让其中一个包不再 import 另一个
+    具体方式：sharding 包内本地复制 lease 工具函数（~100 行）
+    代价：代码重复
+    收益：sharding 真正自包含
+```
+
+历史踩坑：
+
+- 2026-04-25 v2.5.0 Step 2 sharding 包 import controller 引发 cycle，
+  起初尝试移目录（无效），最终走"本地实现"破环
+
+#### Commit message 里的特殊字符
+
+shell 直接传 `git commit -m "..."` 时，message 里的 `>` `=` 等字符会被解析为
+重定向操作符，可能产生空文件（如名为 `=` 的诡异文件）或解析错误。
+
+```
+✗ git commit -m "feat: support a > b case"   # > 触发重定向
+
+✓ 用 commits/ 目录的 .txt 文件
+   git commit -F commits/feat-...txt
+   
+   这是 v2.5.0 起的工程规范，详见 3.2 节
+```
+
+历史踩坑：
+
+- 2026-04-25 v2.5.0 Step 2 commit 时生成名为 `=` 的空文件
+  → 直接催生了 commits/ 目录的工程规范
+
+
 ---
 
 ## 四、当前工作流
