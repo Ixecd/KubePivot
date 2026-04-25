@@ -271,7 +271,104 @@ CPU 节省的不只是 reconcile 本身——**连 yaml.Unmarshal 都不会跑**
 
 ---
 
-## 七、未做但要做（v2.5.0）
+## 七、v2.5.1 P2 验证（持续改进）
+
+> 编写日期：2026-04-26
+> v2.5.0 release 后的 P2 性能基准补全工作
+
+### 7.1 sha256 热加载去重（脚本化复测）
+
+v2.4.0 时通过命令行手测验证过 sha256 去重机制（见第六节）。
+v2.5.1 把它脚本化，落到 `benchmark/scripts/hot-reload.sh`：
+
+```
+测试方法：
+  100 次 kubectl apply 同一份 ConfigMap（sha256 不变）
+  统计 controller leader 日志中的 "项目状态已更新" 计数变化
+
+实测结果（2026-04-26 07:00，v2.5.0 集群）：
+  基线计数：              1
+  100 次 apply 后：       1
+  增量：                  0   ← 期望 ≤ 1
+  
+  ✅ sha256 去重 100% 工作
+
+数据归档：
+  benchmark/results/2026-04-26_070015-hot-reload/
+    ├── result.txt              结果摘要
+    ├── configmap-snapshot.yaml ConfigMap 当时快照
+    ├── logs-before.txt         apply 前的 controller 日志
+    └── logs-after.txt          apply 后的 controller 日志（应该几乎一致）
+```
+
+**这次脚本化的工程价值**：
+不是命令行手测拿到的"个人数据"，而是 clone 项目的人都能跑的可复现基准。
+
+### 7.2 受阻的两个测试（已记入 TODO）
+
+#### 7.2.1 Watcher 重连鲁棒性（watch-reconnect.sh）
+
+脚本设计：从宿主侧 kill controller 容器内的 kubectl 子进程，
+观察心跳守卫触发 + watcher 重连。
+
+**当前受阻**：orbstack 是 VM 模式，容器 PID 命名空间隔离，
+macOS 宿主 `ps` 看不到容器内 PID，`kill -9` 无法跨命名空间执行。
+
+```
+docker top 看到容器内进程（PID 395269 是 kubectl 子进程）
+但 macOS host 的 ps -p 395269 完全看不到
+→ 跨命名空间 kill 在 orbstack 下不可行
+```
+
+**缓解**：watcher.go 的心跳守卫机制（30s 无事件 → 探活 → 失败 restart）
+有完整的单元测试覆盖。集成测试推到 v2.5.1 后期或借助 web3-blitz 升级后做。
+
+详见 [TODO.md](../../TODO.md) v2.5.1 章节。
+
+#### 7.2.2 并发自愈延迟（concurrent-chaos.sh）
+
+脚本设计：3 档并发（1/3/10）删除 Deployment，记录自愈延迟 p50/p95。
+
+**当前受阻**：setup.sh 创建的 mock 项目用 `kubectl apply` 直接部署，
+没有 helm release。controller 检测到资源缺失 → 走 helm rollback 自愈链路 →
+"查不到 release，无法自愈"。
+
+```
+log: 资源缺失，启动自愈 project=kp-auth-service kind=Deployment ...
+log: 查不到 helm release，无法自愈 release=kp-auth-service-kp-auth-service
+```
+
+**这是 KubePivot 的正确设计** —— controller 只 rollback 自己 helm install
+的资源，防止误伤外部部署的资源。
+
+**解决路径**：
+- 要么 setup.sh 改造让 mock 用 helm chart（~1 天工程）
+- 要么用真实 helm 项目（如 web3-blitz，但需先升级到 go 1.26 + 适配 v2.5.0 接入协议，记入 v2.8.0）
+
+详见 [TODO.md](../../TODO.md) v2.5.1 + v2.8.0 章节。
+
+### 7.3 工程教训（写入 HANDOFF.md 3.7 节）
+
+```
+教训 1：基准脚本不应该用 set -e/set -u 严格模式
+  grep 0 匹配会触发误退出，bash 多分支变量绑定时机不明确
+  
+教训 2：性能基准脚本要测真实场景
+  mock 项目不能简化到"无 helm release"——会暴露不出真实链路
+  
+教训 3：环境兼容性问题不是 bug，是设计约束
+  orbstack VM 模式 ≠ Linux 直跑容器
+  跨命名空间 kill 这类操作要在脚本里 explicit 处理
+  
+教训 4：受阻测试要 explicit 文档化
+  "未来会修"是工程拖延的常见模式
+  写清"为什么受阻 + 解决路径 + 优先级"才能真的推进
+```
+
+---
+
+
+## 八、未做但要做（v2.6.0+）
 
 ### 性能基准补全（v2.4.0 P2 移入）
 
@@ -303,7 +400,7 @@ CPU 节省的不只是 reconcile 本身——**连 yaml.Unmarshal 都不会跑**
 
 ---
 
-## 八、相关文档
+## 九、相关文档
 
 - 设计原理：[`docs/design/controller.md`](controller.md)
 - 整体架构：[`docs/design/architecture.md`](architecture.md)

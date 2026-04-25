@@ -1,0 +1,38 @@
+docs: P2 性能脚本验证收尾 + 受阻测试明确文档化
+
+v2.5.0 release 后 P2 验证的实际进展：
+
+完成：
+  ✅ hot-reload.sh 脚本化 + 100 次实测
+     0 增量 reconcile / sha256 100% 工作
+     数据归档：benchmark/results/2026-04-26_070015-hot-reload/
+     已在 commit 30b3108 完成
+     
+受阻：
+  ⏸ watch-reconnect.sh 实测
+     orbstack VM 模式下，跨容器命名空间 kill 不可行
+     缓解：watcher 心跳守卫已有完整单元测试
+     
+  ⏸ concurrent-chaos.sh 实测
+     mock 项目无 helm release，自愈链路走不通
+     这是 KubePivot 安全边界的正确行为（不误伤外部资源）
+     需要真实 helm 项目（如 web3-blitz 升级后）才能测
+
+文档变更：
+  - docs/design/performance.md
+    新增 第 7 节"v2.5.1 P2 验证（持续改进）"
+    7.1 hot-reload 脚本化数据
+    7.2.1 watch-reconnect 受阻原因 + 解决路径
+    7.2.2 concurrent-chaos 受阻原因 + 解决路径
+    7.3 工程教训
+    
+    原 7/8 章节顺延为 8/9
+    
+  - TODO.md
+    v2.5.1 章节：hot-reload 标完成，watch-reconnect/concurrent-chaos
+                 标受阻 + 解决路径
+    v2.8.0 章节：加 web3-blitz 升级任务（go 1.26 + 适配 v2.5.0）
+
+工程哲学（写入文档）：
+  受阻测试要 explicit 文档化（不假装"将来会修"）
+  写清"为什么受阻 + 解决路径 + 优先级"才能真推进

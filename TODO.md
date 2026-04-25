@@ -137,20 +137,49 @@ KubePivot 是 (项目数 P, 副本数 R, 分片数 N) 的三维空间，
     否则 → v2.7.0 自研 informer
 ```
 
-### v2.4.0 P2 性能脚本验证（移入 v2.5.1）
+### v2.4.0 P2 性能脚本验证（部分完成）
 
 ```
-[ ] concurrent-chaos.sh 实测
-    跑出 p50 / p95 / max 自愈延迟数据
-    （脚本本身在 50000+ 行日志的 grep 时 hang，需要 debug）
+[x] hot-reload.sh debug + 实测
+    去掉 set -e/-u，kubectl logs 先存文件再 grep
+    100 次幂等 apply → 0 reconcile（sha256 去重 100% 工作）
+    脚本结果归档：benchmark/results/2026-04-26_070015-hot-reload/
     
 [ ] watch-reconnect.sh 实测
     kill kubectl 子进程模拟异常
     确认心跳守卫触发 + watcher 重连
+    （今天 v2.5.1 推进中）
     
-[ ] hot-reload.sh debug
-    脚本 hang 在 kubectl logs --tail=20000
-    要么加 timeout，要么改用 grep -c -m 1（首次匹配即返回）
+[ ] concurrent-chaos.sh 实测（受阻于 mock 项目）
+    当前 setup.sh 用 kubectl apply 创建 mock，没有 helm release
+    controller 检测到资源缺失走 helm rollback 链路 → "查不到 release，无法自愈"
+    这是 KubePivot 正确的安全边界（只 rollback 自己 helm install 的资源）
+    
+    解决路径（任选其一）：
+      A. setup.sh 改造让 mock 用最小 helm chart（~1 天工程）
+      B. 用真实 helm 项目（如 web3-blitz）测试
+         前提：web3-blitz 升级（见 v2.8 章节）
+    
+    当前不阻塞其他 v2.5.1 任务，记入待办即可
+
+[ ] watch-reconnect.sh 实测（受阻于环境）
+    
+    当前实现：通过 docker top + kill -9 从宿主侧杀 controller 容器内的 kubectl 子进程
+    
+    orbstack 兼容性问题：
+      orbstack 是 VM 模式，容器 PID 命名空间隔离
+      macOS 宿主 ps 看不到容器内 PID，kill -9 失败
+      
+    解决路径（任选其一）：
+      A. orbstack ssh 进 VM 后再 kill（命令复杂，每次需找 VM 名）
+      B. controller 镜像加 procps（破坏 scratch 极简原则）
+      C. controller 加 SIGUSR1 信号处理 → 主动重启 watcher
+         ~30 行改造，运维和测试双重价值
+         推荐
+    
+    优先级：低
+    理由：watcher 心跳守卫机制在 v2.4.0 已有单元测试覆盖
+          集成测试是补强，不是必需
 ```
 
 ---
@@ -272,6 +301,28 @@ KubePivot 当前 reconcile 逻辑**会** rollback / 重建 / 删除任何资源�
 [ ] CRD 模式（重大架构选择）
     把 ConfigMap-based 接入协议升级为 CRD
     需要面向社区生态决策
+
+[ ] web3-blitz 项目升级 + 适配 v2.5.0+
+    背景：
+      web3-blitz 是 v2.0 时代（dtk ai-plan 自动生成）的真实 helm 项目
+      包含 wallet-service / chain-miner / postgres / etcd 多组件
+      go 1.25-alpine 在 2026-04 已有 CVE
+      resources.yaml 写法可能不完全兼容 v2.5.0 接入协议
+    
+    升级清单：
+      - Dockerfile go 1.25-alpine → go 1.26-alpine（修 CVE）
+      - 检查 resources.yaml 蓝绿部署字段（wallet-service-blue）是否仍兼容
+      - 重 build 4 个镜像 + push
+      - 真实 helm install 到集群
+      - 验证 Sandbox / Drift / Reconcile 全链路
+    
+    工程意义：
+      web3-blitz 是 KubePivot 的"真实生产用例"
+      v2.5.0 release 后让真实项目运行验证
+      副产品：能用它跑 v2.5.1 没做完的 chaos 测试
+    
+    优先级：在 v2.6.0 流量层之前应该做完
+            否则 KubePivot 的"真实场景验证"是空的
 ```
 
 不确定的事——等 v2.6 / v2.7 真实跑过再回头评估。
