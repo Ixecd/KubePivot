@@ -58,11 +58,22 @@ B 的根在 21 岁那年的 Lars 项目，3 年后再生长出来。
 - [ ] 识别蓝绿 release 名模式
 - [ ] 或者 resources.yaml 里允许显式声明 `helm-release: <n>` 字段
 
-### P1 — rbac.yaml 字符串拼接重构
+### ✅ P1 — rbac.yaml 字符串拼接重构（误判，无需执行）
 
-**现状**：v2.3.0 的 global controller 用 embed.FS 装 namespace/rbac/deployment，清爽。但 scaffold 里老的 per-project rbac 还是通过 Go 字符串拼接生成（`internal/scaffold/helm.go` 删除了 writeControllerChart，但其他 chart 类似模式仍在）。
+**核查结论**：v2.3.0 已经从根本上消灭这个反模式。
 
-- [ ] 统一改为 embedded template file，消灭 Go 字符串拼接 YAML 的反模式
+执行的验证：
+- 全仓 `grep 'Sprintf.*"kind: (Role|RoleBinding|ClusterRole)"'` → 0 匹配
+- scaffold/helm.go 中 controller-rbac.yaml 不是被「生成」而是被「清理删除」
+  （v2.3.0 移除 per-project controller chart 时连带清理）
+- controller_installer/templates/rbac.yaml 是 embed.FS 模板，零字符串拼接
+- scaffold 通过 embed.FS 读取所有 helm chart 模板（embed.go）
+
+诚实记录：这条 TODO 是写时基于 grep 看到 "controller-rbac.yaml" 的字符串
+就误判为"在拼接生成它"，实际是 os.Remove 清理。
+v2.4.0 这条任务不为做而做，直接划掉。
+
+- [x] 不做：v2.3.0 已从根本上完成（核查日期 2026-04-25）
 
 ### P2 — `kp controller migrate-from-v2.2` 迁移工具
 
