@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/Ixecd/kubepivot/internal/executor"
-	"github.com/Ixecd/kubepivot/internal/state"
 )
 
 // StartGlobal 启动 global 模式 controller（v2.3.0+）
@@ -256,13 +255,14 @@ func handleTask(ctx context.Context, gs *GlobalState, kubeconfig string, task Re
 		"namespace", task.Namespace,
 		"reason", task.Reason)
 
-	// 构造一个临时 reconciler，复用 heal.go 里的全部自愈逻辑
-	// 每个 task 都新建一个是故意的：状态机不跨项目共享
-	store := state.NewAutoStore(os.Getenv("ETCD_ENDPOINTS"))
-	sm, err := state.New(store, task.Project, task.Namespace, getenv("VERSION", "latest"))
+	// v2.4.0：从 GlobalState 缓存拿状态机（不存在则创建）
+	// 同时拿到对应 mutex，保护 state.Machine 的 Transition 调用
+	sm, smLock, err := gs.GetOrCreateMachine(task.Namespace, getenv("VERSION", "latest"))
 	if err != nil {
-		return fmt.Errorf("状态机初始化失败: %w", err)
+		return fmt.Errorf("状态机获取失败: %w", err)
 	}
+	smLock.Lock()
+	defer smLock.Unlock()
 
 	// 复用 v2.2.0 Reconciler 的 heal 方法（healRecreate / healRollback / healScaleDown 等）
 	resources, ok := gs.GetProject(task.Namespace)

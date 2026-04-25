@@ -3,6 +3,8 @@ package controller
 import (
 	"sync"
 	"testing"
+
+	"github.com/Ixecd/kubepivot/internal/state"
 )
 
 const sampleResourcesYAML = `resources:
@@ -195,5 +197,116 @@ func TestFingerprint_DifferentContent(t *testing.T) {
 	}
 	if len(a) != 64 {
 		t.Errorf("sha256 hex 长度应为 64, got %d", len(a))
+	}
+}
+
+// TestGetOrCreateMachine_ReturnsConsistentInstance
+// 同一 namespace 多次调用应返回同一个 machine + 同一把锁
+func TestGetOrCreateMachine_ReturnsConsistentInstance(t *testing.T) {
+	gs := NewGlobalState()
+
+	m1, lock1, err1 := gs.GetOrCreateMachine("test-ns", "v1.0.0")
+	if err1 != nil {
+		t.Fatalf("第一次创建失败: %v", err1)
+	}
+	if m1 == nil {
+		t.Fatal("machine 不应为 nil")
+	}
+
+	m2, lock2, err2 := gs.GetOrCreateMachine("test-ns", "v1.0.0")
+	if err2 != nil {
+		t.Fatalf("第二次获取失败: %v", err2)
+	}
+	if m1 != m2 {
+		t.Errorf("两次调用应返回同一个 machine 实例")
+	}
+	if lock1 != lock2 {
+		t.Errorf("两次调用应返回同一把锁")
+	}
+}
+
+// TestGetOrCreateMachine_DifferentNamespaceIsolated
+// 不同 namespace 应得到不同 machine，互不干扰
+func TestGetOrCreateMachine_DifferentNamespaceIsolated(t *testing.T) {
+	gs := NewGlobalState()
+
+	m1, _, _ := gs.GetOrCreateMachine("ns-a", "v1.0.0")
+	m2, _, _ := gs.GetOrCreateMachine("ns-b", "v1.0.0")
+
+	if m1 == m2 {
+		t.Errorf("不同 namespace 应得到不同 machine 实例")
+	}
+
+	if got := gs.MachineCount(); got != 2 {
+		t.Errorf("MachineCount = %d, want 2", got)
+	}
+}
+
+// TestRemoveProject_AlsoRemovesMachine
+// RemoveProject 应同步清理 machine 缓存
+func TestRemoveProject_AlsoRemovesMachine(t *testing.T) {
+	gs := NewGlobalState()
+
+	const ns = "to-be-removed"
+	yamlContent := `resources:
+  - kind: Deployment
+    name: foo
+    on-missing: alert
+`
+	_, _ = gs.UpsertProject(ns, yamlContent)
+
+	if gs.MachineCount() != 1 {
+		t.Fatalf("UpsertProject 后 machine 应为 1，got %d", gs.MachineCount())
+	}
+
+	gs.RemoveProject(ns)
+
+	if gs.MachineCount() != 0 {
+		t.Errorf("RemoveProject 后 machine 应为 0，got %d", gs.MachineCount())
+	}
+
+	if _, ok := gs.GetProject(ns); ok {
+		t.Errorf("RemoveProject 后 project 不应存在")
+	}
+}
+
+// TestGetOrCreateMachine_ConcurrentSafety
+// 50 个 goroutine 同时拿同一个 namespace 的 machine，必须始终是同一个指针
+func TestGetOrCreateMachine_ConcurrentSafety(t *testing.T) {
+	gs := NewGlobalState()
+	const ns = "concurrent-ns"
+	const N = 50
+
+	var wg sync.WaitGroup
+	machinePointers := make([]*state.Machine, N)
+	lockPointers := make([]*sync.Mutex, N)
+
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			m, lock, err := gs.GetOrCreateMachine(ns, "v1.0.0")
+			if err != nil {
+				t.Errorf("goroutine %d 获取失败: %v", idx, err)
+				return
+			}
+			machinePointers[idx] = m
+			lockPointers[idx] = lock
+		}(i)
+	}
+	wg.Wait()
+
+	// 所有 goroutine 应拿到完全相同的 machine + 锁指针
+	for i := 1; i < N; i++ {
+		if machinePointers[i] != machinePointers[0] {
+			t.Errorf("goroutine %d 拿到不同 machine 指针", i)
+		}
+		if lockPointers[i] != lockPointers[0] {
+			t.Errorf("goroutine %d 拿到不同 lock 指针", i)
+		}
+	}
+
+	if gs.MachineCount() != 1 {
+		t.Errorf("MachineCount = %d, want 1（缓存应只创建 1 个 machine）", gs.MachineCount())
 	}
 }

@@ -151,6 +151,79 @@ v2.3.0 选择保留 12% CPU 的代价，换架构清晰度。
 
 ---
 
+## 三 + 1、v2.4.0 Lease 选举 + 状态机缓存（2026-04-25）
+
+v2.4.0 完成两项关键改造：
+
+1. **K8s Lease API leader 选举**——替代无 etcd 时的"3 leader 冗余"降级方案
+2. **状态机缓存**——`*state.Machine` 在 `GlobalState` 内复用，不再每次 reconcile task 都新建
+
+### 数据对比（10 项目稳态，5 分钟采样）
+
+| 指标 | v2.3.0 | v2.4.0 | 变化 |
+|------|--------|--------|------|
+| 集群总 CPU | 41.88% | 18.92% | **-55%** |
+| avg CPU / pod | 13.96% | 6.30% | -55% |
+| avg memory / pod | 59 MiB | 36.62 MiB | -38% |
+| peak CPU | 89.95% | 54.25% | -40% |
+
+### 单 pod 拆解（v2.4.0）
+
+```
+leader   7qrbx     avg CPU 16.93%   max 54.25%   avg MEM 65.42 MiB    ← 唯一干活
+standby  gqbts     avg CPU  0.51%   max  5.86%   avg MEM 22.66 MiB    ← 几乎纯空转
+standby  zthqd     avg CPU  1.48%   max 10.44%   avg MEM 21.78 MiB    ← 几乎纯空转
+```
+
+### 数据解读
+
+**总 CPU 减半的来源不是"做得更快"，是"消除冗余"**：
+
+- v2.3.0 时 3 副本各自跑全量 reconcile，K8s 调度让它们工作错峰，
+  三个加起来"意外"只承担了实际负载的 1.x 倍——平均到每 pod 看起来像 13.96%
+- v2.4.0 时 1 个 leader 承担 100% 负载，2 个 standby 真空转，
+  leader 实测 16.93% 才是 10 项目的真实单 pod 成本
+
+**v2.5.0 优化基线明确**：
+
+```
+leader 16.93% × 1   = 16.93%   主战场（v2.5.0 优化目标）
+standby 1.0% × 2    =  2.00%   持续选举开销（已接近极限）
+总计                = 18.93%   接近实测 18.92%
+```
+
+v2.5.0 的两条优化路径：
+
+```
+路径 A.1  Controller 分片：leader 16.93% → 3 副本各管 1/3 → 每 pod ~6%
+路径 A.2  client-go 对比基准：leader 16.93% → informer cache → ~2-3%
+```
+
+### Leader 选举正确性验证
+
+```
+启动期 race（02:36:40 同时启动）：
+  7qrbx  02:36:40.635  Lease create 成功 → 成为 leader
+  gqbts  02:36:40.604  Lease create 失败（AlreadyExists）→ 短暂自称 leader
+  gqbts  02:36:46.263  下一轮探测发现自己不是 leader → stop reconcile
+  zthqd  从未自称 leader
+
+故障转移（v2.4.0 P0 commit 验证过）：
+  杀掉当前 leader → 21.7ms 内另一副本完成抢占
+  leaseTransitions 0 → 1
+```
+
+### 状态机缓存正确性验证
+
+启动期日志显示 10 个 namespace 各打了一条 `🧠 状态机已加入缓存`，
+5 分钟稳态期再无新日志——证明：
+
+- 启动时缓存预热到位
+- 后续 reconcile task 全部命中缓存
+- 没有重复创建 state.Machine 的开销
+
+---
+
 ## 五、相关文档
 
 - 设计原理：[`docs/design/controller.md`](controller.md)
