@@ -177,6 +177,28 @@ resources:
     on-missing: alert
 ```
 
+### 高级字段：helm-release（v2.4.0+，蓝绿场景）
+
+默认情况下 Controller 通过 `<PROJECT_NAME>-<resource.name>` 推断 helm release 名。
+蓝绿 / 金丝雀部署场景下 release 名带后缀（如 `web3-blitz-blue` / `web3-blitz-green`），
+默认推断会失败——此时用 `helm-release` 字段显式声明：
+
+```yaml
+resources:
+  - kind: Deployment
+    name: wallet-service
+    helm-release: web3-blitz-blue    # 显式声明，覆盖默认推断
+    on-missing: auto-heal
+```
+
+**优先级**：
+
+```
+res.HelmRelease（显式）  >  PROJECT_NAME-Name（默认推断）  >  namespace-Name（fallback）
+```
+
+不需要蓝绿的项目不用管这个字段，留空即可（向后兼容）。
+
 ### 支持的 kind
 
 ```

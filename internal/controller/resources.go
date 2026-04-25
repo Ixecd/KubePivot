@@ -14,6 +14,10 @@ import (
 )
 
 type Resource struct {
+	// v2.4.0：显式 helm release 名（蓝绿 / 金丝雀场景下覆盖默认推断）
+	// 不声明则走 findReleaseForResource 的默认推断（PROJECT_NAME-Name）
+	HelmRelease string `yaml:"helm-release,omitempty"`
+
 	Kind         string   `yaml:"kind"`
 	Name         string   `yaml:"name"`
 	Namespace    string   `yaml:"namespace"`

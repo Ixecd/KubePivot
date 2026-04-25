@@ -85,7 +85,7 @@ func (r *Reconciler) scanAndSync(ctx context.Context) {
 
 // detectDrift 用 helm diff 检测单个资源的漂移
 func detectDrift(kubeconfig, namespace string, res Resource) ([]string, error) {
-	release := findReleaseForResource(kubeconfig, namespace, res)
+	release := findReleaseForResource(namespace, res)
 	if release == "" {
 		return nil, nil
 	}
@@ -128,7 +128,7 @@ func detectDrift(kubeconfig, namespace string, res Resource) ([]string, error) {
 
 // forceSync 触发 helm upgrade 强制对齐
 func (r *Reconciler) forceSync(namespace string, res Resource) error {
-	release := findReleaseForResource(r.kubeconfig, namespace, res)
+	release := findReleaseForResource(namespace, res)
 	if release == "" {
 		return fmt.Errorf("找不到对应的 helm release")
 	}
@@ -150,11 +150,23 @@ func (r *Reconciler) forceSync(namespace string, res Resource) error {
 	return nil
 }
 
-// findReleaseForResource 从资源名推断 helm release 名
-func findReleaseForResource(kubeconfig, namespace string, res Resource) string {
+// findReleaseForResource 推断或返回 helm release 名
+//
+// v2.4.0 改造：
+//   - 优先返回 res.HelmRelease（resources.yaml 显式声明，蓝绿/金丝雀场景必需）
+//   - 否则按默认推断：<PROJECT_NAME>-<Resource.Name>
+//   - PROJECT_NAME 为空时回退到 namespace
+//
+// 死参数 kubeconfig 已移除（v2.3.0 起从未使用）
+func findReleaseForResource(namespace string, res Resource) string {
+	// v2.4.0：显式声明优先（蓝绿场景，比如 web3-blitz-blue / web3-blitz-green）
+	if res.HelmRelease != "" {
+		return res.HelmRelease
+	}
+
 	project := getenv("PROJECT_NAME", "")
 	if project == "" {
-		return ""
+		project = namespace
 	}
 	return project + "-" + res.Name
 }
