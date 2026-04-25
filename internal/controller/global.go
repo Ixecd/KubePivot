@@ -300,17 +300,27 @@ func handleTask(ctx context.Context, gs *GlobalState, kubeconfig string, task Re
 //
 // 和 v2.2.0 per-project leader 不同：这里的 key 是固定的，一个集群只有一个 leader。
 // 无 etcd 时降级到单机模式（直接运行，不做选举）。
-func runGlobalLeaderElection(ctx context.Context, etcdEPs string, run func(context.Context)) {
-	if etcdEPs == "" {
-		slog.Warn("未配置 ETCD_ENDPOINTS，降级为单机模式")
-		run(ctx)
+func runGlobalLeaderElection(ctx context.Context, kubeconfig string, run func(ctx context.Context)) {
+	etcdEPs := os.Getenv("ETCD_ENDPOINTS")
+	if etcdEPs != "" {
+		// 优先 etcd（v2.2.0 路径）
+		RunWithLeaderElection(ctx, etcdEPs, "global", "leader", run)
 		return
 	}
 
-	// 复用 leader.go 里的 RunWithLeaderElection 能力，
-	// 只是 project/namespace 位置传固定值 global/leader，
-	// 最终 etcd key 会是 /kubepivot/global/leader/leader（见 leader.go 实现）
-	// TODO(v2.3.0 后续): 如果需要完全对齐 /kubepivot/global/leader key 格式，
-	//                    可以在 leader.go 加一个 RunWithGlobalLeaderElection 专用入口
-	RunWithLeaderElection(ctx, etcdEPs, "global", "leader", run)
+	// 检测 K8s 集群是否可用
+	if canUseK8sLease(ctx, kubeconfig) {
+		RunWithK8sLeaseElection(ctx,
+			"kubepivot-controller-leader",
+			"kubepivot-system",
+			15*time.Second,
+			kubeconfig,
+			run,
+		)
+		return
+	}
+
+	// 单机降级（保留 v2.3.0 行为，至少不挂）
+	slog.Warn("无 etcd 也无法访问 K8s Lease API，降级单机模式")
+	run(ctx)
 }
