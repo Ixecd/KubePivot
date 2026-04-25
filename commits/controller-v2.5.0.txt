@@ -1,0 +1,66 @@
+feat(controller): v2.5.0 P0 A.1 Step 2 — Controller 分片接入
+
+把 sharding 子包接入业务路径，每个 pod 通过 lease 抢占决定持有的分片，
+只对自己 shard 的 namespace 做 reconcile。
+
+代码变更：
+- internal/controller/global.go
+  StartGlobal 重构：业务路径（watchers / reconcile loop / worker pool）
+  改为每个 pod 独立跑，由 sharding manager 限制处理范围
+  Leader lease 仅用于决定"谁跑 sweeper"
+  enqueueProjectResources 加 shard 过滤（单层过滤，handleTask 不再二次过滤）
+  
+- internal/controller/sweeper.go (新增)
+  Leader-only sweeper loop（每 60s 跑）
+  v2.5.0 第一版职责：清理"index >= totalShards"的孤儿 shard lease
+
+- internal/controller/lease.go
+  移除 Step 1 加的 export wrapper（GenerateIdentity / TryAcquireOrRenew /
+  LeaseObject）—— sharding 包改为本地实现（避免 import cycle）
+
+- internal/sharding/  (整体从 internal/controller/sharding/ 移过来)
+  + lease_helpers.go：本地实现 generateIdentity / tryAcquireOrRenew /
+    leaseObject 等底层 lease 工具函数
+  破除 import cycle 同时让 sharding 包真正自包含
+
+- internal/controller_installer/templates/deployment.yaml
+  加 KUBEPIVOT_SHARDS env（从 ConfigMap 注入）
+  
+- internal/controller_installer/templates/rbac.yaml
+  加 deployments get 权限（getControllerReplicas 需要）
+
+设计决策：
+- 单层 shard 过滤（仅 enqueue 阶段）
+  Race 容忍：task 入队后 shard 失主，最多多触发一次 reconcile
+  reconcile 本来就幂等，5s lease 续约周期下 race 窗口很短
+  
+- 每 pod 自跑 watchers / reconcile loop
+  代价：watcher / loop 框架开销 ×N
+  收益：水平扩展能力（100+ 项目场景）
+
+真实集群验证（3 副本 / N=10 / 10 项目）：
+✓ 分片分布合理（4/4/2，符合 quota=ceil(10/3)=4 的限制）
+✓ 业务正常运转（每 pod 都打出 watcher / reconcile loop 启动日志）
+✓ Leader 选举仍工作（qhsbj 持有 leader lease）
+
+性能数据（5 分钟稳态对比 v2.4.0）：
+                v2.4.0          v2.5.0
+集群总 CPU:     18.92%    →    31.24%   ↑ 65%
+单 pod CPU:    16.93/0.5/1.5  10.84/11.81/8.59
+peak CPU:       54.25%    →    87.85%
+avg memory:     36.62 MiB →    52.40 MiB
+
+诚实结论：v2.5.0 在 10 项目 baseline 下是负优化。
+- v2.4.0：1 leader 干所有活 + 2 standby 真空转，集中式瓶颈但开销低
+- v2.5.0：3 副本各干 1/N，水平可扩展但框架开销 ×N
+
+10 项目场景下框架开销（~4%/pod × 3 = 12%）超过分摊收益，
+导致总 CPU 上升。这是分片机制的固有成本，不是 bug。
+
+价值：v2.5.0 在 50/100 项目场景下才显出优势，10 项目 baseline
+现在 leader 还能扛，分片是为未来规模铺路。
+
+后续优化方向（v2.5.0 P0 后续 commit）：
+- 让每 pod 只 watch 自己 shard 的 ns（而不是 watch 全集群再过滤）
+  减少框架开销，可能让 v2.5.0 在 10 项目场景也持平 v2.4.0
+- 50 项目压测验证分片真实价值

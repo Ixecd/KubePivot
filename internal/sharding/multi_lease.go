@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Ixecd/kubepivot/internal/controller"
 )
 
 // MultiLeaseManager 管理 N 个分片 lease 的抢占 + 续约
@@ -19,7 +18,7 @@ import (
 //   4. 已持有的 shard 维护在 ShardSet 中，供 reconcile 路径查询
 //   5. 失去 lease 时（被别的 pod 抢走）从 ShardSet 移除
 //
-// 复用 v2.4.0 controller.TryAcquireOrRenew + GenerateIdentity（lease.go 导出）
+// 复用 v2.4.0 tryAcquireOrRenew + GenerateIdentity（lease.go 导出）
 type MultiLeaseManager struct {
 	totalShards   int
 	quota         int
@@ -77,7 +76,7 @@ func NewMultiLeaseManager(cfg MultiLeaseConfig) *MultiLeaseManager {
 		leasePrefix:    cfg.LeasePrefix,
 		namespace:      cfg.Namespace,
 		ttl:            cfg.TTL,
-		identity:       controller.GenerateIdentity(),
+		identity:       generateIdentity(),
 		kubeconfig:     cfg.Kubeconfig,
 		checkInterval:  checkInterval,
 		shards:         NewShardSet(),
@@ -138,7 +137,7 @@ func (m *MultiLeaseManager) reconcileShards(ctx context.Context) {
 	// Phase 1：续约已持有的 shard（优先级高，先做）
 	for _, shardIdx := range beforeShards {
 		leaseName := m.leaseName(shardIdx)
-		held, err := controller.TryAcquireOrRenew(
+		held, err := tryAcquireOrRenew(
 			ctx, leaseName, m.namespace, m.identity, m.ttl, m.kubeconfig,
 		)
 		if err != nil {
@@ -161,7 +160,7 @@ func (m *MultiLeaseManager) reconcileShards(ctx context.Context) {
 		}
 
 		leaseName := m.leaseName(shardIdx)
-		acquired, err := controller.TryAcquireOrRenew(
+		acquired, err := tryAcquireOrRenew(
 			ctx, leaseName, m.namespace, m.identity, m.ttl, m.kubeconfig,
 		)
 		if err != nil {

@@ -64,6 +64,11 @@ spec:
                 configMapKeyRef:
                   name: kubepivot-controller-config
                   key: worker_pool_size
+            - name: KUBEPIVOT_SHARDS
+              valueFrom:
+                configMapKeyRef:
+                  name: kubepivot-controller-config
+                  key: shards
             - name: LEADER_KEY
               value: "/kubepivot/global/leader"
           resources:
