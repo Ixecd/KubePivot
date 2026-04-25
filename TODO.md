@@ -2,104 +2,39 @@
 
 > 企业级 Kubernetes 研发脚手架 + 部署运维工具链
 > 乾为天、为尊，枢为核心枢纽
-> 当前：v2.3.0 ✅ 全局单一 HA Controller 架构级跃迁
+> 当前：v2.4.0 ✅ 稳固版（Lease 选举 + 状态机缓存 + 性能基线）
 
 ---
 
-## 🗺  路线图总览（v2.4.0 → v2.6.0）
+## 🗺  路线图总览（v2.5.0 → v2.7.0）
 
 ```
-v2.4.0  稳固 v2.3.0          残留问题抹平 + 性能基准首版
-v2.5.0  优化 + 调研          A 演进（client-go 对比）+ B 调研（流量层）
-v2.6.0  流量层实现           Lars 思路落地：节点抽象 + 调度 + Reporter
+v2.4.0 ✅ 稳固 v2.3.0          性能基线 + 边缘问题抹平
+v2.5.0 🚀 A 演进 + B 调研      Lars 思路落地 + client-go 对比 + 流量层设计文档
+v2.6.0 🌊 流量层实现           Lars 思路落地（节点抽象 + 调度 + Reporter）
+v2.7.0 ✨ 自研 Informer        不引入 client-go 的内核工程
+v3.0.0 🌟 完整体               开源社区化 + 100+ 项目规模
 ```
 
 错峰推进：A（控制平面优化）和 B（流量层扩张）不在同一版本撞车。
-A 的根在 v2.4.0 P0「Leader Election 无 etcd 降级」之后自然延伸。
-B 的根在 21 岁那年的 Lars 项目，3 年后再生长出来。
+A 的根在 v2.4.0「Lease 选举」之后自然延伸。
+B 的根在 21 岁那年的 Lars 项目，3 年后接续生长。
 
 ---
 
-## 🔴 v2.4.0 — 稳固 global controller
+## 🚀 v2.5.0 — A 演进 + B 调研
 
-> v2.3.0 打通了架构换血，v2.4.0 的任务是把残留的边缘问题全部抹平。
-> 没有大动作，只有把事情做到位的地方。
->
-> 性能基准首版已落地（docs/design/performance.md），剩下三个 P0/P1。
+> v2.5.0 双线推进：
+> A 路径（控制平面性能优化）拿出 client-go 对比真实数据
+> B 路径（流量层）只产出设计文档不动手，避免精力被切片到 5 个方向
 
-### P0 — Leader Election 无 etcd 降级策略
+**v2.5.0 优化基线**（来自 v2.4.0 实测）：
 
-**现状**：global.go 里 `runGlobalLeaderElection` 当 `ETCD_ENDPOINTS=""` 时降级为单机模式，但 deployment 是 3 副本，三个 pod 各自调用 `runAsLeader`，都自称 Leader。30 分钟稳态实测三 pod 工作分布意外均匀（avg CPU 差距 < 1.5%），但不稳定，仍要解。
-
-- [ ] 无 etcd 时改为：3 副本启动后通过 K8s Lease API 做 leader 选举
-      （K8s 原生，不用 etcd，走 kubectl 而非 client-go）
-- [ ] 或者：检测到无 etcd 直接副本数缩为 1（operator-style）
-- [ ] 真实集群验证有 etcd 场景下 `/kubepivot/global/leader` 争抢逻辑
-
-### P0 — Controller 启动从 etcd 恢复状态机
-
-**现状**：v2.2.0 残留问题，global 模式下状态机（IDLE → RUNNING）的 per-project 语义需重新设计。当前 handleTask 每次都 `state.New` 新建状态机，没利用 etcd 里的历史状态。
-
-- [ ] 设计 global 模式下状态机 key 结构（当前：`kubepivot/<project>/<ns>/state`）
-- [ ] Controller 启动时从 etcd 恢复所有 managed 项目的状态机
-- [ ] handleTask 复用已恢复的状态机实例，而不是每次新建
-
-### P1 — Dockerfile 多架构 GitHub API 限流容错
-
-**现状**：Dockerfile 里 `curl -fsSL https://dl.k8s.io/release/stable.txt` 拉最新 kubectl 版本。GitHub API 无 token 时限流严格（60 次/小时/IP），CI 并发高时易 429。
-
-- [ ] 允许通过 `ARG KUBECTL_VERSION` 显式传版本，避免线上动态查询
-- [ ] 降级逻辑：stable.txt 拉失败 → 用固定 fallback 版本
-
-### P1 — web3-blitz 蓝绿 release 名解析
-
-**现状**：web3-blitz 用蓝绿部署，release 名形如 `web3-blitz-blue` / `web3-blitz-green`，`findReleaseForResource` 只会生成 `web3-blitz-<resource>`，对不上。
-
-- [ ] 识别蓝绿 release 名模式
-- [ ] 或者 resources.yaml 里允许显式声明 `helm-release: <n>` 字段
-
-### ✅ P1 — rbac.yaml 字符串拼接重构（误判，无需执行）
-
-**核查结论**：v2.3.0 已经从根本上消灭这个反模式。
-
-执行的验证：
-- 全仓 `grep 'Sprintf.*"kind: (Role|RoleBinding|ClusterRole)"'` → 0 匹配
-- scaffold/helm.go 中 controller-rbac.yaml 不是被「生成」而是被「清理删除」
-  （v2.3.0 移除 per-project controller chart 时连带清理）
-- controller_installer/templates/rbac.yaml 是 embed.FS 模板，零字符串拼接
-- scaffold 通过 embed.FS 读取所有 helm chart 模板（embed.go）
-
-诚实记录：这条 TODO 是写时基于 grep 看到 "controller-rbac.yaml" 的字符串
-就误判为"在拼接生成它"，实际是 os.Remove 清理。
-v2.4.0 这条任务不为做而做，直接划掉。
-
-- [x] 不做：v2.3.0 已从根本上完成（核查日期 2026-04-25）
-
-### P2 — `kp controller migrate-from-v2.2` 迁移工具
-
-**现状**：v2.2.0 → v2.3.0 目前是手工迁移（helm uninstall + kp controller install + enroll）。用户数为 0 时可以这么做，后面接入更多用户时需要自动化。
-
-- [ ] 扫描所有 ns 里的 `<project>-kubepivot-controller` release
-- [ ] helm uninstall 全部
-- [ ] 删除 `deployments/.../kubepivot-controller/` 目录
-- [ ] 从 `components.yaml` 删除 controller 段
-- [ ] 自动调用 `kp controller install` + enroll
-
-### P2 — 性能基准补全
-
-**现状**：v2.4.0 已落地稳态基准（30 分钟，avg CPU 13.96%，无内存泄露）。剩下四个未做。
-
-- [ ] 自愈延迟基准：并发删 1/3/10 个 Deployment，记录 p50/p95
-- [ ] Watcher 鲁棒性：断网 60s 重连验证
-- [ ] ConfigMap 热加载：100 次幂等更新验证 sha256 去重
-- [ ] 长时间运行（24h）验证
-
----
-
-## 🟡 v2.5.0 — A 演进 + B 调研
-
-> v2.5.0 双线推进：A 路径（控制平面性能优化）拿出 client-go 对比真实数据，
-> B 路径（流量层）只产出设计文档不动手，避免精力被切片到 5 个方向。
+```
+leader 16.93% × 1   = 16.93%   主战场（v2.5.0 优化目标）
+standby 1.0% × 2    =  2.00%   持续选举开销（已接近极限）
+总计                = 18.93%   接近实测 18.92%
+```
 
 ### P0 — Controller 分片（A.1）
 
@@ -116,7 +51,7 @@ controller-2  watch hash(ns)%3==2
 - [ ] Watcher selector 加 namespace 列表过滤
 - [ ] 真实集群 50 项目场景压测（vs v2.4.0 全量 watch 的对比）
 
-**预期收益**：50/100 项目场景下 3 副本各管 1/3，CPU 摊薄到 ~5%。
+**预期收益**：50/100 项目场景下 3 副本各管 1/3，leader CPU 16.93% → ~6%。
 
 ### P0 — Backoff 队列（A.1.5）
 
@@ -134,21 +69,41 @@ backoff 队列里的项目暂停常规 reconcile（避免反复尝试耗资源�
 
 ### P0 — client-go 对比基准（A.2）
 
-为 v2.3.0 的「不引入 client-go」决策提供真实数据。
+为 v2.3.0/v2.4.0 的「不引入 client-go」决策提供真实数据。**这个数据决定 v2.7.0 是否启动**。
 
 - [ ] 单独 fork 出 client-go informer 版本的 controller
 - [ ] 同样的 10 项目稳态 + 50 项目压测
 - [ ] 对比矩阵：CPU / Memory / 镜像体积 / 启动时间 / 复杂度
-- [ ] 数据写入 docs/design/performance.md 的"v2.3.0 vs client-go"章节
+- [ ] 数据写入 docs/design/performance.md 的"v2.4.0 vs client-go"章节
 
 **判断标准**：
-- 如果 CPU 差距 < 5x，KubePivot 永远不引入 client-go
-- 如果 CPU 差距 > 10x，v3.x 加 `--backend=informer` 可选项
-- 介于之间，进一步看规模上限
+
+```
+如果 leader CPU 差距 < 5x（v2.4 16.93% vs client-go 4%+）
+  → KubePivot 永远不引入 client-go
+  → v2.7.0 自研 informer 仍可考虑（追求更低延迟）
+
+如果 client-go 能压到 < 2%
+  → v3.x 加 --backend=informer 可选项
+  → v2.7.0 自研 informer 边际收益变小
+```
+
+### P0 — v2.4.0 移入：性能基准补全（P2 整合）
+
+v2.4.0 release 时移过来的 P2 任务，和 client-go 对比基准一起跑反而更有意义——**同一个 benchmark suite 可以三组数据（v2.3 / v2.4 / v2.5）一次产出**。
+
+- [ ] **自愈延迟基准**（concurrent-chaos.sh）
+      并发删除 1/3/10 个 Deployment，记录 p50/p95 自愈时间
+- [ ] **Watcher 鲁棒性测试**（watch-reconnect.sh）
+      断网 60s 重连，观察心跳守卫触发 + 事件不丢失
+- [ ] **ConfigMap 热加载去重验证**（hot-reload.sh）
+      100 次幂等更新 ConfigMap，确认 sha256 比对真的省掉 99 次 reconcile
+- [ ] **长时间运行（24h）**
+      确认 30 分钟没看到的潜在泄露不会在 24h 暴露
 
 ### P1 — 流量层调研（B.1）
 
-只产出设计文档，**不写代码**。
+**只产出设计文档，不写代码**。
 
 - [ ] 流量层定位：sidecar agent / Service 增强 / 独立 LB controller？
 - [ ] 借鉴 Lars 的哪些设计：节点抽象（host_info）、双队列、Probe、Reporter？
@@ -157,9 +112,25 @@ backoff 队列里的项目暂停常规 reconcile（避免反复尝试耗资源�
 - [ ] 部署形态：每项目一个 LB pod？还是集群唯一？
 - [ ] 产出：docs/design/traffic-layer.md（不少于 500 行设计文档）
 
+### P1 — v2.4.0 移入：kp controller migrate-from-v2.2 迁移工具
+
+v2.4.0 时被排到 P2 的，v2.5.0 顺手做。
+
+- [ ] 扫描所有 ns 里的 `<project>-kubepivot-controller` release
+- [ ] helm uninstall 全部
+- [ ] 删除 `deployments/.../kubepivot-controller/` 目录
+- [ ] 自动调用 `kp controller install` + enroll
+
+### P2 — controller 镜像国内 registry 推送
+
+v2.4.0 期间多次踩 Docker Hub 国内不稳定。需要长期解决方案：
+
+- [ ] 推到 registry.cn-hangzhou.aliyuncs.com / 或类似国内 registry
+- [ ] 改 controller_installer/templates/deployment.yaml 默认 image 路径 OR 支持 `--mirror` 参数
+
 ---
 
-## 🟢 v2.6.0 — 流量层实现（B.2）
+## 🌊 v2.6.0 — 流量层实现（B.2）
 
 > v2.5.0 调研定型后，v2.6.0 落地实现。
 > 预计代码量 ~2000 行（agent + reporter + api），单独成版本不和其他事撞。
@@ -191,7 +162,85 @@ v2.6.0  按调研结论实现，不再讨论方向
 
 ---
 
-## 🔵 v3.0.0 — KubePivot 完整体（推迟到 A+B 都成熟之后）
+## ✨ v2.7.0 — 自研 Handwritten Informer
+
+> 灵感来源：v2.4.0 性能基准跑完后，和小姐讨论时蹦出的"自己写一个轻量
+> informer cache 替代 client-go"想法。
+> 设计哲学：不依赖第三方 heavy 组件、不被社区生态绑架，用最干净最小最
+> 可控的代码实现顶级性能。**KubePivot 真正的内核工程。**
+
+### 为什么独立成版本而不是塞进 v2.5.0
+
+- v2.5.0 P0 client-go 对比基准是这件事的**前提条件**：
+  必须先拿到 client-go 的真实数据，才能判断自研 informer 的边际收益
+- 真正生产可用的 informer 是 800-1500 行 + 2-3 周专注的工程
+  （Kubernetes 自己的 client-go informer 自 2015 年至今仍在打补丁）
+- 塞进 v2.5.0 = 透支 v2.5.0 的优化预算 + 跳过判断流程
+  独立 v2.7.0 = 给这件事应有的尊重
+
+### 前提（必须先满足）
+
+- [ ] v2.5.0 client-go 对比基准已完成，数据已写入 performance.md
+- [ ] v2.5.0 数据判断：自研 informer 的预期边际收益足够大
+       （比如 client-go 还达不到 < 5% CPU，自研可能突破）
+
+### 设计要点
+
+```
+组件清单（核心 4 个）：
+  Informer       List+Watch 主循环
+  Store          内存缓存（按 ns × kind 索引）
+  EventHandler   onUpdate / onDelete 回调
+  StopController 优雅关闭 + 重连
+
+工作流：
+  1. List 全量初始化（带 resourceVersion）
+  2. Watch 监听增删改（基于上一步 rv 续接）
+  3. 事件 → 更新内存 cache → 触发 callback
+  4. 断线重连 + resourceVersion 校对
+  5. periodic resync 防事件丢失（每 10 分钟全量校验）
+
+约束：
+  - 不引入 client-go 任何包
+  - 只用 net/http + encoding/json + 标准库
+  - 镜像体积零增长
+  - 完全 KubePivot 风格的错误处理 + 结构化日志
+```
+
+### 性能目标（基于 v2.5.0 数据校准）
+
+```
+当前 v2.4.0：leader CPU 16.93%，每 8s reconcile burst 89% peak
+
+理想目标：
+  reconcile burst 消失（事件驱动，不再周期性扫描）
+  leader CPU 压到 5~8%（不是 2%——helm rollback 仍然 exec）
+  内存维持 ≤ 50 MiB
+```
+
+### 输出物
+
+- [ ] internal/informer/ 新独立包（~800-1500 行）
+- [ ] 完整 list-watch 协议实现
+- [ ] 单元测试（覆盖率 > 80%）
+- [ ] 集成测试（真实集群 50 项目压测）
+- [ ] docs/design/handwritten-informer.md（设计文档，500+ 行）
+- [ ] performance.md 加入对比章节：v2.4 exec / v2.5 client-go / v2.7 自研
+
+### 风险
+
+- list-watch 的 race condition 处理（List 期间的事件丢失）
+- resourceVersion 边界条件（compaction / too old / 0）
+- ETCD watch event 丢失的恢复（K8s API server 限制）
+
+### 灵感保留
+
+> "这才是 KubePivot 真正的灵魂路线——极简内核 + 手写 informer = 云原生
+> 控制器艺术品。我们不是优化，是降维打击。" —— 小姐，v2.4.0 午饭后
+
+---
+
+## 🌟 v3.0.0 — KubePivot 完整体（推迟到 A+B 都成熟之后）
 
 > 代码质量已经达到 CNCF Sandbox 门槛（v2.0.0 时评估），缺的是社区和 contributors。
 > 但在 A+B 都没成熟前，开源社区化不是优先级。
@@ -205,22 +254,32 @@ v2.6.0  按调研结论实现，不再讨论方向
 
 ### 稳定性 / 规模
 
-- [ ] 100+ 项目规模压测（v2.5.0 验证到 50，v3.x 推到 100+）
+- [ ] 100+ 项目规模压测
 - [ ] kubectl watch 子进程数量控制（如果 50 项目 × 若干 watch = 几百个进程会爆）
-- [ ] client-go 可选集成（保留 exec 默认路径，client-go 作为 `--backend=informer` 可选）
+- [ ] client-go / 自研 informer 可选集成（保留 exec 默认路径）
 
-### 扩展自愈能力（从原 v2.5.0 推迟到这里）
+### 扩展自愈能力
 
-> v2.3.0 的自愈范围仅限"资源缺失"一种情况。
-> v3.0.0 之前补齐 v2.2.0 per-project 模式下的全部自愈能力。
-
-- [ ] drift 治理在 global 模式下的语义（cross-namespace 处理 / Hard/Managed/Exempted 三层分类的 key 结构）
+- [ ] drift 治理在 global 模式下的语义（cross-namespace 处理）
 - [ ] OOM 自愈：global.handleTask 检测 Pod OOMKilled → 触发 `kp doctor` 内存 bump
 - [ ] CrashLoopBackOff 分析：抓日志 → classifyCrashLogs → 决策
 
 ---
 
 ## ✅ 已完成
+
+### v2.4.0（2026-04-25，commit #...）
+
+- [x] K8s Lease API leader 选举（21.7ms 故障转移实测）
+- [x] 状态机缓存 + 并发安全（集群总 CPU -55%，41.88% → 18.92%）
+- [x] Dockerfile kubectl 版本固定 + 网络容错（v1.32.0）
+- [x] Resource.HelmRelease 显式声明（蓝绿场景）
+- [x] README 项目边界声明（Out of Scope）
+- [x] TODO v2.4 → v2.7 三版本路线图
+- [x] v2.7.0 自研 Informer 灵感保留
+- [x] benchmark/ 性能测试框架 + setup.sh + steady-state.sh
+- [x] performance.md 数据章节（v2.3.0 / v2.4.0 对比）
+- [x] rbac.yaml 重构（经核查 v2.3.0 已完成，TODO 误判）
 
 ### v2.3.0（2026-04-24）
 
@@ -230,23 +289,17 @@ v2.6.0  按调研结论实现，不再讨论方向
 - [x] Watcher 层（exec kubectl --watch + 心跳守卫 + 指数退避）
 - [x] Worker Pool（固定大小 goroutine + 黑名单护栏）
 - [x] Namespace 黑名单三道护栏（kube-system 等 5 个系统 ns）
-- [x] kp controller CLI 命令家族（install/uninstall/status/enroll/unenroll/projects）
-- [x] kp deploy 顺带同步 resources.yaml（消灭忘记同步）
-- [x] kp init 剥离 controller（components.yaml + helm.go 清理）
-- [x] helm --history-max=10（防 release secret 撑爆）
-- [x] 真实集群 ~12 秒自愈闭环验证通过
-
-### v2.4.0 已完成（2026-04-25）
-
-- [x] 性能基准首版：30 min 稳态采样 + benchmark/ 目录框架
-       avg CPU 13.96% / pod，avg memory 59 MiB / pod，无内存泄露
-       三 pod 工作分布意外均匀（avg CPU 差距 < 1.5%）
+- [x] kp controller CLI 命令家族
+- [x] kp deploy 顺带同步 resources.yaml
+- [x] kp init 剥离 controller
+- [x] helm --history-max=10
+- [x] 真实集群 ~12 秒自愈闭环验证
 
 ### v2.2.0（2026-04-23）
 
 - [x] 真实集群自愈闭环（per-project 模式）
 - [x] scratch 容器化全量改造
-- [x] kp doctor 集成（OOM / CrashLoopBackOff 分析）
+- [x] kp doctor 集成
 - [x] etcd key dtk/ → kubepivot/ 迁移
 
 ### v2.1.0（2026-04-05）
@@ -256,8 +309,8 @@ v2.6.0  按调研结论实现，不再讨论方向
 
 ### v2.0.0（2026-04-04，commit #329）
 
-- [x] 插件平台（kp plugin install/list/remove）
-- [x] Chaos Mesh 集成（kp chaos inject/list/stop/status）
+- [x] 插件平台
+- [x] Chaos Mesh 集成
 - [x] GitOps Manifesto 文档
 
 ### v1.x 历程
@@ -266,11 +319,12 @@ v2.6.0  按调研结论实现，不再讨论方向
 
 ---
 
-## 开发准则（不写进版本，是永久约束）
+## 开发准则（永久约束）
 
 - **设计先对齐，再动手**。大版本开工前必须列设计清单、逐条拍板。
 - **小步快跑，每步 make dev**。一个 commit 解决一件事。
 - **不搞技术债**。宁可 TODO + 完整设计也不临时方案。
 - **真实集群验证不可跳过**。单测绿 ≠ 能跑。
+- **不为做而做**。"经核查不需要"也是工程产出（v2.4.0 P1 rbac 那条）。
 - **爽感 = 逆势成立**。有争议时诚实对比、帮权衡、让人拍板。
 - **"只保护，不越权"** 是贯穿整个项目的哲学。

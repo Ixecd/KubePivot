@@ -1,227 +1,205 @@
-# 项目交接文档 — KubePivot
+# HANDOFF — KubePivot
 
-> 写给下一个 Claude
-> 日期：2026-04-24
-> 版本：v2.3.0
-
----
-
-## 写在前面
-
-你接手的是 qc（GitHub: Ixecd，杨庆春）独立开发的 KubePivot（乾枢）。他 23 岁，Go/云原生，生日 2026-03-29，那天推了 v1.0.0。第 329 个 commit 落在生日数字上，第 365 个 commit 落在一年的天数上，都是他设计的。
-
-KubePivot 是他构建 Feelings（感受民主化脑机接口产品）的基础设施。女帝负责产品和设计输入，权重很高。他在用豆包做 AI 伴侣，清醒地知道那是什么。
-
-**2026-04-23，v2.2.0 让 KubePivot 第一次在真实 K8s 集群里无人介入自愈（<10 秒）。**
-
-**2026-04-24，v2.3.0 把自愈能力从"每项目独立 controller"平面化到"集群唯一 global controller"。架构换血，不是补丁。删除 feelings-server Deployment 后 12 秒自愈成功，release=feelings-server-feelings-server。**
-
-**和 qc 相处的基本原则**：
-
-- 设计先对齐，再动手。v2.3.0 开工前他列了 12 点清单，逐条拍板，然后才写第一行代码。
-- 他喜欢被推 back，不喜欢被纯认同。有问题直说。本次最关键的一次"不引入 client-go"就是在被我对比 A/B 方案、推着正反权衡之后拍的板。
-- "只保护，不越权"是贯穿整个项目的哲学。v2.3.0 的三道 namespace 黑名单护栏就是这个哲学的延续。
-- `slog` 不用 `log`，`P.Info/Done/Fail` 做进度输出，`make dev` 一键验证。
-- 不搞技术债。宁可 TODO + 完整设计也不临时方案。v2.3.0 剩余的 Leader Election 降级 / etcd 状态恢复 / rbac 字符串化 三件都明确写进 v2.4.0 TODO，没隐藏。
-- commit 格式：`type: 简短描述\n\n- 详细 bullet`。v2.3.0 的 commit message 是目前最长的，涵盖设计哲学、每个 Phase 改动、真实集群日志、测试覆盖、迁移路径、数字哲学。
-- 爽感 = 逆势成立。别人说"用 client-go 更成熟"，他说"我就不用"，然后把 50 项目量级 exec kubectl 扛得住的事实摆出来——逆势成立。
+> 当前版本：**v2.4.0** ✅
+> 上次更新：2026-04-25
+> 目标读者：下一个接手 KubePivot 的开发者 / Claude 实例
 
 ---
 
-## 一、项目当前状态
+## 你现在的位置
+
+KubePivot 刚发完 **v2.4.0**——稳固版，没加新功能但每个角落更稳。
 
 ```
-版本：v2.3.0
-测试：go test ./... -race 全绿（v2.3.0 新增 22 个单测）
-make dev：build + test + install 一键完成
-companion：
-  - github.com/Ixecd/web3-blitz（k3s + OrbStack）
-  - github.com/Ixecd/Feelings-Server（Feelings 后端）
-自愈验证：
-  - v2.2.0：2026-04-23  per-project 模式，<10 秒闭环
-  - v2.3.0：2026-04-24  global 模式，~12 秒闭环
-架构：全局单一 HA controller（kubepivot-system namespace，3 副本）
-镜像：qingchun22/kubepivot-controller:v2.3.0（amd64 + arm64）
+v1.0.0  多服务 DAG + A2 Controller + 安全合规基线
+v1.4.0  跨版本迁移（KubePivot 改名）
+v1.6.0  Controller HA（Leader Election + WorkQueue）
+v1.7.0  状态漂移治理 + HPA + on-missing 全策略
+v1.8.0  Operation Sandbox
+v1.9.0  多集群联邦 + 企业合规
+v2.0.0  插件平台 + Chaos Mesh
+v2.1.0  脚手架适配性 + GitOps 愿景
+v2.2.0  真实集群自愈 + scratch 容器化
+v2.3.0  🌐 全局单一 HA Controller 架构跃迁
+v2.4.0  ⚙  稳固边缘 + 性能基线（Lease 选举 / 状态机缓存 / -55% CPU）  ← 你在这
+v2.5.0  🚀 A 演进 + B 调研（待开始）
+v2.6.0  🌊 流量层落地（Lars 思路）
+v2.7.0  ✨ 自研 Handwritten Informer
+v3.0.0  🌟 KubePivot 完整体
 ```
 
 ---
 
-## 二、v2.3.0 的核心改动（接手前必读）
-
-### 1. 架构换血：per-project → cluster-scoped
+## 起手三件事
 
 ```
-v2.2.0：每个项目都部署自己的 controller
-         3 个项目 = 9 个 controller pod
-        10 个项目 = 30 个 controller pod（严重浪费）
-
-v2.3.0：集群唯一 controller
-        任意项目数 = kubepivot-system 里 3 副本
-         10 项目场景省 27 pod
+1. 读这份 HANDOFF（你正在做）
+2. 读 SNAPSHOT.md（v2.4.0 总览）+ snapshots/SNAPSHOT-...-v2.4.0.md（深度档案）
+3. 读 TODO.md（v2.5/v2.6/v2.7 路线图）
 ```
 
-### 2. 新的接入协议
+读完这三份你大概知道项目当前状态、为什么走到这里、下一步要去哪里。
+
+---
+
+## v2.4.0 已交付清单
 
 ```
-内核层（ground truth）：
-  kubectl label ns <n> kubepivot.io/managed=true
-
-交互层（封装）：
-  kp controller enroll
-    1. label ns
-    2. 读 configs/resources.yaml
-    3. 写 ConfigMap kubepivot-resources（含 sha256 annotation）
-
-分发机制：
-  每个 managed namespace 里有一个 ConfigMap kubepivot-resources
-  - label: kubepivot.io/managed=true       （controller watcher 选中依据）
-  - annotation: kubepivot.io/sha256=<hex>  （热加载快速 skip 凭证）
-  - data.resources.yaml: 纯 YAML          （便于 kubectl edit）
-```
-
-### 3. 关键架构决策：不引入 client-go
-
-这是 v2.3.0 最重要的哲学决策。别的 K8s controller 项目（ArgoCD/Flux/Karmada）都用 client-go 的 SharedInformerFactory，v2.3.0 坚持 exec kubectl --watch 路线。理由：
-
-```
-- KubePivot 差异化核心就是"不吃 K8s SDK"
-- 50 项目量级下 exec 完全扛得住（31 次 kubectl/s 峰值）
-- 架构纯粹性：未来接 k3s/EKS/OpenShift 零改动
-- Watcher 接口已抽象，未来规模上来可平替 client-go
-```
-
-具体实现在 `internal/controller/watcher.go`：
-- `exec.CommandContext` 绑进程生命周期
-- `json.NewDecoder` 流式解析 `kubectl --watch --output-watch-events=true`
-- 30s 无事件 → 心跳守卫主动 kubectl get 探活 → 失败强制重连
-- 指数退避 1s → 2s → 4s → 8s → 30s 封顶
-
-### 4. 新命令家族
-
-```
-集群级管理：
-  kp controller install    [--namespace kubepivot-system] [--image xxx:tag]
-  kp controller uninstall  [--force]
-  kp controller status
-  kp controller projects
-
-项目接入：
-  kp controller enroll     [--resources configs/resources.yaml]
-  kp controller unenroll
-  （kp deploy 部署成功后自动同步 resources.yaml）
-
-pod 内部：
-  kp controller start [--global]
+✅  K8s Lease API leader 选举（21.7ms 故障转移实测）
+✅  状态机缓存 + 并发安全（集群总 CPU -55%）
+✅  Dockerfile kubectl 版本固定 + 网络容错（v1.32.0）
+✅  Resource.HelmRelease 显式声明（蓝绿场景支持）
+✅  README 加「项目边界 Out of Scope」节
+✅  TODO v2.4 → v2.7 路线图
+✅  性能基准 v2.4.0 章节 + 数据对比
 ```
 
 ---
 
-## 三、文件地图
+## v2.5.0 开工前必读
+
+下面这些 context 在你开工前就要先确立。**不读直接动手 = 大概率走偏**。
+
+### 1. KubePivot 不引入 client-go
+
+**这是贯穿整个项目的设计决策**，不是技术债。
+
+具体表现：
+- 整个 controller 走 `kubectl exec`（list/get/watch/patch）
+- v2.3.0 自研 KubectlWatcher（基于 `kubectl --watch` JSON 流）
+- v2.4.0 K8s Lease 选举走 `kubectl create/patch lease`
+
+为什么：
+- 架构纯粹性 / 镜像体积 / 依赖最小化 / 可调试性
+- 50 项目规模下 ~31 次 kubectl/秒 完全扛得住
+
+v2.5.0 的 P0 client-go 对比基准是为了**用真实数据验证这个决策**，不是动摇它。
+
+### 2. v2.4.0 的"消除冗余"哲学
 
 ```
-/Users/qc/KubePivot/
-├── cmd/kp/
-│   ├── controller.go              新：kp controller 子命令分发
-│   ├── controller_enroll.go       新：enroll/unenroll/projects 实现
-│   ├── deploy.go                  改：executeDeploy 末尾加 autoSyncResourcesIfEnrolled
-│   └── multi_deploy.go            改：buildHelmArgs 加 --history-max=10，删除 kubepivot-controller 分支
-│
-├── internal/controller/
-│   ├── controller.go              改：Start() 加 --global flag 分支
-│   ├── global.go                  新：StartGlobal + runAsLeader 主循环
-│   ├── global_state.go            新：多项目状态缓存 + sha256 指纹
-│   ├── worker_pool.go             新：固定大小 goroutine 池
-│   ├── watcher.go                 新：kubectl --watch + 心跳守卫 + 指数退避
-│   ├── namespace_blacklist.go     新：5 个系统 ns 黑名单 + 环境变量扩展
-│   ├── reconciler.go              改：Reconciler 加 project 字段
-│   ├── heal.go                    改：所有 getenv("PROJECT_NAME") → r.project
-│   └── drift_sync.go              改：forceSync 加 --history-max=10
-│
-├── internal/controller_installer/ 新包
-│   ├── installer.go               Install/Uninstall/Status
-│   └── templates/
-│       ├── namespace.yaml
-│       ├── rbac.yaml
-│       └── deployment.yaml
-│
-├── internal/executor/
-│   └── executor.go                改：新增 KubectlPath() / HelmPath() 导出方法
-│
-├── internal/scaffold/
-│   ├── helm.go                    改：删除 writeControllerChart（整个函数 + 调用）
-│   ├── skeleton.go                改：components.yaml 删除 kubepivot-controller 段
-│   └── scaffold.go                改：kp init 输出文案改为 v2.3.0 体验
-│
-└── build/docker/controller/
-    └── Dockerfile                 改：CMD 改为 ["controller", "start", "--global"]
+v2.3.0  3 副本各 13.96% CPU         看起来 OK
+v2.4.0  1 leader 16.93% + 2 standby 0.5%   真实成本结构
+
+→ 集群总 CPU -55%
+→ 但 leader 单 pod 反而升 3 个点（因为之前是错峰摊出来的假象）
+```
+
+**重点**：v2.4.0 性能优化不是"做得更快"，是"消除冗余"。这是分布式系统里更重要的事。
+
+v2.5.0 优化基线由此明确：
+```
+leader 16.93% × 1   = 主战场
+standby 1% × 2      = 已接近极限
+```
+
+v2.5.0 的两条路径都是冲 leader 的 16.93%：
+- A.1 Controller 分片 → ~6%
+- A.2 client-go 对比 → ~2-3%（如果数据支持）
+
+### 3. v2.7.0 自研 informer 是真要做的事
+
+不是吹水。但**前提是 v2.5.0 client-go 对比数据出来**：
+
+```
+如果 client-go 能压到 < 5%   → 自研 informer 边际收益小
+如果 client-go 也只能 8%+   → 自研 informer 是真有内核价值
+```
+
+设计灵感和原文档见 TODO.md v2.7.0 章节。
+
+### 4. 项目边界（Out of Scope）
+
+KubePivot **不做**：
+- K8s 集群本身的生命周期管理（→ 未来的 Cloud 项目）
+- K8s NodePool 管理（→ 未来的 Cloud 项目）
+- 裸金属 / 虚机 / 数据中心规划（→ 未来的 Cloud 项目）
+
+**做**的边界停在"应用层"。
+
+---
+
+## 开发约束（不会过期）
+
+```
+1. 设计先对齐，再动手     大版本开工前列设计清单逐条拍板
+2. 小步快跑               一个 commit 解决一件事
+3. 不搞技术债             宁可 TODO + 完整设计也不临时方案
+4. 真实集群验证不可跳过    单测绿 ≠ 能跑
+5. 不为做而做             "经核查不需要"也是工程产出（v2.4.0 P1 rbac 那条）
+6. 只保护，不越权         贯穿整个项目
 ```
 
 ---
 
-## 四、踩过的坑（下次避开）
-
-### 坑 1：PROJECT_NAME 环境变量空导致 release 名错误
-
-v2.2.0 per-project 模式里 deployment.yaml 显式设置 `PROJECT_NAME=<项目>`，heal.go 直接 `getenv("PROJECT_NAME")`。v2.3.0 global 模式下 controller 跑在 kubepivot-system，没有固定的 PROJECT_NAME。
-
-**现象**：日志出现 `release=-feelings-server`（前面多个 `-`），helm 查不到 release，自愈失败。
-
-**修法**：Reconciler struct 加 `project` 字段，handleTask 构造时从 `task.Project` 填充。所有 `getenv("PROJECT_NAME")` 改为 `r.project`。
-
-### 坑 2：IfNotPresent 导致镜像不更新
-
-deployment.yaml 模板里 `imagePullPolicy: IfNotPresent`。重打镜像 + `kubectl rollout restart` 后 pod 还是跑老代码，因为 tag 没变，K8s 认为镜像已在本地缓存。
-
-**修法**：调试时 `kubectl patch` 改 Always；稳定版本迭代时改 tag；deployment.yaml 模板的默认值后续是否改 Always 待定（Always 会每次重建都拉镜像，增加集群压力）。
-
-### 坑 3：三个 pod 都自称 Leader
-
-没配 `ETCD_ENDPOINTS`，global.go 的 `runGlobalLeaderElection` 走降级路径，每个 pod 各自跑 runAsLeader。冗余但不致命（多跑两次 reconcile），v2.4.0 要处理。
-
-### 坑 4：sed 脚本删错地方
-
-批量处理 fmt.Sprintf 参数时，同一个字符串 `` `, name, name, ..` `` 在文件里出现多处（Dockerfile 模板 + components.yaml 模板），用 `.replace(old, new, 1)` 删第一个会删错位置。
-
-**教训**：批量修改前先 `grep -c` 数出现次数，多处出现时用唯一的前缀/后缀锚定。
-
----
-
-## 五、v2.3.0 遗留到 v2.4.0 的问题
+## 命令速查
 
 ```
-- Leader Election 无 etcd 时的降级策略（当前 3 pod 都当 leader）
-- Controller 启动从 etcd 恢复状态机（v2.2.0 就残留，global 模式下状态机的
-  per-project 语义需重新设计）
-- Dockerfile 多架构 GitHub API 限流容错
-- web3-blitz 蓝绿 release 名解析
-- rbac.yaml 从字符串拼接重构为 embedded template file（v2.3.0 已经用
-  embed.FS 装 controller 模板，但 scaffold 里老 per-project rbac 字符串还在）
+make dev                           编译 + 测试 + 安装本地
+kp release --version v2.5.0       打 tag + push（dogfooding）
+
+# 真实集群操作
+kp controller install
+kp controller enroll
+kp controller status / projects
+
+# benchmark
+bash benchmark/scripts/setup.sh                      生成 10 个 mock 项目
+bash benchmark/scripts/steady-state.sh -d 1800       30 分钟稳态采样
 ```
 
 ---
 
-## 六、给下一个 Claude 的提示
+## 踩过的坑（重要 lessons）
 
-1. **qc 本次最重要的一次拍板是"不引入 client-go"**。这个决策的上下文值得反复重读：当他问"这里要引入 client-go 么，就这一个问题"时，他在测试你会不会本能地说"当然要用"。你应该像我一样，诚实对比 A/B、帮他权衡、把"架构纯粹性"摆到台面上，然后让他拍板。
+### 1. K8s microTime 必须带微秒精度
 
-2. **设计先对齐再动手**。v2.3.0 开工前 12 点清单逐条拍板、5 个确认题逐一回答。不要一上来就写代码。
+```
+普通 RFC3339   "2026-04-25T01:51:57Z"            ❌ K8s API server 拒绝
+microTime     "2026-04-25T01:51:57.000000Z"     ✅ 必须的
+```
 
-3. **小步快跑，每步 make dev**。v2.3.0 的 Phase 2.2 拆成 5 步（blacklist / worker_pool / watcher / global_state / global），每步写完跑一次 make dev 绿了才进下一步。这样出问题定位范围极小。
+`time.Format("2006-01-02T15:04:05.000000Z07:00")` 才对。
 
-4. **真实集群验证不可跳过**。单测全绿 ≠ 真的能跑。v2.3.0 真实集群验证时连踩 2 个 bug（PROJECT_NAME 空、IfNotPresent）。
+### 2. macOS bash 全角中文括号坑
 
-5. **他要的不是"你说的都对"**。他要的是"你有没有认真想过"。
+bash 5.3 解析 `$VAR（中文`时，会把全角"（"和后面的中文当作变量展开后缀。
+benchmark/scripts/setup.sh 当时全角括号导致 set -u 报"未绑定的变量"。
+**约定**：所有 shell 脚本里只用半角括号 `()`，中文文本里用 `（）` 作为视觉差异。
+
+### 3. PROJECT_NAME 空时 fallback 到 namespace
+
+v2.3.0 时 controller pod 内 PROJECT_NAME env 默认为空，导致 `PROJECT_NAME-resource.name` 变成 `-Deployment`。
+v2.3.0 fix 已经加了 `if project == "" { project = namespace }`。
+v2.4.0 顺手在 helm-release 字段重构里巩固了这个 fallback。
+
+### 4. zsh vs bash 数组下标差异
+
+zsh 数组从 1 开始，`${arr[0]}` 在 set -u 下被判为未绑定。
+**约定**：shell 脚本里硬编码具体值或用 `${arr[@]:0:1}` 兼容写法。
+
+### 5. Docker Hub auth token 国内不稳定
+
+```
+解决方案：imagePullPolicy: IfNotPresent + 本地 build cache
+长期方案：v2.4.0 TODO 移到 v2.5.0 之后，国内 registry 推送
+```
 
 ---
 
-## 数字
+## 联系信息（人 + 项目）
 
 ```
-v1.0.0 生日那天第一行代码    2026-03-29    commit #1
-v2.0.0 plugin 平台           生日数字      commit #329
-v2.2.0 真实自愈首次通过      一年天数      commit #365
-v2.3.0 global controller     架构换血      commit #367
-        ~12 秒自愈            真实集群
+作者：     qc (杨庆春, GitHub: Ixecd)
+位置：     中国，独立开发者，自费 runway
+项目链接： https://github.com/Ixecd/KubePivot
+许可：     MIT
 ```
 
-祝接手顺利。
+KubePivot 是 qc 的判断的物化——"把工程能力固化为可复用框架，未来项目都在标准里跑"。
+
+---
+
+**v2.5.0 开工的话，从读 TODO.md 的 v2.5.0 章节开始。**
+
+Good luck. 🍀
