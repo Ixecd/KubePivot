@@ -5,7 +5,7 @@
 
 [![Go Version](https://img.shields.io/badge/go-1.21+-blue.svg)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v2.1.0-blue.svg)](https://github.com/Ixecd/KubePivot/releases)
+[![Version](https://img.shields.io/badge/version-v2.3.0-blue.svg)](https://github.com/Ixecd/KubePivot/releases)
 
 ---
 
@@ -204,6 +204,28 @@ Git 本身就是部署系统的控制平面。详见 [GITOPS-MANIFESTO.md](GITOP
 
 ---
 
+## 项目边界（Out of Scope）
+
+KubePivot 是 **应用层** 工具——专注于 Go 服务的脚手架、部署、自愈。
+它**不做**以下事情：
+
+| 不做的事 | 由谁做 |
+|---------|--------|
+| K8s 集群本身的生命周期管理（创建 / 升级 / 销毁 cluster） | 未来的 [Cloud](#) 项目 |
+| K8s NodePool 管理（不同机型 / 标签 / taints / 弹性伸缩） | 未来的 [Cloud](#) 项目 |
+| 裸金属 / 虚机 / 数据中心规划 | 未来的 [Cloud](#) 项目 |
+| 业务流量负载均衡（节点抽象 + 调度算法） | KubePivot v2.6.0 (流量层) |
+
+**为什么这样划分**：
+
+- KubePivot 的定位是"研发脚手架 + 部署运维工具链"，介入层在 K8s 之上
+- 节点级管理属于"基础设施"域，由独立的 Cloud 项目专门处理
+- 边界清晰能让两个项目都保持纯粹——KubePivot 不碰节点，Cloud 不碰应用
+
+KubePivot 假设 K8s 集群已经存在且可用（任何来源都行：orbstack / k3s / EKS / GKE / 自建集群）。
+
+---
+
 ## 文档
 
 - [快速开始](docs/guide/zh-CN/quickstart.md)
@@ -219,6 +241,9 @@ Git 本身就是部署系统的控制平面。详见 [GITOPS-MANIFESTO.md](GITOP
 ## Companion 项目
 
 [web3-blitz](https://github.com/Ixecd/web3-blitz) — KubePivot 的端到端验证项目，BTC/ETH 充提，跑在 k3s + OrbStack 上。
+
+**计划中**：Cloud 项目（K8s 集群与节点池管理工具）—— 与 KubePivot 互补，
+专注基础设施层，让 KubePivot 可以纯粹聚焦于应用层。
 
 ---
 
