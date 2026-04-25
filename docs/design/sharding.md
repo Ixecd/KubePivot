@@ -449,9 +449,162 @@ KubePivot v2.5.0：拒绝分布式状态机
 
 ---
 
-## 八、未做事项与未来演进
+## 八、高可用边界与已知 trade-off
 
-### 8.1 性能立方体测试方法论（v2.5.1 任务）
+> 这一节回答几个常被问的问题，把"高可用"这个词的边界说清楚。
+> 真正的工程承诺不是"无所不能"，而是"在已知边界里靠谱"。
+
+### 8.1 高可用承诺（已验证）
+
+```
+✅ Pod 故障 → 其他 pod 在 ~10 秒内接管该 pod 持有的 shard
+   验证：v2.5.0 Step 3 集成测试，杀 pod 后 lease 重新分布稳定
+   
+✅ Pod 重启 / 滚动升级 → 新 pod 加入 lease 抢占，自然恢复
+   验证：rollout restart 测试，分片在 ~30 秒内重新平衡
+   
+✅ Leader lease 切换 → 21.7 ms 内新 leader 接管 sweeper 任务
+   验证：v2.4.0 集成测试
+   
+✅ Reconcile 幂等 → 任何 race 期间的"重复处理"都不会数据损坏
+   保证：reconcile 检测资源缺失才修复，已存在直接 return
+```
+
+### 8.2 4 个常见边角问题
+
+#### Q1：如果某 shard 的所有持有者都死了，那个 shard 的项目怎么办？
+
+```
+答：3 副本同时挂 = K8s 集群层面的故障
+    KubePivot 不解决这个——这是 K8s 自己的问题（节点故障 / etcd 故障）
+    
+    边界明确：
+      KubePivot 假设"至少有 1 个 controller pod 健康运行"
+      这个假设由 K8s Deployment 的副本数 + 调度策略保证
+      
+    KubePivot 不做的：
+      ❌ 不实现自己的"集群健康检测 + 自我恢复"
+      ❌ 不依赖外部协调器（etcd 可选 fallback）
+      ❌ 不做"controller 跨集群备份"
+```
+
+#### Q2：分片切换的 10 秒空窗期，那个 shard 的项目状态怎么办？
+
+```
+答：分两种情况：
+
+  情况 A — 项目处于 IDLE 稳态（绝大多数时候）：
+    短暂 10 秒"无人 reconcile"完全无害
+    新 owner 接管后，下一个 8s reconcile cycle 自然恢复对账
+    
+  情况 B — 项目正处于 SANDBOX 部署链路中（罕见，几秒窗口）：
+    v2.5.0 没有"task 跨 pod 转交"机制
+    被切换的 task 直接 drop（按 Q5 决策）
+    新 owner 从 reconcile loop 重新检测项目状态
+    幂等地完成或回滚到 IDLE
+    
+    最坏情况：用户的一次 kp deploy 命令在切换期间没收到正常返回
+              但状态机仍会被新 owner 收尾（IDLE 或 RESTORING）
+              用户重试 kp deploy 即可
+```
+
+#### Q3：分布不均（Pod B 持 4 个 shard / Pod C 持 2 个）会不会单点过载？
+
+```
+答：会有局部不均，这是 v2.5.0 的已知 trade-off
+
+  根因：
+    配额公式 ceil(N/replicas) = 4
+    启动 race：先抢的 pod 拿满 4 个，最后一个只剩 2 个
+    叠加 FNV hash 在连号字符串上分布不完美 (4-7 个项目 / shard)
+    
+  实测影响（50 项目场景）：
+    单 pod 工作量比可能从 1.0:1.0:1.0 漂到 1.5:1.5:1.0
+    最重的 pod CPU peak 可能短暂达到 100%
+    
+  v2.5.0 的应对：
+    依赖 K8s CPU limits 的"短暂超额容忍"
+    + reconcile 幂等性保证最终一致
+    
+  v2.5.1 的优化方向（"性能立方体"任务）：
+    QuotaPerPod 改 floor 而不是 ceil（强制更均衡）
+    Hash 算法对比：FNV vs xxhash
+    Rebalance 协议（让持有过多的 pod 主动释放）
+    
+  详见第 9.1 节
+```
+
+#### Q4：Lease 抖动期间，有没有可能两个 pod 同时认为自己是某 shard 的 owner？
+
+```
+答：理论上可能，启动 race window 内观察到过
+
+  现象：
+    3 副本同时启动时，都尝试 create lease shard-0
+    K8s API 内部去重 race 时，每个客户端都误以为自己赢了
+    →  "🎯 已抢占 shard lease shard=0"  3 条日志同时出现
+    然后下一轮探测自我纠正：
+    →  "失去 shard lease shard=0"      2 条日志几秒后出现
+    
+  最坏后果：
+    几秒钟内三个 pod 都在为同一项目跑 reconcile
+    多消耗 ~3x kubectl exec 调用
+    
+  为什么不修：
+    reconcile 幂等性保证：
+      检测到资源存在 → return（无副作用）
+      检测到资源缺失 → helm rollback（同一资源被 rollback 多次也无害）
+    "race 期间的多余 reconcile"是分布式系统本质特征，不是 bug
+    
+  v2.5.0 的工程判断：
+    用更强的协议（比如 raft）能消除 race，但引入"分布式状态机的深坑"
+    简单 + 幂等 + 容忍 race > 完美一致性
+```
+
+### 8.3 不在范围内的"高可用"
+
+KubePivot v2.5.0 **明确不做**这些事——它们或者属于 K8s 本身的范畴，或者属于运维平台的范畴：
+
+```
+❌ 跨可用区 / 跨集群的 controller 备份
+   这是 K8s 多集群 federation 范畴
+   
+❌ 数据库 / 持久化数据的 HA
+   见 GITOPS-MANIFESTO.md "适用边界"——KubePivot v2.5.0 不管 stateful
+   v2.8.0 引入 protect 机制后会有一层保护，但不是数据库 HA
+   
+❌ 网络分区时的 split-brain 处理
+   依赖 K8s API server 的强一致性
+   K8s API 不可用时 KubePivot 整体停摆，这是合理的
+   
+❌ 0 秒切换 / 0 丢失
+   不可能。lease 协议固有 5-15 秒切换窗口
+   KubePivot 用 reconcile 幂等性兜住，不追求 0 窗口
+```
+
+### 8.4 高可用对比（v2.4.0 vs v2.5.0）
+
+| 维度 | v2.4.0（单 leader） | v2.5.0（N 分片） |
+|------|--------------------|--------------------|
+| Pod 故障恢复 | 21.7 ms（leader 切换） | ~10 秒（shard 重洗） |
+| 单 pod 极限承载 | 受 limits 500m 制约 | 同上，但只承担 1/N |
+| 50 项目下 leader CPU | ~84%（外推，接近 limits） | 单 pod 46%（实测健康） |
+| Reconcile 中断时长 | leader 切换瞬间 | shard 切换 ~10 秒 |
+| 适合规模 | 1-30 项目 | 30-200 项目 |
+| 数据一致性 | 强（单 leader） | 最终一致（race 容忍） |
+
+**v2.5.0 牺牲了"瞬时切换"换取"水平扩展"** —— 这是符合 KubePivot 设计哲学的取舍：
+
+```
+"我们不追求每个维度都最优，只追求在自己擅长的范围里靠谱"
+```
+
+
+---
+
+## 九、未做事项与未来演进
+
+### 9.1 性能立方体测试方法论（v2.5.1 任务）
 
 当前性能数据**只覆盖了一个组合**：50 项目 / 3 副本 / N=10。
 
@@ -493,7 +646,7 @@ KubePivot v2.5.0：拒绝分布式状态机
    - Hash 算法对比：FNV vs xxhash vs murmur3
 ```
 
-### 8.2 v2.5.1 其他持续改进
+### 9.2 v2.5.1 其他持续改进
 
 ```
 Backoff 队列（A.1.5）
@@ -509,12 +662,12 @@ v2.4 P2 移入：concurrent-chaos / watch-reconnect 脚本验证
   正式跑出 p50/p95 数据补全
 ```
 
-### 8.3 v2.6.0：流量层（B.1 + B.2）
+### 9.3 v2.6.0：流量层（B.1 + B.2）
 
 下一个真 minor tag。Lars 思路在流量调度层完整落地。
 设计草案见 `docs/design/traffic-layer-draft.md`（待补）。
 
-### 8.4 v2.7.0：自研 Informer（watcher 框架开销的根本解法）
+### 9.4 v2.7.0：自研 Informer（watcher 框架开销的根本解法）
 
 ```
 v2.7.0 自研 Informer 设计目标：
@@ -529,9 +682,9 @@ v2.7.0 自研 Informer 设计目标：
 
 ---
 
-## 九、附录
+## 十、附录
 
-### 9.1 配置参考
+### 10.1 配置参考
 
 ```bash
 # Controller 部署时通过 ConfigMap 注入
@@ -550,7 +703,7 @@ kubectl create configmap kubepivot-controller-config \
       key: shards
 ```
 
-### 9.2 监控分片状态
+### 10.2 监控分片状态
 
 ```bash
 # 查看每个 shard lease 的归属
@@ -566,7 +719,7 @@ kubectl logs -n kubepivot-system -l app=kubepivot-controller --tail=100 \
   | grep -E "🧩|🎯|🧹"
 ```
 
-### 9.3 故障转移演练
+### 10.3 故障转移演练
 
 ```bash
 # 杀一个 pod，观察 shard 重洗
@@ -582,7 +735,7 @@ kubectl get lease -n kubepivot-system | grep shard
 
 实测：~10 秒内某个 pod 抢占空缺 lease，分片重新分布稳定。
 
-### 9.4 算 namespace 落到哪个 shard
+### 10.4 算 namespace 落到哪个 shard
 
 ```python
 def fnv32a(s):
