@@ -1,0 +1,26 @@
+docs(design): decision-stack 加 5.4 章节 — 与 k9s / kubectl 的关系
+
+调研 k9s（v0.50+，K8s 生态成熟工具）后明确 KubePivot 与 k9s 的关系：
+
+  k9s          stateless 工具，更好地"操作 K8s"
+  KubePivot    stateful 工具，重新定义"部署是什么"
+  
+  k9s 解决"kubectl 太麻烦"
+  KubePivot 解决"GitOps 部署该怎么做对 + 智能决策"
+  
+  两者在不同 niche 共存，可以同时用：
+  - kubectl 写脚本 / CI/CD
+  - k9s 日常观察 / debug
+  - KubePivot 部署 / 迁移 / 蓝绿 / 自愈 / 决策
+
+新增内容（~30 行）：
+- 三工具对比表
+- 典型组合工作流
+- 设计哲学差异
+
+为 v3.0 README 重写时的"友邻工具"叙事打地基。
+
+工程意义：
+  KubePivot 不焦虑、不竞争、不互斥
+  与 k9s 解决不同问题，定位清晰
+  这种"明确定位"是 v3.0 release 时对外叙事的基础

@@ -520,6 +520,32 @@ v2.7 是三层栈的"基础设施层"：
 
 ---
 
+### 5.4 与 k9s / kubectl 的关系
+
+KubePivot 不替代 k9s 或 kubectl。三者解决不同问题，可以同时用。
+
+| 工具 | 做什么 | 不做什么 |
+|------|--------|----------|
+| kubectl | K8s API 的官方 CLI | 不持久化用户意图 |
+| k9s | 交互式实时观察 + 临时操作 | 不做事务性变更 / 不持久化 |
+| KubePivot | GitOps 部署 + 状态机决策 | 不替代日常监控 |
+
+典型组合工作流：
+- kubectl: 写脚本 / CI/CD pipeline / 一次性命令
+- k9s: 日常观察集群、debug pod、查 logs
+- KubePivot: 部署 / 迁移 / 蓝绿 / 自愈 / 决策
+
+设计哲学差异：
+- k9s 是 stateless 工具（更好地"操作 K8s"）
+- KubePivot 是 stateful 工具（重新定义"部署是什么"）
+- k9s 走"工具的工具"路线
+- KubePivot 走"工具 → 决策系统"路线（v3.0 三层栈）
+
+不焦虑、不竞争、不互斥。
+KubePivot 与 k9s 解决不同问题，在不同 niche 共存。
+
+---
+
 ## v3.0 后的展望
 
 ```
