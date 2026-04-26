@@ -1,12 +1,18 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/Ixecd/kubepivot/internal/controller"
+	"github.com/Ixecd/kubepivot/internal/executor"
+	"github.com/Ixecd/kubepivot/internal/route"
 	"github.com/Ixecd/kubepivot/internal/state"
 	"github.com/google/uuid"
 )
@@ -497,4 +503,110 @@ func writeSandboxSession(session *SandboxSession, root string) {
 func cleanSandboxSession(sandboxID, root string) {
 	path := filepath.Join(root, ".kp", "sandbox", sandboxID+".json")
 	os.Remove(path)
+}
+
+// runBlueGreenSwitch 在 COMMITTING 阶段执行蓝绿流量切换。
+//
+// 流程：
+//  1. 读取 configs/resources.yaml
+//  2. 检查 Traffic 字段——未配置 / 不是 blue-green → 跳过（return nil）
+//  3. 构造 Provider（自动检测或显式 kind）
+//  4. ApplyRoutes 切换流量
+//  5. 等 Pod ready（health check）
+//
+// 任何步骤失败都返回 error，由调用方触发 RESTORING。
+//
+// 不打印 "跳过" 日志——蓝绿不是必选项，不配置就静默放过。
+func runBlueGreenSwitch(cfg *deployConfig, root string) error {
+	resourcesPath := filepath.Join(root, "configs", "resources.yaml")
+	if _, err := os.Stat(resourcesPath); errors.Is(err, fs.ErrNotExist) {
+		return nil // 没有 resources.yaml = 老项目，跳过
+	}
+	rc, err := controller.LoadResources(resourcesPath)
+	if err != nil {
+		return fmt.Errorf("读取 resources.yaml 失败: %w", err)
+	}
+
+	if !rc.HasBlueGreen() {
+		return nil // 未启用，安静跳过
+	}
+
+	ctx := context.Background()
+	provider, err := route.ProviderForKind(ctx, rc.Traffic.Kind)
+	if err != nil {
+		return fmt.Errorf("流量层 provider 不可用: %w", err)
+	}
+	P.Info("🔀", fmt.Sprintf("蓝绿流量切换 (provider=%s)", provider.Name()))
+
+	// yaml route → route.Route
+	routes := make([]route.Route, 0, len(rc.Traffic.Routes))
+	for _, r := range rc.Traffic.Routes {
+		routes = append(routes, route.Route{
+			Service: r.Service,
+			Weight:  r.Weight,
+		})
+	}
+
+	// 解析目标 Ingress / HTTPRoute 的 ns + name
+	ns := cfg.namespace
+	if rc.Traffic.Refs.Namespace != "" {
+		ns = rc.Traffic.Refs.Namespace
+	}
+	name := rc.Traffic.Refs.Name
+
+	P.Start("⚡", fmt.Sprintf("切换流量: %s/%s", ns, name))
+	if err := provider.ApplyRoutes(ctx, ns, name, routes); err != nil {
+		P.Fail("切流失败")
+		return fmt.Errorf("ApplyRoutes 失败: %w", err)
+	}
+	P.Done("流量切换完成")
+
+	// Pod ready 健康判定
+	timeoutSec := rc.Traffic.Validation.PodReadyTimeoutSec
+	if timeoutSec <= 0 {
+		timeoutSec = 60
+	}
+
+	var greenService string
+	for _, r := range routes {
+		if r.Weight == 100 {
+			greenService = r.Service
+			break
+		}
+	}
+	if greenService == "" {
+		// 蓝绿场景应该有 weight=100，没有也不阻塞
+		return nil
+	}
+
+	P.Start("🏥", fmt.Sprintf("等待 %s Pod ready (timeout=%ds)", greenService, timeoutSec))
+	if err := waitDeploymentReady(ctx, ns, greenService, time.Duration(timeoutSec)*time.Second); err != nil {
+		P.Fail("Pod ready 超时")
+		return fmt.Errorf("waitDeploymentReady: %w", err)
+	}
+	P.Done("Pod ready")
+
+	return nil
+}
+
+// waitDeploymentReady 轮询等待 Deployment 完全 ready。
+//
+// 实现：用 kubectl rollout status，与项目其他地方一致。
+// 蓝绿约定：deployment 名等于 service 名（后缀法）。
+func waitDeploymentReady(ctx context.Context, ns, name string, timeout time.Duration) error {
+	timeoutSec := int(timeout / time.Second)
+	if timeoutSec < 5 {
+		timeoutSec = 5
+	}
+	e := executor.GetExecutor()
+	_, err := e.Kubectl(ctx, "",
+		"rollout", "status",
+		"deployment", name,
+		"-n", ns,
+		fmt.Sprintf("--timeout=%ds", timeoutSec),
+	)
+	if err != nil {
+		return fmt.Errorf("kubectl rollout status: %w", err)
+	}
+	return nil
 }

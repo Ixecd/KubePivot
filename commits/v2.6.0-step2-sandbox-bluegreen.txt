@@ -1,0 +1,71 @@
+feat(sandbox): v2.6.0 P0 Step 2 — Sandbox 蓝绿流量切换接入
+
+承接 commit 786b59d (Step 1) 完成的 internal/route 包，本次将其
+接入 kp sandbox commit 命令，实现完整蓝绿部署链路。
+
+接入点设计：
+  - 不动状态机（state.go 不改）
+  - 在 sandbox.go COMMITTING 阶段的 commitOK 检查后插入流量切换
+  - 失败复用现有 runSandboxRestore（与 v1.8.0 风格一致）
+
+完整流程：
+  LOCKED → SNAPSHOTTING → SIMULATING → COMMITTING:
+    Step 1: runSandboxCommit (v1.8.0 既有，跑 helm + migrate)
+    Step 2: runBlueGreenSwitch (v2.6 新增) ← 本次接入点
+  → RUNNING  /  失败 → RESTORING → IDLE
+
+代码改动：
+
+internal/controller/resources.go (~80 行新增)
+  - ResourcesConfig 加 Traffic 字段（向后兼容，nil 时 v2.5 行为不变）
+  - 新增 4 个 struct: Traffic / TrafficRefs / TrafficRoute / TrafficValidation
+  - 新增 HasBlueGreen() 方法（v2.6 启用判定的统一入口）
+
+internal/controller/resources_v26_test.go (~95 行新增)
+  - TestResourcesConfig_HasBlueGreen 5 个 case 全 PASS
+    valid blue-green / no traffic / wrong strategy /
+    missing refs.name / all zero weights
+
+cmd/kp/sandbox.go (~110 行新增)
+  - imports 加 5 个: context / errors / io/fs / controller / executor / route
+  - runSandbox 主流程在 commitOK 后插入流量切换调用（9 行）
+  - 文件末尾追加 runBlueGreenSwitch 函数（~75 行）
+  - 文件末尾追加 waitDeploymentReady 辅助函数（~20 行）
+
+resources.yaml v2.6 schema:
+  traffic:
+    kind: Ingress              # 可选，省略自动检测
+    strategy: blue-green       # v2.6.0 仅蓝绿
+    refs:
+      name: wallet-ingress
+    routes:
+      - service: wallet-service-blue
+        weight: 100
+      - service: wallet-service-green
+        weight: 0
+    validation:
+      podReadyTimeoutSec: 60   # 默认 60s
+
+设计原则核对：
+  ✓ 不引入 client-go：通过 route 包间接走 executor.GetExecutor()
+  ✓ 不动 state.go：COMMITTING 内顺序两步完成
+  ✓ 失败统一 RESTORING：复用现有 runSandboxRestore
+  ✓ 默认沉默：不配置 traffic 字段就不打"跳过"日志
+  ✓ "只保护，不越权"：完整保留用户字段（route 包 buildXxxFromRoutes）
+
+测试覆盖：
+  - go build ./... 全编译通过
+  - make dev 全绿
+  - cmd/kp 包测试 2.897s（包含 sandbox.go 的间接覆盖）
+  - internal/controller 包 5 个新 case 全 PASS
+  - internal/route 27 个 case (Step 1 来) 仍全 PASS
+
+下一步：
+  Step 3 (commit 402): docs/example-blue-green/ 独立 demo 工程
+  Docs (commit 403):    traffic-layer-draft.md → traffic-layer.md
+  Release (commit 404): kp release v2.6.0
+
+工程意义：
+  v2.6.0 的"接入手术"完成
+  从这个 commit 开始，KubePivot 真正具备蓝绿能力（不只是抽象设计）
+  下次任何项目用 kp init + 写 traffic 字段就能用

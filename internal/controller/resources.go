@@ -33,6 +33,102 @@ type Resource struct {
 
 type ResourcesConfig struct {
 	Resources []Resource `yaml:"resources"`
+
+	// v2.6.0：流量层配置（蓝绿部署）
+	// 不声明则 v2.5.0 行为不变（仅 reconcile 资源列表）
+	Traffic *Traffic `yaml:"traffic,omitempty"`
+}
+
+// Traffic 是 resources.yaml 的 v2.6 流量层配置入口。
+//
+// 完整示例：
+//
+//	traffic:
+//	  kind: Ingress              # 可选：Ingress / Gateway / 不写=自动检测
+//	  strategy: blue-green       # v2.6.0 仅 blue-green
+//	  refs:
+//	    name: wallet-ingress     # Ingress 或 HTTPRoute 资源名
+//	  routes:
+//	    - service: wallet-service-blue
+//	      weight: 100
+//	    - service: wallet-service-green
+//	      weight: 0
+//	  validation:
+//	    podReadyTimeoutSec: 60
+type Traffic struct {
+	// Kind 流量层后端类型（"Ingress" / "Gateway" / "GatewayAPI" / 空）
+	// 空时自动检测：Gateway API 优先，Ingress 兜底
+	Kind string `yaml:"kind,omitempty"`
+
+	// Strategy 部署策略，v2.6.0 仅支持 "blue-green"
+	Strategy string `yaml:"strategy"`
+
+	// Refs 流量层资源引用
+	Refs TrafficRefs `yaml:"refs"`
+
+	// Routes 路由规则列表
+	// 蓝绿场景：恰好两个 entry，weight 一个 100 一个 0
+	Routes []TrafficRoute `yaml:"routes"`
+
+	// Validation 部署后健康度验证参数
+	Validation TrafficValidation `yaml:"validation,omitempty"`
+}
+
+// TrafficRefs 流量层资源引用。
+type TrafficRefs struct {
+	// Name 流量层资源名（Ingress 或 HTTPRoute）
+	Name string `yaml:"name"`
+
+	// Namespace 流量层资源所在 namespace（一般同项目 ns，可省略）
+	Namespace string `yaml:"namespace,omitempty"`
+}
+
+// TrafficRoute 单条路由规则。
+//
+// 注：与 internal/route.Route 是双层结构：
+//   - TrafficRoute 是 yaml 解析层
+//   - route.Route 是流量层 Provider 接口的中间表示
+//
+// 两者通过 cmd/kp/sandbox.go 的 runBlueGreenSwitch() 转换。
+type TrafficRoute struct {
+	// Service 目标 K8s Service 名
+	Service string `yaml:"service"`
+
+	// Weight 流量权重 [0, 100]
+	Weight int32 `yaml:"weight"`
+}
+
+// TrafficValidation 部署后的健康度验证参数。
+type TrafficValidation struct {
+	// PodReadyTimeoutSec Pod ready 等待超时秒数（默认 60）
+	PodReadyTimeoutSec int `yaml:"podReadyTimeoutSec,omitempty"`
+}
+
+// HasBlueGreen 判断 ResourcesConfig 是否启用蓝绿流量切换。
+//
+// 满足条件：
+//   - Traffic 字段不为 nil
+//   - Traffic.Strategy == "blue-green"
+//   - Traffic.Refs.Name 非空
+//   - 至少一个 Route weight > 0
+//
+// kp sandbox commit 在 COMMITTING 阶段调用此方法决定是否执行流量切换。
+func (cfg *ResourcesConfig) HasBlueGreen() bool {
+	if cfg.Traffic == nil {
+		return false
+	}
+	if cfg.Traffic.Strategy != "blue-green" {
+		return false
+	}
+	if cfg.Traffic.Refs.Name == "" {
+		return false
+	}
+	for _, r := range cfg.Traffic.Routes {
+		if r.Weight > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // Detector K8s 资源检测接口，测试时可注入 mock
