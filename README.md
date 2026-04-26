@@ -80,11 +80,51 @@ kp diff --to-env prod              # 环境间配置对比
 ```
 
 ### 蓝绿发布
+
+KubePivot 提供两种蓝绿模式，按场景选择：
+
+#### 命令式（v2.0+，原有）
+
 ```bash
-kp promote --service wallet        # 切换流量
+kp deploy --bluegreen              # 部署到非活跃 slot
+kp promote --service wallet        # 手动切换流量
 kp warmup --service wallet \
   --steps 10,50,100 --interval 2m,5m --err-threshold 0.01
 ```
+
+#### 声明式（v2.6+，推荐 GitOps 场景）
+
+在 `configs/resources.yaml` 声明流量配置：
+
+```yaml
+traffic:
+  kind: Ingress              # 可选：Ingress / Gateway / 自动检测
+  strategy: blue-green
+  refs:
+    name: wallet-ingress
+  routes:
+    - service: wallet-blue
+      weight: 100
+    - service: wallet-green
+      weight: 0
+```
+
+切换流量：
+
+```bash
+# 修改 routes 的 weight（blue: 100→0, green: 0→100）
+vim configs/resources.yaml
+
+# 触发 sandbox commit：
+#   LOCKED → SNAPSHOTTING → SIMULATING → COMMITTING → RUNNING
+#   COMMITTING 内部分两步：helm upgrade + 流量切换
+#   失败自动 RESTORING
+kp sandbox commit
+```
+
+完整 demo：[`docs/example-blue-green/`](docs/example-blue-green/README.md)（< 2 分钟跑通）。
+
+设计文档：[`docs/design/traffic-layer.md`](docs/design/traffic-layer.md)。
 
 ### 数据库迁移
 ```bash

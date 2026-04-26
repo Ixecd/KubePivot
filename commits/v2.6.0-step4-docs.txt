@@ -1,0 +1,64 @@
+docs: 流量层文档收尾 + CHANGELOG 创建
+
+承接 commits 786b59d / f0244cc / ea48e5c（Step 1/2/3）后的最终文档收尾。
+
+修改清单：
+
+1. docs/design/traffic-layer-draft.md → docs/design/traffic-layer.md
+   - 重命名（去 -draft 后缀）
+   - 内容大改：从"设计草案"改为"已实施"
+     - 删掉 "待补充" 标记
+     - 新增"v2.6.0 实施完成"章节
+     - 引用 internal/route/ 实际代码位置
+     - 引用 example-blue-green/ demo 工程
+     - 测试覆盖统计（27 个 sub-cases）
+   - ~430 行（原 ~600 草案行精简，去掉冗余设计 Q）
+
+2. docs/design/state-machine.md
+   - 新增"## v2.6 流量层与状态机协同" 章节（~50 行）
+   - 说明 COMMITTING 内分两步执行（Q10 拍板）
+   - 引用 cmd/kp/sandbox.go 的 runBlueGreenSwitch
+   - 包含设计取舍解释（为什么不加新状态）
+
+3. docs/design/architecture.md
+   - 新增第 9 条核心设计决策"流量层抽象（v2.6.0）"（~40 行）
+   - 说明 Provider 接口设计 + 与状态机协同 + 资源所有权标记
+
+4. README.md "### 蓝绿发布" 章节扩展
+   - 原版 5 行（仅 v2.0 命令式 kp promote / kp warmup）
+   - 新版 ~50 行：
+     - 双模式介绍（命令式 v2.0+ vs 声明式 v2.6+）
+     - v2.6 完整 yaml 示例
+     - 引用 example-blue-green/ demo 和 traffic-layer.md
+   - 推荐 v2.6 路径（GitOps 场景）
+
+5. CHANGELOG.md（新建）
+   - 完整 v2.6.0 entry
+   - 强调"GitOps 化蓝绿"叙事（v2.0 命令式 → v2.6 声明式）
+   - 包含：Added / Changed / Tests / Documentation / 设计原则核对 / 工程教训 / Commits
+   - v2.5.1 / v2.5.0 entry 概要补完
+
+设计取舍记录：
+  - 选择"声明式蓝绿"作为 v2.6 主路径
+    GitOps 视角下流量配置应该是 Git 真相
+  - 不取代 v2.0 命令式蓝绿（kp promote 仍可用）
+    用户按场景选择，工具不强制
+  - CHANGELOG 第一次创建
+    v2.6.0 是 KubePivot 第一个有完整 release notes 的版本
+    后续版本统一遵循 Keep a Changelog 风格
+
+工程教训附记：
+  - tools/codegen 不支持多 const block 的同类型常量
+    手工补 code_generated.go 是 ad-hoc 方案
+    codegen 改造留 v2.6.1 候选
+  - HANDOFF.md 3.7 节"中文标点紧贴变量名"陷阱
+    一天内两次踩同样的 bash 解析坑
+
+下一步：
+  Commit 404: kp release v2.6.0 → 打 tag → 真正完成 v2.6.0 release
+
+里程碑：
+  这是第 403 个 commit
+  下一个是第 404 个 commit
+  v2.6.0 tag 将精确落在 404
+  （v2.0.0 = commit 329 = 生日 3.29 的传统延续）

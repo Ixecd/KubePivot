@@ -119,6 +119,58 @@ Controller GC Loop 每 5 分钟扫描 `.kp/sandbox/`，超过 TTL（默认 3600s
 
 ---
 
+## v2.6 流量层与状态机协同
+
+v2.6 引入流量层后，**状态机本身不变**——v2.4.0 的 5 个 Sandbox 状态
+（LOCKED / SNAPSHOTTING / SIMULATING / COMMITTING / RESTORING）和转换表完全保留。
+
+变化在于 **COMMITTING 阶段内部分两步顺序执行**：
+
+```
+COMMITTING:
+  Step 1: runSandboxCommit (v1.8.0 既有)
+          - 真实迁移（kp migrate run）
+          - helm upgrade（fork kp deploy 子进程，部署 Green）
+          失败 → RESTORING
+          
+  Step 2: runBlueGreenSwitch (v2.6 新增)
+          - 从 configs/resources.yaml 读 Traffic 字段
+          - 不启用蓝绿则静默跳过（return nil）
+          - route.ProviderForKind() 构造 Ingress / GatewayAPI provider
+          - provider.ApplyRoutes() 切换流量（K8s API 单次 update 原子）
+          - waitDeploymentReady() 等 Green Pod 全部 ready
+          失败 → RESTORING
+```
+
+### 设计取舍
+
+考虑过加新状态（如 SWITCHING）但拒绝：
+
+- 状态机变复杂，转换表要扩展
+- "流量切换"独立可观测，但 COMMITTING 已是事务边界，再细分意义不大
+- 蓝绿失败的处理模式与 commit 失败完全相同（都走 RESTORING）
+
+最终选择"内部分步执行"，不引入新状态。
+
+### 不变量
+
+```
+✓ COMMITTING 之前：100% Blue 流量（用户无感）
+✓ COMMITTING 之后：100% Green 流量（用户无感）
+✓ COMMITTING 中间任意失败：流量自动回滚 + Green 销毁
+✓ 整个过程"切换瞬间"是 K8s API update 的原子时刻
+```
+
+### 代码位置
+
+- `cmd/kp/sandbox.go` — `runSandbox` 主函数 commitOK 检查后插入流量切换调用
+- `cmd/kp/sandbox.go` — `runBlueGreenSwitch()` v2.6 流量切换实现
+- `cmd/kp/sandbox.go` — `waitDeploymentReady()` Pod ready 健康判定
+
+详见 [流量层设计文档](traffic-layer.md)。
+
+---
+
 ## Reconciliation Controller
 
 **运行位置**：`{project}-controller` Deployment（独立 pod，支持多副本 HA）

@@ -153,6 +153,46 @@ v2.2.0（per-project）          v2.3.0（global）
 
 ---
 
+### 9. 流量层抽象（v2.6.0）
+
+v2.6 引入 **流量层 Provider 抽象**，解决"如何在 GitOps 框架下管理流量切换"的问题。
+
+```
+TrafficProvider 接口 (internal/route/provider.go):
+  ┌─────────────────────────────────────────────┐
+  │  Provider                                   │
+  │    Name() / Validate() / GetCurrentRoutes() │
+  │    ApplyRoutes() / SetWeight()              │
+  └─────────────────────────────────────────────┘
+       │
+       ├─ IngressProvider     (networking.k8s.io/v1)
+       ├─ GatewayAPIProvider  (gateway.networking.k8s.io/v1)
+       └─ 未来：LinkerdProvider / IstioProvider
+```
+
+**关键设计**：
+
+- 不锁死特定流量后端
+- 加新 Provider 不改 reconcile 逻辑
+- 路由抽象（`Route` / `Match`）与具体后端解耦
+- 自动检测（Gateway API 优先 → Ingress fallback）+ 显式覆盖
+
+**与状态机的协同**：
+
+- 不引入新状态，复用 v2.4.0 Sandbox 状态机
+- COMMITTING 阶段内部分两步执行（helm upgrade → 流量切换）
+- 失败统一走 RESTORING
+
+**资源所有权标记**（"只保护，不越权"）：
+
+- `metadata.annotations[kubepivot.io/managed-fields]` 声明 KubePivot 管哪些字段
+- IngressProvider 只动 `spec.rules[].http.paths[].backend.service.name`
+- 完整保留用户字段（`spec.tls` / `IngressClassName` / cert-manager annotation 等）
+
+详见 [流量层设计文档](traffic-layer.md)。
+
+---
+
 ## 包结构与职责
 
 ```
