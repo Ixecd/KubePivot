@@ -1,0 +1,25 @@
+docs: ROADMAP.md 批 1 — v2.7 Event Stream Infrastructure
+
+v2.7 → v3.0 远期路线图开始编写。本 commit 含批 1（~430 行）：
+
+✓ 摘要：工具 → 工程 → 智能调度系统的两章节叙事
+✓ 路线图概览（v2.7 / v2.8 / v2.8.1 / v2.9 / v3.0 + v3.x+ 远期）
+✓ v2.7 完整章节（Event Stream Infrastructure）
+  - 目标：Informer ≠ Cache 的核心论断
+  - 关键设计：Go 接口草图 + Cache 4 大优化策略
+              （hot/warm/cold 分层 + 增量序列化 + 内存对齐 + lock-free）
+  - 与 v2.5 sharding 集成
+  - metrics-server / Prometheus 接入
+  - 任务清单（~3750 行代码估算）
+  - 风险与对策（4 个）
+  - 验收 + 工作量预估（3 周）
+
+待续（批 2/3/4）：
+  - v2.8 Enterprise Governance
+  - v2.8.1 v2.x 收尾
+  - v2.9 Resource Sizing Engine（维度 B）
+  - v3.0 Intelligent Scheduling System（维度 A + B 统一）
+  - v3.x+ 多租户备忘
+  - 时间线 + 风险全景 + 编辑记录
+
+预计完整版 ~1500 行，分批写不阻塞主线工程。
