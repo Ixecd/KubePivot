@@ -1,0 +1,47 @@
+docs(design): 三层资源决策栈设计文档
+
+新建 docs/design/decision-stack.md（~580 行）。
+
+背景：
+  v2.6.0 release 后第二天清晨，回顾 KubePivot 已实现功能时
+  发现 internal/ai/ (kp ai-plan) 与 v2.9/v3.0 规划的 DP 调度
+  完美互补——不冲突，按时间维度接力。
+  
+  这个洞察值得独立成文档，作为 v3.0 实施时的核心 mental model。
+
+文档结构：
+  1. 摘要 — 三层决策栈的核心论断
+  2. 三层栈概览 — ASCII 图 + 对比表
+  3. Layer 1: AI Cold Start
+     - 设计意图 / 代码归档 / 关键接口 / 数据流 / 局限
+     - 完整描述 internal/ai/ 已实现状态
+  4. Layer 2: DP Sizing（引用 ROADMAP v2.9）
+     - 与 Layer 1 衔接（数据时间维度）
+     - 业务大变时回到 Layer 1 机制
+     - 与 K8s VPA 的差异
+     - 局限
+  5. Layer 3: DP Scheduler（引用 ROADMAP v3.0）
+     - 与 K8s 默认调度器的关系（模式 1+3 混合）
+     - 局限
+  6. 三层衔接逻辑 — 文档心脏
+     - 时间维度接力（t=0 / t=1d / t=7d / 持续 / 业务大变）
+     - 数据流单向（AI/Sizing → Scheduler）
+     - 决策可解释性（kp explain 草图）
+  7. 与历史 v2.x 决策能力的关系
+     - v2.0 命令式蓝绿（用户主导决策）
+     - v2.6 声明式蓝绿（决策结果应用）
+     - v2.7 Event Stream（基础设施）
+  8. v3.0 后展望（简短）
+  9. 编辑记录
+
+设计决策：
+  - 单独成文（不并入 ROADMAP）—— 避免 ROADMAP 打补丁
+  - Layer 1 详细（已实现，代码归档）
+  - Layer 2/3 引用 ROADMAP（避免重复）
+  - 含局限章节（工程诚实）
+  - 不含商业化探讨
+
+预期使用场景：
+  - v2.9 / v3.0 实施时回看
+  - v3.0 release 时作为对外叙事核心
+  - 其他文档（架构 / SNAPSHOT / README）的引用源
