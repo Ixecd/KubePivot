@@ -1,0 +1,84 @@
+docs: 流量层完整设计草案（14 个设计 Q 全部拍板）
+
+v2.6.0 是 KubePivot 下一个真 tag — 引入流量层。
+
+核心论断：
+  v2.6 不是流量本身的实现（那是 Ingress / Service Mesh 的事）
+  v2.6 是 "GitOps 视角下的流量配置 + 自愈协同"
+  把流量配置纳入 Git，把流量切换纳入 Sandbox 状态机
+
+新增 docs/design/traffic-layer-draft.md（~600 行，14 章）：
+
+关键设计：
+  1. TrafficProvider 接口（Q1: qc 升级版本）
+     抽象 Ingress / Gateway API / 未来 Mesh
+     不锁死特定后端，加新 Provider 不改 reconcile
+     
+  2. 蓝绿先于金丝雀（Q2）
+     v2.6.0 仅做蓝绿（确定性高）
+     金丝雀的"健康度判定"是大头，留 v2.6.1 / v2.7
+     
+  3. Sandbox 状态机内分两步（Q3, Q10）
+     COMMITTING:
+       Step 1: TrafficProvider.ApplyRoutes（路由切换）
+       Step 2: Pod ready 健康判定
+     不引入新状态机
+     
+  4. 自动检测 + 显式覆盖（resources.yaml: C）
+     traffic.kind 字段可选
+     未指定时自动检测集群有 Gateway API CRD 优先用，否则 Ingress
+     
+  5. internal/traffic/ 独立子包（Q5）
+     和 sharding/ 一致的子包风格
+     
+  6. annotation + label 双标记（Q6）
+     managed-fields annotation 标记 KubePivot 管哪些字段
+     体现"只保护，不越权"
+     
+  7. 失败自动 cleanup Green（Q11）
+     RESTORING 时回滚流量 + 销毁 Green
+     不留 debug 资源
+
+工作量预估（Q13）：
+  ~1100 行代码 + ~800 行文档 = ~2 周专注
+
+实施分解（3 个 Step）：
+  Step 1：TrafficProvider 接口 + Ingress 实现（~3 天）
+  Step 2：业务路径接入（~5 天）
+  Step 3：GatewayAPIProvider + demo（~2 天）
+
+验收用例（Q14）：
+  独立 demo 工程 docs/example-blue-green/
+  不依赖 web3-blitz（它的升级是 v2.8 任务）
+
+v2.6 边界：
+  v2.6.0 (真 tag)：    流量声明 + 蓝绿切换 + Sandbox 协同 + Pod ready 判定
+  v2.6.1 (内部)：       多环境流量配置传播
+  v2.7.0+：             canary（含 metrics）+ shadow + 自研 informer
+
+与既有原则的一致性（5 条核对）：
+  ✓ 不引入 client-go
+  ✓ 单二进制
+  ✓ 只保护，不越权（managed-fields annotation）
+  ✓ 自愈不是越权（自动 RESTORING）
+  ✓ 简单 > 完美（不引入 metrics 监控）
+
+设计 Q 拍板汇总：
+  Q1=A 升级 (TrafficProvider 接口)
+  Q2=D (仅蓝绿)
+  Q3=C (Sandbox 状态机扩展)
+  Q4=C (配置传播 v2.6.1)
+  Q5=A (独立子包)
+  Q6=C (双标记)
+  Q7=C (Sandbox 状态机原子性)
+  Q8=B (v2.6.0 + v2.6.1 拆分)
+  Q9=A (后缀法命名)
+  Q10=A (COMMITTING 内分两步)
+  Q11=A (失败 cleanup)
+  Q12=B (Pod ready 判定)
+  Q13=A (~1100 代码)
+  Q14=B (独立 demo)
+
+下一步：
+  v2.5.1 持续改进任务收尾后启动 v2.6.0 Step 1
+  时间窗口：5 月初
