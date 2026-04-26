@@ -1,0 +1,39 @@
+fix(benchmark): cleanup.sh 大规模清理改造 + finalize API fallback
+
+基于 2026-04-26 实测踩坑：
+  100 个 ns 同时 cleanup 时，controller reconcile 干扰 + 内存压力
+  导致死锁螺旋（90 秒只清 6/100）
+
+v2.5.1 cleanup.sh 改造（~270 行，原 ~110 行）：
+
+  Phase 1：≥30 项目时自动停 controller
+    记录原副本数 → 缩到 0 → 等 pod 退出
+    解决 reconcile vs cleanup 的死锁螺旋
+    
+  Phase 2-3：触发删除 + 进度打印
+    每 5 秒一报剩余数量，看着不无聊
+    
+  Phase 4：Finalize API fallback
+    90 秒还没删完时自动用 kubectl replace --raw /finalize 强删
+    解决 namespace 卡 Terminating 的常见问题
+    
+  Phase 5：恢复 controller 副本数到原值
+    
+  Phase 6-7：--all 兼容 + 清晰总结
+
+新参数：
+  --skip-controller-pause   小规模或紧急测试时跳过停 controller
+  --force-finalize          直接走 finalize API（紧急情况）
+
+代码健壮性：
+  仅 set -o pipefail（不踩昨天 set -e/-u 的坑，HANDOFF 3.7）
+  count_remaining + finalize_namespace 函数封装
+
+测试通过：
+  - PROJECT_COUNT=10 cleanup 不触发 pause（< 30 阈值）
+  - PROJECT_COUNT=50 cleanup 触发 pause + 进度打印
+  - 完成后 controller 自动恢复 3 副本
+
+工程意义：
+  这是把今天上午"踩过的坑"直接闭环成代码
+  下次大规模 cleanup 不会再出现死锁螺旋
