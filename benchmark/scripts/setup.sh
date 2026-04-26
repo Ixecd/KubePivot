@@ -106,7 +106,7 @@ fi
 
 # ── 步骤 2：批量生成 10 个 namespace + mock 资源 ──────────────────────────────
 
-log "批量生成 10 个 mock namespace + 资源 (含 PVC mount) "
+log "批量生成 ${#PROJECTS[@]} 个 mock namespace + 资源 (含 PVC mount) "
 
 created_count=0
 for project in "${PROJECTS[@]}"; do

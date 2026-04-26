@@ -116,7 +116,7 @@ if [[ "$total" -ge "$LARGE_THRESHOLD" ]] && [[ "$SKIP_CONTROLLER_PAUSE" != "true
 fi
 
 if [[ "$need_pause" == "true" ]]; then
-    log "项目数 $total >= $LARGE_THRESHOLD，先停 controller 防 reconcile 死锁"
+    log "项目数 ${total} >= ${LARGE_THRESHOLD}，先停 controller 防 reconcile 死锁"
 
     original_replicas=$(kubectl get deployment kubepivot-controller \
         -n kubepivot-system -o jsonpath='{.spec.replicas}' 2>/dev/null)
@@ -138,7 +138,7 @@ if [[ "$need_pause" == "true" ]]; then
             fi
             sleep 2
         done
-        ok "Controller 已停（原副本数 $original_replicas）"
+        ok "Controller 已停（原副本数 ${original_replicas}）"
     fi
 fi
 
@@ -169,14 +169,14 @@ else
         remaining=$(count_remaining)
 
         if [[ "$remaining" == "0" ]]; then
-            ok "全部 $total 个 namespace 已删除"
+            ok "全部 ${total} 个 namespace 已删除"
             break
         fi
 
         # 每 5 秒报一次进度
         if (( SECONDS - last_print >= 5 )); then
             done_count=$((total - remaining))
-            log "进度: $done_count / $total 已删除（剩余 $remaining）"
+            log "进度: ${done_count} / ${total} 已删除（剩余 ${remaining}）"
             last_print=$SECONDS
         fi
 
@@ -188,7 +188,7 @@ fi
 
 remaining=$(count_remaining)
 if [[ "$remaining" != "0" ]]; then
-    warn "$remaining 个 namespace 卡 Terminating，启动 finalize API 强删"
+    warn "${remaining} 个 namespace 卡 Terminating，启动 finalize API 强删"
 
     finalized=0
     for project in "${PROJECTS[@]}"; do
@@ -199,14 +199,14 @@ if [[ "$remaining" != "0" ]]; then
         fi
     done
 
-    log "已对 $finalized 个 namespace 调用 finalize API"
+    log "已对 ${finalized} 个 namespace 调用 finalize API"
     sleep 5
 
     final_remaining=$(count_remaining)
     if [[ "$final_remaining" == "0" ]]; then
         ok "Finalize API 强删完成"
     else
-        err "仍有 $final_remaining 个 namespace 未清理，需手动检查"
+        err "仍有 ${final_remaining} 个 namespace 未清理，需手动检查"
         kubectl get ns | grep "kp-bench\|kp-auth\|kp-gateway\|kp-user\|kp-order\|kp-payment\|kp-notification\|kp-search\|kp-analytics\|kp-media\|kp-admin"
     fi
 fi
@@ -214,14 +214,14 @@ fi
 # ── Phase 5: 恢复 controller ────────────────────────────────────────────────
 
 if [[ "$need_pause" == "true" ]] && [[ -n "$original_replicas" ]]; then
-    log "恢复 controller 副本数到 $original_replicas"
+    log "恢复 controller 副本数到 ${original_replicas}"
     kubectl scale deployment kubepivot-controller \
         -n kubepivot-system --replicas="$original_replicas" >/dev/null
 
     kubectl rollout status -n kubepivot-system \
         deployment/kubepivot-controller --timeout=60s >/dev/null
 
-    ok "Controller 已恢复 $original_replicas 副本"
+    ok "Controller 已恢复 ${original_replicas} 副本"
 fi
 
 # ── Phase 6: --all 模式（连同 controller 和 workspace）──────────────────────
