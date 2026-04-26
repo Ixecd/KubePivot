@@ -1,4 +1,4 @@
-fix(benchmark): cleanup.sh + setup.sh 显示 bug 修复
+fix(benchmark): cleanup.sh + setup.sh 显示 bug + HANDOFF 3.7 扩展
 
 bug 1: cleanup.sh 变量定界（中文标点紧贴变量名）
   原：  log "项目数 $total >= $LARGE_THRESHOLD，先停 controller"
@@ -17,13 +17,17 @@ bug 2: setup.sh 写死的 "10 个 mock namespace"
   修：log "批量生成 ${#PROJECTS[@]} 个 mock namespace"
   动态读 PROJECTS 数组实际长度
 
-工程教训（HANDOFF.md 3.7 重复踩坑）：
-  这是今天上午 hot-reload.sh 同样踩过的坑（昨天 commit 30b3108 修过）
-  bash 变量解析对中文标点不友好
+HANDOFF 3.7 扩展：
+  原 3.7 只覆盖了 set -e/-u 的陷阱
+  今天上午两次踩"中文标点紧贴变量名"的坑（同根问题不同表现）
+  扩展加入"衍生陷阱"小节，用反例 + 正例 + 实践规范说清楚
   
-  统一规范：在 echo / log 里凡是有非 ASCII 字符紧贴 $var 的，
-  都用 ${var} 显式定界
+  规范：default 都用 ${var} 风格，避免心智负担
 
 测试通过：
   PROJECT_COUNT=50 setup.sh 显示 "批量生成 50 个"
-  PROJECT_COUNT=50 cleanup.sh 显示完整进度数字
+  PROJECT_COUNT=50 cleanup.sh 显示完整进度数字 + 控制器副本数
+
+工程意义：
+  这是把"重复踩坑"的代价转化成"长期资产"
+  下次写 bash 脚本看到 HANDOFF 3.7 就不会再踩

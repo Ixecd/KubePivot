@@ -286,6 +286,41 @@ shell 直接传 `git commit -m "..."` 时，message 里的 `>` `=` 等字符会�
 - 2026-04-25 v2.5.0 Step 2 commit 时生成名为 `=` 的空文件
   → 直接催生了 commits/ 目录的工程规范
 
+**衍生陷阱：变量名紧贴中文标点（同根问题，不同表现）**
+
+bash 解析变量名时，会把 `$var` 后面**所有合法的标识符字符**当作变量名的一部分。
+但 bash 对"标识符字符"的判断不区分 ASCII 和多字节字符——中文标点字符
+（`，` `）` `（` 等）会被当作变量名延续。
+
+```bash
+# ✗ 错误（bash 把 "total，剩余" 当成单个变量名）
+log "进度: $total，剩余 $remaining 个"
+# 输出：  进度: ，剩余  个      （两个变量都没显示）
+
+# ✗ 错误（"original_replicas）" 当变量名）
+ok "Controller 已停（原副本数 $original_replicas）"
+# 输出：  Controller 已停（原副本数
+
+# ✓ 正确：用 ${} 显式定界
+log "进度: ${total}，剩余 ${remaining} 个"
+ok "Controller 已停（原副本数 ${original_replicas}）"
+```
+
+**实践规范**（v2.5.1 起）：
+
+```
+benchmark/scripts/ 脚本里的 echo / log 输出：
+  - 凡是 $var 后面紧贴 ASCII 字符以外的字符（中文标点、括号、特殊符号），
+    一律改用 ${var} 显式定界
+  - 简单情况 "总数: $total" 后面是空格 / 行尾，不需要 ${} 定界
+  - 但建议 default 都用 ${var} 风格，避免心智负担
+```
+
+历史踩坑：
+
+- 2026-04-26 hot-reload.sh `$reload_delta（期望 ≤ 1）` 显示成空（中文括号问题）
+- 2026-04-26 cleanup.sh `$total，先停 controller` 显示成 `??` （中文逗号问题）
+  — 这是当天第二次踩同样的坑，触发 HANDOFF 3.7 扩展
 
 ---
 
