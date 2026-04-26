@@ -22,6 +22,16 @@ func ErrorCodeString(code ErrorCode) string {
 		return "500: Internal server error"
 	case ErrDeadlineExceeded:
 		return "408: Deadline exceeded"
+	case ErrRouteProviderNotAvailable:
+		return "503: Route provider is not available in current cluster"
+	case ErrRouteResourceNotFound:
+		return "404: Traffic resource (Ingress or HTTPRoute) not found"
+	case ErrRouteInvalid:
+		return "400: Route rule is invalid"
+	case ErrRouteApplyFailed:
+		return "500: Apply route rules failed"
+	case ErrRouteAutoDetectFailed:
+		return "500: Auto detect route provider failed"
 	default:
 		return "500: unknown"
 	}

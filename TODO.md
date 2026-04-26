@@ -193,6 +193,19 @@ KubePivot 是 (项目数 P, 副本数 R, 分片数 N) 的三维空间，
       C. 真实多节点 K8s 集群（云上）
     
     推荐 A：最小变更，能解锁 P=100/200 的真实数据
+
+[ ] tools/codegen 支持多 const block
+    
+    bug：codegen 当前只识别一个 const block 里的同类型常量
+    分两个 block 时（例如 ErrorCode 通用 + Route 域）只生成第一组
+    实测：v2.6.0 Step 1 加 ErrRoute* 5 个错误码时发现
+    
+    修法：
+      tools/codegen/codegen.go 的 genDecl 函数
+      ~30 行改造，让 ast.Inspect 递归收集所有匹配 typeName 的 const block
+    
+    优先级：低（不阻塞）
+    工作量：~30 分钟
 ```
 
 ---

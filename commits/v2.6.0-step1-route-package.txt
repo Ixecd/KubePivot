@@ -1,0 +1,67 @@
+feat(route): v2.6.0 P0 Step 1 — 流量层抽象 + Ingress + Gateway API 双 Provider
+
+v2.6.0 设计草案（docs/design/traffic-layer-draft.md）的 Step 1 完整实施。
+
+新增 internal/route/ 子包（~1500 行代码 + 测试）：
+
+接口层：
+  doc.go              package 文档
+  provider.go         Provider 接口 + Route + Match + 校验函数
+  errors.go           Error struct + NewError/WrapError 构造器
+                      复用 internal/code 错误码体系（不造 sentinel error）
+
+实现层：
+  ingress_provider.go    K8s Ingress (networking.k8s.io/v1) 实现
+                         蓝绿策略：直接切换 backend.service.name
+                         不依赖 nginx canary annotation，任何 Ingress controller 都兼容
+                         保留用户字段：cert-manager / TLS / IngressClassName / host
+                         体现"只保护，不越权"原则
+                         
+  gateway_provider.go    Gateway API HTTPRoute 实现
+                         蓝绿策略：weight 字段原生切换（HTTPRoute 直接支持）
+                         保留用户字段：parentRefs / hostnames / matches
+                         为未来 canary（v2.6.1+）打好基础
+  
+  auto_detect.go         Provider 自动检测 + 显式构造
+                         AutoDetect: Gateway API 优先 → Ingress fallback
+                         NewProvider(kind): 显式构造（不连集群）
+                         ProviderForKind: 语法糖（未指定 → 自动；指定 → 显式 + Validate）
+
+错误码扩展（internal/code/）：
+  ErrRouteProviderNotAvailable  503  Route provider is not available
+  ErrRouteResourceNotFound      404  Traffic resource not found
+  ErrRouteInvalid               400  Route rule is invalid
+  ErrRouteApplyFailed           500  Apply route rules failed
+  ErrRouteAutoDetectFailed      500  Auto detect route provider failed
+  
+  编号区段 110000-110099 留给 internal/route 包。
+
+测试覆盖（27 sub-cases 全 PASS）：
+  - Route.Validate                8 个 case（含边界/越界/中文标点等）
+  - ValidateRoutes                6 个 case（蓝绿/canary/超总和等）
+  - updateWeight                  3 个 case
+  - Error 链路                    2 个 case（含 errors.Is/Unwrap）
+  - parseIngressRoutes            3 个 case（含去重）
+  - buildIngressFromRoutes_*      2 个 case（含 PreserveUserFields）
+  - parseHTTPRouteRoutes          4 个 case（含 weight nil 默认 100）
+  - buildHTTPRouteFromRoutes_*    2 个 case（含 PreserveUserFields）
+  - NewProvider                   6 个 case（含大小写敏感、Foo 错误码）
+
+设计原则核对：
+  ✓ 不引入 client-go：所有 K8s 操作通过 executor.GetExecutor()
+  ✓ Provider 自包含：不依赖 controller / state 包
+  ✓ 路由抽象与后端解耦：Route/Match 是中间表示
+  ✓ 自动检测 + 显式覆盖：ProviderForKind() 双路径
+  ✓ "只保护，不越权"：buildXxxFromRoutes 保留用户字段
+
+下一步：
+  Step 2：业务路径接入
+  - state.go COMMITTING 内分两步执行
+  - global_state.go traffic 字段 reconcile
+  - cmd/kp deploy --traffic blue-green 选项
+  - resources.yaml schema 扩展
+
+工程教训附记（HANDOFF.md 3.7 候选）：
+  codegen 工具不支持多 const block 的同类型常量（实测发现）
+  目前手工维护 code_generated.go 的 case 分支
+  v2.5.1/v2.6.1 候选小任务：codegen ast.Inspect 改造支持多 block
