@@ -1,0 +1,44 @@
+docs: 文档四件套 — HANDOFF + TODO + 2 SNAPSHOT
+
+v2.6.0 release 后的文档收尾。归档前一版到 archived/，
+重写根目录文档为 v2.6.0 视角。
+
+变更：
+
+1. HANDOFF.md  根目录持续演化文档
+   - 第 2.2 节 v2.5.0 + v2.6.0 已实现合并
+   - 第 3.7 节加 4 条新教训：
+     * 中文标点紧贴变量名（一天踩两次）
+     * codegen 多 const block 局限
+     * kp release 自动 commit 行为
+     * sandbox.go fork 子进程模式
+   - 第 4.3 节 release 流程精确化（10 步含 kp release 行为）
+   - 第 7 节路线图全重写（v2.6.1 / v2.5.1 / v2.7 / v2.8）
+
+2. TODO.md  路线图重组
+   - v2.6.0 章节 ⏳→✅（含 4 个 step + release）
+   - 新增 v2.6.1 候选章节（多环境传播 / codegen 改造 / 小优化）
+   - v2.5.1 章节标 ⏸ 受阻（环境升级前置）
+   - v2.7 / v2.8 / v2.8+ 内容微调
+
+3. snapshots/SNAPSHOT-kubepivot-2026-04-26-v2.6.0.md  永久归档
+   - 对齐 v2.2.0 SNAPSHOT 风格（事件复盘 + 代码片段）
+   - 含 14 个设计 Q 拍板表格
+   - 含 2026-04-26 实施时间线（6:08 → 12:08）
+   - 含工程教训记录（4 条）
+   - 含个人记录章节
+
+4. SNAPSHOT.md  根目录当前状态全景
+   - 沿袭 v2.5.0 SNAPSHOT 八章结构
+   - 更新 commit 链 / 代码结构 / 测试 / 性能数据
+   - 含 internal/route/ 新包 + traffic schema + demo 工程
+
+5. archived/  归档前一版
+   - archived/handoff/HANDOFF-v2.5.md
+   - archived/todo/TODO-v2.5.md
+   - archived/snapshot/SNAPSHOT-v2.5.md
+
+工程意义：
+  v2.6.0 release 后的文档闭环
+  下次接手者（包括半年后的自己）有完整状态档案
+  archived/ 体系保留每个 minor 的"那时" snapshot

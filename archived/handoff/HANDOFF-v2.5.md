@@ -1,0 +1,480 @@
+# HANDOFF — KubePivot v2.5.0
+
+> 本文档面向"接手 KubePivot 开发的下一个人/AI"
+> 编写日期：2026-04-25
+> 当前版本：v2.5.0（2026-04-25 release）
+> 下个 minor：v2.6.0（流量层）
+
+---
+
+## 一、项目定位
+
+KubePivot（乾枢）是一个 **K8s 原生的 GitOps 极简控制器**，核心特征：
+
+```
+✓ 不引入 client-go        所有 K8s 操作通过 kubectl exec
+✓ 单二进制                kp 命令行 + controller 同一份代码
+✓ 真实 K8s 资源管理       Helm + 状态机 + reconcile loop
+✓ 渐进式可扩展性          v2.4 单 leader → v2.5 N 副本分片
+```
+
+**MIT 协议、刻意低调发布**——qc（杨庆春，GitHub: Ixecd）的个人项目。23 岁，
+solo 开发，自掏腰包跑测试。不追求快速增长，追求工程上的"自我说服"。
+
+---
+
+## 二、现在能做什么
+
+### 2.1 直接可用
+
+```bash
+git clone https://github.com/Ixecd/KubePivot.git
+cd KubePivot
+make dev      # build + test + install kp 到 $GOPATH/bin
+
+# 安装 controller
+kp controller install
+
+# 创建第一个项目
+kp init my-service
+cd my-service
+kp deploy
+
+# 项目纳管
+kp controller enroll
+```
+
+详见 README.md。
+
+### 2.2 v2.5.0 已实现
+
+```
+✅ Controller 分片机制（A.1 完整闭环）
+   - sharding 子包：FNV-1a hash + ShardSet + MultiLeaseManager
+   - 业务路径接入：每 pod 跑独立 watchers + reconcile loop
+   - 孤儿清理：OnShardChanged 即时 + 周期兜底
+   - 详见 docs/design/sharding.md
+
+✅ 性能数据完整
+   - 10 项目 baseline（诚实承认过度工程）
+   - 50 项目实测（线性扩展验证）
+   - 详见 docs/design/performance.md
+
+✅ sha256 热加载去重验证
+   - 100 次幂等 apply → 0 reconcile（100% 去重）
+
+✅ K8s Lease leader 选举（v2.4.0 起）
+   - 21.7ms 故障转移
+   - 自动 fallback 到 etcd / 单机模式
+```
+
+---
+
+## 三、开发约束（永久规范）
+
+### 3.1 不引入 client-go
+
+任何贡献者写代码前请确认：
+
+```
+❌ 不要 import "k8s.io/client-go/..."
+❌ 不要 import "k8s.io/api/..."
+❌ 不要 import "k8s.io/apimachinery/..."
+✅ 用 kubectl exec（通过 internal/executor）
+✅ JSON unmarshal 只解析最小必要字段
+```
+
+理由：架构纯粹性 + 镜像体积 + 学习成本。性能代价已实测可接受
+（v2.7.0 自研 informer 是远期方向）。
+
+### 3.2 commits/ 目录（v2.5.0 起的工程规范）
+
+**所有 commit message 写到 `commits/` 目录的 .txt 文件**：
+
+```bash
+# 不要这样（终端 shell 解析特殊字符易出错）
+git commit -m "feat(...): xxx
+- detail with > or & in message
+"
+
+# 要这样
+cat > commits/feat-feature-name.txt <<'EOF'
+feat(controller): v2.5.0 feature
+
+详细描述...
+EOF
+
+git commit -F commits/feat-feature-name.txt
+```
+
+**为什么**：
+
+```
+✓ 摆脱终端 shell 解析依赖（避免 > = 等字符被误解释）
+✓ commit message 成为项目工程档案（和源码一起 commit）
+✓ 可 grep / 编辑 / 复用 template
+✓ 半年后翻 git log 能直接打开 commits/{name}.txt 看完整故事
+```
+
+文件命名约定：`{type}-{scope}-{summary}.txt`，比如：
+- `feat-sharding-step1-infrastructure.txt`
+- `fix-import-cycle.txt`
+- `docs-perf-baseline.txt`
+
+### 3.3 版本号约定
+
+```
+✅ 打 tag 的版本：v2.4.0 / v2.5.0 / v2.6.0 / v2.7.0
+   语义版本：major.minor，每次都是真正的 release
+   通过 `kp release --version v2.X.0` 打 tag
+   
+❌ 不打 tag 的"内部"版本：v2.5.1 / v2.5.2 / v2.4.1
+   这些是 git log 里的"持续改进"，不需要单独 tag
+```
+
+`v2.5.1` 在 TODO.md 里只是个**待办标签**——指代"v2.5.0 已发布之后的持续改进任务"。
+真正下一个 tag 是 v2.6.0。
+
+避免"补丁版本"成为拖延的容器（v2.5.1 永远在做）。
+
+### 3.4 设计先对齐再写代码
+
+任何超过 50 行改动的工程，都要：
+
+1. 先列出 N 个设计 Q（决策点 + 候选方案 + trade-off）
+2. 逐条拍板（A/B/C）
+3. 写完整设计文档到 `docs/design/{topic}.md`
+4. 然后才动键盘
+
+例子：v2.5.0 A.1 Controller 分片走了 22 个 Q 拍板。
+
+### 3.5 SNAPSHOT 永久归档约定
+
+每次 release 时归档一份永久 snapshot：
+
+```
+snapshots/SNAPSHOT-kubepivot-{date}-v{version}.md
+```
+
+结构（C 双层）：
+1. **技术层**：版本完成的工程内容、架构、数据
+2. **私人后记**：开发故事、教训、心情
+
+这是工程上的"时间胶囊"——不是给项目看的，是给 6 个月后的自己看的。
+
+### 3.6 真实集群验证不可跳
+
+```
+❌ 单元测试通过 = 可以 commit
+❌ 集成测试通过 = 可以 commit
+✅ 真实集群跑过 + 数据收集 + 行为符合预期 = 可以 commit
+```
+
+orbstack 是 KubePivot 的"标准开发集群"，每个工程节点都在它上面验证。
+
+### 3.7 重复踩坑记录（教训复利）
+
+> 工程哲学：**犯了两次及以上的错误都应该记录下来**。
+> 单次错误是偶然，重复错误是认知盲区——必须显式化才能消除。
+
+#### Bash 脚本的严格模式陷阱
+
+`set -e` / `set -u` / `set -o pipefail` 在简单脚本里是好习惯，但在
+benchmark/scripts/ 这类"大量 grep + 条件分支 + 多变量"的脚本里反而是坑：
+
+```
+✗ set -e
+  grep 0 匹配时返回 exit 1
+  即使加了 || true 在 macOS bash 4.x 下也偶尔失效
+  → 脚本"莫名其妙"中途退出，看着像 hang 但其实是早退
+  
+✗ set -u
+  条件分支里变量绑定时机不确定
+  比如 if-elif-else 里在不同分支赋值的变量
+  在某些 bash 版本里会误判"未绑定"
+  
+✓ set -o pipefail
+  这个有用，能正确捕获管道中间命令的失败
+  保留无副作用
+```
+
+**实践规范**（v2.5.1 起）：
+
+```bash
+# benchmark/scripts/ 脚本顶部统一这样写：
+set -o pipefail   # 仅这一项
+
+# 关键变量手动验证：
+result=$(some_command)
+if [[ -z "$result" ]]; then
+    err "some_command 失败或返回空"
+    exit 1
+fi
+
+# grep 0 匹配的标准处理：
+count=$(grep -c "pattern" "$file" 2>/dev/null || echo 0)
+```
+
+历史踩坑：
+
+- 2026-04-25 hot-reload.sh hang 几次（排查发现 set -e + 复杂管道）
+- 2026-04-26 hot-reload.sh 末尾 `reload_delta?: 未绑定的变量`（set -u + 多分支）
+
+#### Go 闭包自引用
+
+声明变量同时在初始化里用 closure 引用自己 → 编译失败：
+
+```go
+// ✗ 错误
+shardMgr := sharding.NewMultiLeaseManager(sharding.MultiLeaseConfig{
+    OnShardChanged: func(...) {
+        shardMgr.Shards()...   // 还没赋值
+    },
+})
+
+// ✓ 正确：先 var 声明，后赋值
+var shardMgr *sharding.MultiLeaseManager
+shardMgr = sharding.NewMultiLeaseManager(sharding.MultiLeaseConfig{
+    OnShardChanged: func(...) {
+        shardMgr.Shards()...   // closure 捕获指针，调用时已赋值
+    },
+})
+```
+
+历史踩坑：
+
+- 2026-04-25 v2.5.0 Step 3 OnShardChanged 编译失败
+
+#### Go 包 import cycle
+
+两个包互相 import = cycle，**移目录不破环**——这是依赖图问题，不是目录问题。
+
+```
+controller    →  imports sharding
+sharding      →  imports controller   ← cycle
+
+破环路径：
+  ✗ 把 sharding 从 internal/controller/sharding 移到 internal/sharding
+    （移目录无效，依赖关系没变）
+  ✓ 让其中一个包不再 import 另一个
+    具体方式：sharding 包内本地复制 lease 工具函数（~100 行）
+    代价：代码重复
+    收益：sharding 真正自包含
+```
+
+历史踩坑：
+
+- 2026-04-25 v2.5.0 Step 2 sharding 包 import controller 引发 cycle，
+  起初尝试移目录（无效），最终走"本地实现"破环
+
+#### Commit message 里的特殊字符
+
+shell 直接传 `git commit -m "..."` 时，message 里的 `>` `=` 等字符会被解析为
+重定向操作符，可能产生空文件（如名为 `=` 的诡异文件）或解析错误。
+
+```
+✗ git commit -m "feat: support a > b case"   # > 触发重定向
+
+✓ 用 commits/ 目录的 .txt 文件
+   git commit -F commits/feat-...txt
+   
+   这是 v2.5.0 起的工程规范，详见 3.2 节
+```
+
+历史踩坑：
+
+- 2026-04-25 v2.5.0 Step 2 commit 时生成名为 `=` 的空文件
+  → 直接催生了 commits/ 目录的工程规范
+
+**衍生陷阱：变量名紧贴中文标点（同根问题，不同表现）**
+
+bash 解析变量名时，会把 `$var` 后面**所有合法的标识符字符**当作变量名的一部分。
+但 bash 对"标识符字符"的判断不区分 ASCII 和多字节字符——中文标点字符
+（`，` `）` `（` 等）会被当作变量名延续。
+
+```bash
+# ✗ 错误（bash 把 "total，剩余" 当成单个变量名）
+log "进度: $total，剩余 $remaining 个"
+# 输出：  进度: ，剩余  个      （两个变量都没显示）
+
+# ✗ 错误（"original_replicas）" 当变量名）
+ok "Controller 已停（原副本数 $original_replicas）"
+# 输出：  Controller 已停（原副本数
+
+# ✓ 正确：用 ${} 显式定界
+log "进度: ${total}，剩余 ${remaining} 个"
+ok "Controller 已停（原副本数 ${original_replicas}）"
+```
+
+**实践规范**（v2.5.1 起）：
+
+```
+benchmark/scripts/ 脚本里的 echo / log 输出：
+  - 凡是 $var 后面紧贴 ASCII 字符以外的字符（中文标点、括号、特殊符号），
+    一律改用 ${var} 显式定界
+  - 简单情况 "总数: $total" 后面是空格 / 行尾，不需要 ${} 定界
+  - 但建议 default 都用 ${var} 风格，避免心智负担
+```
+
+历史踩坑：
+
+- 2026-04-26 hot-reload.sh `$reload_delta（期望 ≤ 1）` 显示成空（中文括号问题）
+- 2026-04-26 cleanup.sh `$total，先停 controller` 显示成 `??` （中文逗号问题）
+  — 这是当天第二次踩同样的坑，触发 HANDOFF 3.7 扩展
+
+---
+
+## 四、当前工作流
+
+### 4.1 日常开发循环
+
+```bash
+make dev               # build + test + install kp
+kubectl ...            # 真实集群验证
+git add ...
+cat > commits/... <<EOF
+...
+EOF
+git commit -F commits/...
+git push
+```
+
+### 4.2 性能基准
+
+```bash
+# Setup mock 项目
+PROJECT_COUNT=10 bash benchmark/scripts/setup.sh   # 默认 10 个真实命名
+PROJECT_COUNT=50 bash benchmark/scripts/setup.sh   # 50 个 kp-bench-NNN
+
+# 稳态采样
+bash benchmark/scripts/steady-state.sh -d 300 -i 5
+
+# 清理
+bash benchmark/scripts/cleanup.sh
+```
+
+### 4.3 Release 流程
+
+```bash
+# 1. 确认所有改动 commit + push
+git status
+
+# 2. 性能数据归档
+ls benchmark/results/
+
+# 3. 文档：HANDOFF / SNAPSHOT / TODO 更新
+# 4. snapshots/SNAPSHOT-...-v2.X.0.md 永久归档
+# 5. archived/{handoff,snapshot,todo}/ 旧三件套备份
+
+# 6. tag
+kp release --version v2.X.0
+
+# 7. push tag
+git push --tags
+```
+
+---
+
+## 五、当前可工作状态
+
+```
+git branch            : Master
+last commit           : 99f316d (v2.5.0 A.1 Step 3 — 孤儿清理)
+last tagged version   : v2.4.0
+next tag              : v2.5.0（即将打）
+controller running    : ✓ 3 副本 (kubepivot-system)
+benchmark mock        : 50 个 kp-bench-NNN（运行中）
+
+测试状态：
+  make dev              : ✓ 全绿
+  internal/sharding     : ✓ 9 个测试
+  internal/controller   : ✓ 含 4 个 RemoveOrphanProjects 测试
+  集成测试              : ✓ 真实集群 50 项目验证
+```
+
+---
+
+## 六、文档地图
+
+```
+README.md                     入门 + kp 命令使用
+GITOPS-MANIFESTO.md          GitOps 哲学（v2.0 起的项目宣言）
+HANDOFF.md (本文件)          接手指南
+SNAPSHOT.md                  当前状态快照（精确文件清单）
+TODO.md                      路线图（v2.5.1 / v2.6.0 / v2.7.0）
+
+docs/design/
+  architecture.md             整体架构
+  controller.md               Controller 设计
+  sharding.md                 v2.5.0 分片机制（605 行）
+  performance.md              性能基准（v2.3 / v2.4 / v2.5 累计）
+  bluegreen.md                蓝绿部署
+  state-machine.md            状态机
+  ... 其他
+
+snapshots/                    永久归档（每个 release 一份）
+  SNAPSHOT-kubepivot-2026-04-04-v1.0.md
+  SNAPSHOT-kubepivot-2026-04-25-v2.4.0.md
+  SNAPSHOT-kubepivot-2026-04-25-v2.5.0.md  ← 今天加的
+
+archived/                     历史版本归档
+  handoff/HANDOFF-v2.X.0.md   每次 release 前 cp 一份
+  snapshot/SNAPSHOT-v2.X.0.md
+  todo/TODO-v2.X.0.md
+  docs/                       已废弃文档归档
+
+commits/                      工程档案（v2.5.0 起）
+  feat-sharding-step1-infrastructure.txt
+  controller-v2.5.0.txt       (Step 2 commit message)
+  sharding-step3-orphan-cleanup.txt
+  ...
+
+benchmark/                    性能基准
+  scripts/                    setup / cleanup / steady-state / etc.
+  results/                    git ignored，本地数据
+```
+
+---
+
+## 七、下一步建议（v2.5.1 / v2.6.0）
+
+详见 TODO.md。简要：
+
+```
+v2.5.1（持续改进，不打 tag）：
+  - 性能立方体测试方法论
+    自动化 benchmark matrix（项目数 × 副本数 × 分片数）
+    输出 docs/design/sharding-tuning.md
+    
+  - Backoff 队列（A.1.5）
+    Lars 的过载队列 + Probe 思想
+  
+  - client-go 对比基准（A.2）
+    fork 一个 client-go 版本对比 CPU/MEM/启动时间
+  
+  - P2 性能脚本验证
+    concurrent-chaos.sh / watch-reconnect.sh 实测
+
+v2.6.0（下个真 tag）：
+  - 流量层 B.1 + B.2
+    Lars 思路在流量调度层完整落地
+    详见 docs/design/traffic-layer-draft.md（待补）
+
+v2.7.0：
+  - 自研 Informer
+    解决 watcher 框架开销
+    前提：v2.5.1 client-go 数据出来后判断启动
+```
+
+---
+
+## 八、联系
+
+```
+GitHub: https://github.com/Ixecd/KubePivot
+Author: qc (杨庆春)
+Email:  [2192629378@qq.com]
+```
+
+如果你看完整个项目想留下 issue 或 PR，欢迎。但请理解 KubePivot 是
+"刻意低调"的项目——maintainer 不会"运营"它，但会回应每个真诚的工程问题。

@@ -1,44 +1,131 @@
-# TODO — KubePivot 路线图
+# TODO — KubePivot v2.6.0+
 
-> 编写日期：2026-04-25
-> 当前版本：v2.5.0
-> 下个真 tag：v2.6.0（流量层）
+> 当前 TODO（持续演化）
+> 编写日期：2026-04-26
+> Last release: v2.6.0 (commit 1f780c2)
+> Total commits: 404
 
 ---
 
 ## 版本号约定
 
 ```
-✅ 打 tag 的版本：v2.X.0（major.minor）
-❌ 不打 tag："v2.5.1" 仅是 v2.5.0 之后的"持续改进任务标签"
-```
+v{major}.{minor}.{patch}
 
-详见 HANDOFF.md "开发约束 → 版本号约定"。
+major  项目名/范围根本性改变（v1 dev-toolkit → v2 KubePivot）
+minor  新功能 / 新接口（v2.5 → v2.6 = 流量层引入）
+patch  bug 修复 / 文档 / 内部优化（不打 tag）
+
+实践：
+- 真 tag 只打 minor：v2.0.0 / v2.5.0 / v2.6.0
+- patch 版本是"持续改进"，跨 minor 之间可能 100+ 个内部 commit
+- v2.5.1 / v2.6.1 不会打 tag，是 minor 之间的工作集合
+```
 
 ---
 
 ## ✅ 已完成
 
-### v2.5.0（2026-04-25 release）
+### v2.6.0 — 流量层抽象 + 声明式蓝绿 (2026-04-26 release)
 
-**A.1 Controller 分片机制（完整闭环）**
+**核心代码**
 
 ```
-✅ A.1 Step 1  sharding 包基础设施（commit 721ae8d）
-   - FNV-1a 32-bit hash + ShardSet 数据结构
-   - QuotaPerPod 配额计算
-   - MultiLeaseManager N 个 lease 抢占主循环
-   - lease_helpers.go 本地实现底层 lease 工具（破 import cycle）
-   - 9 个单元测试
+✅ Step 1  internal/route/ 子包 (commit 786b59d)
+   - Provider 接口 + Route + Match + Validate 校验
+   - IngressProvider (networking.k8s.io/v1)
+   - GatewayAPIProvider (gateway.networking.k8s.io/v1)
+   - AutoDetect / NewProvider / ProviderForKind 三个工厂函数
+   - 27 个 sub-cases 单测全 PASS
+   - 内部 Error struct + NewError/WrapError，复用 internal/code 错误码
 
-✅ A.1 Step 2  业务路径接入（commit f3c3291）
-   - StartGlobal 重构：每 pod 跑独立业务路径
-   - 5 处加 shard 过滤
-   - sweeper.go 新增 Leader-only 孤儿 lease 清理
-   - deployment.yaml 加 KUBEPIVOT_SHARDS env
-   - rbac.yaml 加 deployments get 权限
+✅ Step 2  Sandbox 蓝绿流量切换接入 (commit f0244cc)
+   - internal/controller/resources.go 加 Traffic / TrafficRefs / TrafficRoute / TrafficValidation
+   - HasBlueGreen() 方法 + 5 个 case 单测
+   - cmd/kp/sandbox.go 加 runBlueGreenSwitch / waitDeploymentReady
+   - COMMITTING 内分两步执行（不动状态机，符合 Q10 拍板）
+   - 失败统一 RESTORING（复用既有 runSandboxRestore）
 
-✅ A.1 Step 3  孤儿清理（commit 99f316d）
+✅ Step 3  example-blue-green demo 工程 (commit ea48e5c)
+   - 13 个文件：README / Makefile / resources.yaml / Helm chart / 3 个 shell 脚本
+   - 不依赖 web3-blitz，任何 K8s 集群 < 2 分钟跑通
+   - traefik/whoami 镜像 + --name 参数注入版本标识
+```
+
+**文档**
+
+```
+✅ docs/design/traffic-layer.md (~430 行，去 -draft 后缀)
+✅ docs/design/state-machine.md 加"v2.6 流量层与状态机协同"章节
+✅ docs/design/architecture.md 加第 9 条核心设计决策"流量层抽象"
+✅ README.md 蓝绿章节扩展（v2.0 命令式 + v2.6 声明式双模式）
+✅ CHANGELOG.md 新建（v2.6.0 起统一格式）
+```
+
+**错误码扩展**
+
+```
+✅ internal/code/error.go 加 5 个 ErrRoute* 错误码
+   编号区段 110000-110099 留给 internal/route 包
+✅ internal/code/code_generated.go 手工补 case
+   (codegen 工具不支持多 const block，临时 workaround，详见 v2.6.1)
+```
+
+**设计 Q 拍板（14 个，全部一次过）**
+
+```
+Q1=A 升级（TrafficProvider 接口）
+Q2=D（仅蓝绿，canary 留 v2.7+）
+Q3=C（Sandbox 状态机扩展）
+Q4=C（多环境配置传播 v2.6.1）
+Q5=A（独立子包 internal/route/）
+Q6=C（双标记 annotation+label）
+Q7=C（Sandbox 状态机原子性兜底）
+Q8=B（v2.6.0 + v2.6.1 拆分）
+Q9=A（后缀法命名 -blue/-green）
+Q10=A（COMMITTING 内分两步）
+Q11=A（失败 cleanup Green）
+Q12=B（仅 Pod ready 判定）
+Q13=A（~1100 代码 + 800 文档）
+Q14=B（独立 demo 工程）
+```
+
+**v2.6.0 commit 链**
+
+```
+786b59d  Step 1: 流量层抽象 + 双 Provider
+f0244cc  Step 2: Sandbox 蓝绿接入
+ea48e5c  Step 3: demo 工程
+e35bb0e  Step 4: 文档收尾 + CHANGELOG
+1f780c2  chore: release v2.6.0  ← TAG ✨
+```
+
+**实施节奏**
+
+```
+2026-04-26 上午 6:08 起床 → 12:08 v2.6.0 release
+6 小时 / 5 个 commit / ~3000 行新代码 + 文档
+"踏踏实实 + 闪电战"——设计先行让实施无返工
+```
+
+---
+
+### v2.5.0 — Controller 分片机制 (2026-04-25 release)
+
+**核心代码**
+
+```
+✅ A.1 Step 1  internal/sharding/ 子包
+   - shard.go 分片基础（fnv32 hash 落桶）
+   - multi_lease.go K8s Lease 持有
+   - lease_helpers.go 重试 / 续约
+   
+✅ A.1 Step 2  GlobalState 接入分片
+   - GlobalState 加 shardOwner 字段
+   - reconcile 跳过非自己持有的 namespace
+   - OnShardChanged 回调
+   
+✅ A.1 Step 3  孤儿清理 (commit 99f316d)
    - GlobalState.RemoveOrphanProjects(isOwned func) 方法
    - OnShardChanged 回调即时清理（5s grace period）
    - orphanSweeper 周期兜底（30s 一次）
@@ -48,342 +135,241 @@
 **性能基准 + 设计文档**
 
 ```
-✅ sha256 热加载去重验证（命令行手测）
-   100 次幂等 apply → 0 reconcile（100% 去重）
+✅ sha256 热加载去重验证（100 次幂等 apply → 0 reconcile）
+✅ 10 项目实测（avg CPU 7.27%，集群总 21.81%）
+✅ 50 项目实测（avg CPU 33.80%，集群总 101.40%）
+   5x 项目 → 4.65x CPU（接近线性，符合预期）
+✅ P=99 数据废弃（macOS 内存压力扭曲，详见 sharding-tuning.md 1.2）
 
-✅ 10 项目实测（v2.5.0 vs v2.4.0）
-   集群总 CPU 18.92% → 31.24%（+65%）
-   诚实结论：小规模过度工程
-
-✅ 50 项目实测（v2.5.0 水平扩展验证）
-   单 pod 46.09%，集群总 138.27%
-   5x 项目 → 4.4x CPU（接近线性）
-
-✅ docs/design/sharding.md（605 行完整设计文档）
-✅ docs/design/performance.md（v2.3/v2.4/v2.5 累计数据）
+✅ docs/design/sharding.md (605 行完整设计文档 + HA 边界 Q&A)
+✅ docs/design/performance.md (v2.3/v2.4/v2.5 累计数据)
+✅ docs/design/sharding-tuning.md 雏形（环境约束章节完成）
 ```
 
 **工程基础设施**
 
 ```
-✅ benchmark/scripts/ 4 个新脚本
-   - cleanup.sh 改造支持 PROJECT_COUNT
-   - setup.sh 改造支持 PROJECT_COUNT
-   - hot-reload.sh / concurrent-chaos.sh / watch-reconnect.sh（脚本层）
-
-✅ commits/ 目录工程规范（HANDOFF.md 写入）
-   摆脱终端 shell 解析依赖，commit message 成为项目档案
-
-✅ 版本号约定（HANDOFF.md 写入）
-   只打 major.minor tag，不打 patch tag
+✅ commits/ 目录工程规范（HANDOFF.md 3.2 节）
+✅ 版本号约定（HANDOFF.md 3.3 节，只打 minor tag）
+✅ benchmark/scripts/ 工具链
+   - matrix.sh 雏形（v2.5.1 持续改进）
+   - cleanup.sh 大规模改造（≥30 项目自动停 controller）
+   - hot-reload.sh / setup.sh 修复（中文标点变量定界）
 ```
 
 ---
 
-## ⏳ v2.5.1（持续改进，不打 tag）
+## ⏳ 当前持续改进（不打 tag）
 
-### 性能立方体测试方法论（核心任务）
-
-KubePivot 是 (项目数 P, 副本数 R, 分片数 N) 的三维空间，
-单点测试无法说清"什么配置下分片真正划算"。
-
-**v2.5.1 计划**：
+### v2.6.1 候选（v2.6.0 之后的内部任务）
 
 ```
-[ ] benchmark/scripts/matrix.sh
-    自动跑 P × R × N 组合矩阵
-    输出 CSV 数据
-    
-[ ] 数据可视化
-    matplotlib 渲染热力图：(P, R) → CPU/项目
-    找最优 N 公式（基于 P 和 R）
-    
-[ ] docs/design/sharding-tuning.md
-    - 配置建议矩阵：项目数 X 用 Y 副本和 Z 分片
-    - 性能立方体可视化
-    - "什么时候应该升级到 v2.7.0 自研 informer" 的判据
+[ ] 多环境流量配置传播
+    kp deploy --env prod --from-env staging
+    从 staging 读"已验证的 traffic 配置"应用到 prod
+    设计：traffic-layer.md 第七章（已写）
+    工作量：~3 天
 
-[ ] 顺手做的小优化（如有数据支持）：
-    - QuotaPerPod ceil → floor 对比（4:4:2 vs 4:3:3 哪个更均衡）
-    - Hash 算法对比：FNV vs xxhash vs murmur3
+[ ] tools/codegen 支持多 const block
+    实测发现：v2.6.0 添加 ErrRoute* 时 codegen 只识别第一个 const block
+    报 "no values defined for type ErrorCode"
+    修法：codegen.go genDecl 函数 ~30 行 ast.Inspect 改造
+    递归收集所有匹配 typeName 的 const block
+    工作量：~30 分钟
+
+[ ] codegen -doc 模式同步
+    -doc 输出的错误码 markdown 表与 error.go 同步
+    含 ErrRoute* 5 个新错误码
+    工作量：~30 分钟
+
+[ ] flaky test 调研（如有发现）
 ```
 
-详见 docs/design/sharding.md 第 8.1 节。
+### v2.5.1 持续（前置依赖：测试环境升级）
 
-### Backoff 队列（A.1.5）
+**当前已完成的零散任务**
+
+```
+✅ Bash 脚本踩坑修完（hot-reload.sh / cleanup.sh / setup.sh）
+✅ HANDOFF.md 3.7 节扩展（中文标点紧贴变量名陷阱）
+✅ HANDOFF.md 3.7 节再扩展（codegen / kp release / sandbox fork，v2.6 实施时发现）
+✅ docs/design/sharding-tuning.md 雏形（环境约束 + 运维注意章节）
+✅ benchmark/scripts/cleanup.sh 大规模友好（≥30 项目自动停 controller）
+```
+
+**受阻于环境升级（前置条件）**
+
+```
+[ ] ⏸ 测试环境升级（v2.5.1 性能立方体的前置条件）
+    当前 8 GiB orbstack 限制 P_max ≈ 50（详见 sharding-tuning.md 1.2）
+    选项：
+      A. 升级 orbstack memory 到 16 GiB（最小变更）
+      B. 多节点 K3d 集群（docker 多 container 模拟）
+      C. 真实多节点 K8s 集群（云上）
+    推荐 A
+    
+[ ] ⏸ benchmark/scripts/matrix.sh 完整跑通（前置：环境升级）
+    阶段 1: P 维度（已 P=10 / P=50，待 P=100 / P=200）
+    阶段 2: R 维度（待 R=5 / R=10）
+    阶段 3: N 维度（待 N=3 / N=15）
+    
+[ ] ⏸ 数据可视化（前置：跑完 matrix.sh）
+    把性能数据画成 heatmap / 折线图
+    放到 sharding-tuning.md 第三章
+
+[ ] ⏸ docs/design/sharding-tuning.md 性能立方体章节补完
+    最优配置公式 + 配置建议（前置：完整数据）
+```
+
+**Backoff 队列 (A.1.5) — 暂时搁置**
 
 ```
 [ ] internal/controller/backoff_queue.go
-    Lars 的过载队列 + Probe 思想
-    项目失败次数指数 backoff
-    Probe 周期重新评估健康状态
-    ~200 行
+    指数退避队列，避免 reconcile 风暴
+    数据驱动决定优先级（先看 v2.5.0 实际生产数据是否需要）
 ```
 
-### client-go 对比基准（A.2）
+**client-go 对比基准 (A.2) — 暂时搁置**
 
 ```
-[ ] fork 一个分支：feature/client-go-comparison
-    用 client-go informer 重写 watcher
-    保持其他逻辑不变（同样的 reconcile / lease / sharding）
-    
-[ ] 跑同样的 benchmark 矩阵
-    对比 CPU/MEM/启动时间/镜像体积
-    
-[ ] 数据驱动决定 v2.7.0 自研 informer 是否启动
-    如果 client-go 能压到 1-2% CPU
-    且自研 informer 工作量 > 10 天
-    → 考虑 v3.x 加 --backend=informer 可选项
-    否则 → v2.7.0 自研 informer
+[ ] fork feature/client-go-comparison 分支
+    用 client-go 重写 GlobalState reconcile
+    跑同样的 benchmark 矩阵
+    数据驱动决定 v2.7.0 自研 informer 是否启动
 ```
 
-### v2.4.0 P2 性能脚本验证（部分完成）
+**v2.4.0 P2 性能脚本验证（部分完成）**
 
 ```
-[x] hot-reload.sh debug + 实测
-    去掉 set -e/-u，kubectl logs 先存文件再 grep
-    100 次幂等 apply → 0 reconcile（sha256 去重 100% 工作）
-    脚本结果归档：benchmark/results/2026-04-26_070015-hot-reload/
-    
-[ ] watch-reconnect.sh 实测
-    kill kubectl 子进程模拟异常
-    确认心跳守卫触发 + watcher 重连
-    （今天 v2.5.1 推进中）
-    
-[ ] concurrent-chaos.sh 实测（受阻于 mock 项目）
-    当前 setup.sh 用 kubectl apply 创建 mock，没有 helm release
-    controller 检测到资源缺失走 helm rollback 链路 → "查不到 release，无法自愈"
-    这是 KubePivot 正确的安全边界（只 rollback 自己 helm install 的资源）
-    
-    解决路径（任选其一）：
-      A. setup.sh 改造让 mock 用最小 helm chart（~1 天工程）
-      B. 用真实 helm 项目（如 web3-blitz）测试
-         前提：web3-blitz 升级（见 v2.8 章节）
-    
-    当前不阻塞其他 v2.5.1 任务，记入待办即可
-
-[ ] watch-reconnect.sh 实测（受阻于环境）
-    
-    当前实现：通过 docker top + kill -9 从宿主侧杀 controller 容器内的 kubectl 子进程
-    
-    orbstack 兼容性问题：
-      orbstack 是 VM 模式，容器 PID 命名空间隔离
-      macOS 宿主 ps 看不到容器内 PID，kill -9 失败
-      
-    解决路径（任选其一）：
-      A. orbstack ssh 进 VM 后再 kill（命令复杂，每次需找 VM 名）
-      B. controller 镜像加 procps（破坏 scratch 极简原则）
-      C. controller 加 SIGUSR1 信号处理 → 主动重启 watcher
-         ~30 行改造，运维和测试双重价值
-         推荐
-    
-    优先级：低
-    理由：watcher 心跳守卫机制在 v2.4.0 已有单元测试覆盖
-          集成测试是补强，不是必需
-
-[ ] 测试环境升级（v2.5.1 性能立方体的前置条件）
-    
-    当前问题：
-      orbstack 默认 8 GiB 不够测 P > 50
-      macOS 内存压力扭曲 benchmark 数据
-      
-    选项：
-      A. 升级 orbstack memory 到 16 GiB
-      B. 多节点 K3d 集群（docker 多 container 模拟）
-      C. 真实多节点 K8s 集群（云上）
-    
-    推荐 A：最小变更，能解锁 P=100/200 的真实数据
-
-[ ] tools/codegen 支持多 const block
-    
-    bug：codegen 当前只识别一个 const block 里的同类型常量
-    分两个 block 时（例如 ErrorCode 通用 + Route 域）只生成第一组
-    实测：v2.6.0 Step 1 加 ErrRoute* 5 个错误码时发现
-    
-    修法：
-      tools/codegen/codegen.go 的 genDecl 函数
-      ~30 行改造，让 ast.Inspect 递归收集所有匹配 typeName 的 const block
-    
-    优先级：低（不阻塞）
-    工作量：~30 分钟
+✅ hot-reload.sh 脚本层（v2.5.1 已修）
+[ ] watch-reconnect.sh 实测（受阻：orbstack VM 模式 PID 隔离）
+[ ] concurrent-chaos.sh 实测（受阻：mock 项目无 helm release）
 ```
 
 ---
 
-## ⏳ v2.6.0（下个真 tag — 流量层）
+## 🔮 远期规划
 
-Lars 思路在流量调度层完整落地。
-
-**B.1 流量层调研**
+### v2.7 — 自研 Informer + Canary
 
 ```
-[ ] docs/design/traffic-layer-draft.md
-    - K8s 现有流量层组件梳理（Ingress / Service / NetworkPolicy / Gateway API）
-    - KubePivot 在流量层的定位（不重新发明，做"GitOps 视角下的流量配置")
-    - 多环境流量切换场景（dev/staging/prod）
-    - 灰度发布的流量编排
-    
-[ ] 设计 Q 拍板（10+ 个 Q）
-```
-
-**B.2 流量层实现**
-
-```
-[ ] kp deploy --traffic <strategy>
-    canary / blue-green / shadow 三种策略
-    
-[ ] 流量层 reconcile loop 接入
-    类似 v2.5.0 sharding，但维度是"流量规则"
-    
-[ ] 集成测试
-    真实集群验证多环境切换
-```
-
-工作量预估：1-2 周专注。
-
----
-
-## ⏳ v2.7.0（自研 Informer）
-
-```
-前提：v2.5.1 client-go 对比基准的真实数据出来
-判据：client-go 能压到 1-2% CPU 但镜像 +10MB / 启动慢的代价能接受？
-      若不能 → 启动 v2.7.0
-
 [ ] internal/informer/ 新独立包
-    - list/watch 协议实现（HTTP + JSON）
-    - resource cache（hashmap by Kind+Name+NS）
-    - event distribution（订阅模式）
-    - reconnect + 增量恢复
-    
-[ ] 每个 shard 一个 informer 实例
-    K8s API server 推送的事件就只是该 shard 关心的
-    真正消除 v2.5.0 的"3 倍 watcher 开销"
-    
+    解决 watcher 框架开销
+    每个 shard 一个 informer 实例
+
 [ ] benchmark：自研 informer vs client-go vs v2.4.0 直 kubectl
-    数据驱动证明决策
+    数据驱动决定是否真上自研
+
+[ ] canary 完整实现（依赖 informer 高频事件流）
+    含 metrics 健康度判定（5xx rate / p99 latency）
+    在 v2.6 蓝绿基础上扩展 strategy: canary
+
+[ ] shadow 流量镜像
+    流量复制 + 不影响主线
+    用于"生产流量验证新版本"场景
 ```
 
-工作量预估：2-3 周专注。
-
----
-
-## ⏳ v2.8.0（候选）
-
-### 数据敏感资源保护
-
-KubePivot 当前 reconcile 逻辑**会** rollback / 重建 / 删除任何资源，
-对数据库等有状态服务存在风险。v2.8 引入"数据敏感资源"机制。
-
-设计草案（待 v2.7 后细化）：
+### v2.8 — 数据保护 + web3-blitz 升级
 
 ```
-[ ] resources.yaml 加 protect: true 标记
-    - kind: PersistentVolumeClaim
-      name: postgres-data
-      protect: true        ← 新
+[ ] 数据敏感资源保护
+    resources.yaml 加 protect: true 标记
+    reconcile 检测到删除/重建意图时阻断
+    kp confirm <ns>/<resource> 显式确认
 
-[ ] reconcile 检测到 protected 资源"应该删除/重建"时：
-    - 不自动 rollback / 重建
-    - 触发警告日志（K8s Event）
-    - 进入"人工 confirm"工作流
-    
-[ ] kp confirm <ns>/<resource> 命令
-    人工 review 确认后才执行
-    
 [ ] kp release 阻断
-    检测到 protected 资源被改动时，要求显式 --confirm-protected 参数
+    含 protected 资源时 kp release 要额外确认
+    避免 release 操作误删敏感数据
 
-前提条件：
-  - 等到自己（或早期用户）真在生产用过 KubePivot
-  - 知道"什么样的 confirm 体验不烦"再设计
-  - v2.7 自研 informer 落地后才能精确捕获 PVC 删除事件
+[ ] web3-blitz 升级到 v2.6
+    改造为声明式蓝绿（resources.yaml + sandbox commit）
+    作为 KubePivot 的"真实生产案例"
+    替换 v2.0 命令式蓝绿（kp promote）
 ```
 
-
----
-
-
-## ⏳ v2.8.0+（待规划）
-
-候选方向（按优先级模糊排序）：
+### v2.8.0+ — 待规划
 
 ```
-[ ] 多集群管理
-    kp context add cluster1 --kubeconfig ./kubeconfig-cluster1
-    kp context list / use / remove
+[ ] 多集群管理增强
+    跨集群 deployment 同步
+    集群健康度聚合
     
 [ ] Audit / 审计日志
-    所有 reconcile 行为持久化到 K8s Event 或独立 PV
-    便于事后追溯
+    所有 kp 命令的执行日志归档
+    对接 SOC2/ISO27001 合规
     
-[ ] kp controller migrate-from-v2.2
-    旧版本 etcd 数据迁移到 v2.4+ K8s Lease 模式
-    
-[ ] Web Dashboard（独立项目）
-    kp 的可视化界面
-    架构上不和 controller 同 binary
-    
-[ ] CRD 模式（重大架构选择）
-    把 ConfigMap-based 接入协议升级为 CRD
-    需要面向社区生态决策
-
-[ ] web3-blitz 项目升级 + 适配 v2.5.0+
-    背景：
-      web3-blitz 是 v2.0 时代（dtk ai-plan 自动生成）的真实 helm 项目
-      包含 wallet-service / chain-miner / postgres / etcd 多组件
-      go 1.25-alpine 在 2026-04 已有 CVE
-      resources.yaml 写法可能不完全兼容 v2.5.0 接入协议
-    
-    升级清单：
-      - Dockerfile go 1.25-alpine → go 1.26-alpine（修 CVE）
-      - 检查 resources.yaml 蓝绿部署字段（wallet-service-blue）是否仍兼容
-      - 重 build 4 个镜像 + push
-      - 真实 helm install 到集群
-      - 验证 Sandbox / Drift / Reconcile 全链路
-    
-    工程意义：
-      web3-blitz 是 KubePivot 的"真实生产用例"
-      v2.5.0 release 后让真实项目运行验证
-      副产品：能用它跑 v2.5.1 没做完的 chaos 测试
-    
-    优先级：在 v2.6.0 流量层之前应该做完
-            否则 KubePivot 的"真实场景验证"是空的
+[ ] Web UI（？）
+    KubePivot 故意保持 CLI-first
+    但企业用户场景可能需要 dashboard
+    研究 / 评估优先级
 ```
-
-不确定的事——等 v2.6 / v2.7 真实跑过再回头评估。
 
 ---
 
-## 已废弃/不做
+## ✗ 已废弃 / 不做
 
 ```
 ✗ 单 leader 模式回退选项
-   v2.5.0 起分片是默认且唯一模式（v2.4.0 单 leader 仅作为线性外推参考）
-   
+   v2.5.0 起分片是默认且唯一模式
+   v2.4.0 单 leader 仅作为线性外推参考
+
 ✗ etcd 作为 leader 选举的唯一选项
-   v2.4.0 加了 K8s Lease fallback，etcd 现在是可选的
-   
+   v2.4.0 起加了 K8s Lease fallback
+   etcd 现在是可选的（生产推荐，开发可省）
+
 ✗ v2.5.0 阶段引入 client-go
-   永久原则：不引入 client-go（自研 informer 是远期方向）
+   永久原则：不引入 client-go
+   自研 informer 是 v2.7+ 远期方向
+   v2.6 流量层 Provider 也走 kubectl 路径
+
+✗ v2.6.0 阶段做 canary
+   仅蓝绿（确定性高）
+   canary 健康度判定是大头（metrics + 渐进逻辑）
+   留 v2.7（与自研 informer 一起做）
+
+✗ v2.6.0 nginx-ingress 特有 canary annotation
+   IngressProvider 改用"切换 backend.service.name"
+   兼容任何 Ingress controller
+   
+✗ v2.6.0 metrics 监控（5xx / p99）
+   仅 Pod ready 健康判定
+   metrics 留 v2.7+
 ```
 
 ---
 
-## 工作流（按版本推进）
+## 📈 工作流（按版本推进）
 
 ```
-v2.5.0 (今天 release)
+v2.5.0 (2026-04-25) ✅
    ↓
 v2.5.1 (持续改进)
-   ↓ 性能立方体 / Backoff / client-go 对比 / P2 脚本验证
+   ↓ Bash 修复 ✅ / sharding-tuning ✅ / 性能立方体 ⏸（环境升级前阻塞）
    ↓
-v2.6.0 (下个真 tag)
-   ↓ 流量层
+v2.6.0 (2026-04-26) ✅
+   ↓
+v2.6.1 (持续改进)
+   ↓ 多环境传播 / codegen 多 const block / docs 同步
    ↓
 v2.7.0
-   ↓ 自研 informer（数据驱动判断启动）
+   ↓ 自研 informer + canary（数据驱动决定启动时机）
+   ↓
+v2.8.0
+   ↓ 数据保护 + web3-blitz 升级
    ↓
 v2.8.0+
    待规划
+```
+
+---
+
+## 编辑记录
+
+```
+2026-04-26  v2.6.0 release 后大改
+            - 归档前一版到 archived/todo/TODO-v2.5.md
+            - v2.6.0 整章 ⏳ → ✅
+            - 新增 v2.6.1 候选章节
+            - v2.5.1 受阻项加 ⏸ 标记
+            - 工作流箭头链更新到 v2.6.0
 ```
