@@ -1,0 +1,75 @@
+docs: ROADMAP.md — v2.7 → v3.0 完整路线图
+
+承接早些时候的批 1（v2.7 Event Stream Infrastructure），
+本次 commit 含批 2/3/4，ROADMAP.md 完整成型。
+
+完整结构（~2143 行）：
+
+### 摘要 + 路线图概览（批 1）
+两章节叙事：工具 → 工程（v1-v2.6）/ 工程 → 智能调度系统（v2.7-v3.0）
+
+### v2.7 Event Stream Infrastructure（批 1，~430 行）
+- 自研 Informer + Cache 4 大优化（hot/warm/cold + 增量序列化 + 内存对齐 + lock-free）
+- metrics-server / Prometheus 接入
+- 与 v2.5 sharding 深度集成
+- 工作量 3 周
+
+### v2.8 Enterprise Governance（批 2，~440 行）
+- A: SSO / OAuth（Google / GitHub / Dex 三实现）
+- B: RBAC 多团队隔离（teams.yaml + Checker 接口）
+- G: 加密 at rest（Sealed Secrets + SOPS + KMS）
+- H: 镜像签名 + 供应链（cosign + syft + supply-chain 字段）
+- 工作量 3 周
+
+### v2.8.1 v2.x 收尾（批 2，~100 行）
+- web3-blitz 升级到 v2.6 蓝绿
+- 数据保护（resources.yaml protect: true）
+- 多环境流量配置传播
+- codegen 多 const block 改造
+- kp release 自动 push
+- 工作量 1 周
+
+### v2.9 Resource Sizing Engine — 维度 B（批 3，~400 行）
+- 二维 DP：Pod × (CPU, Memory)
+- DP 状态定义 + 转移方程
+- 4 个启发式（二分裁剪 / 单调性 / 业务模板 / 时间分桶）
+- 抖动检测（周期性 / burst / 业务转型）
+- 与 K8s VPA 共存模式
+- 工作量 4 周
+- 目标：单 Pod 利用率 70%+
+
+### v3.0 Intelligent Scheduling System（批 4，~400 行）
+- 维度 A：节点 × Pod × 资源类型（bin packing）
+- 维度 B：Pod × CPU × Memory（继承 v2.9）
+- 双 DP 协同求解（Outer/Inner loop + 收敛判定）
+- 周期性运行时重调度（5min / 15min）
+- 抖动处理 + 多级降级（Level 0-3）
+- 与 K8s 默认调度器：模式 1+3 混合（webhook + GitOps）
+- 工作量 6 周
+- 目标：节点 CPU 85%+, Memory 70%+
+- 务实声明：不冲 98%
+
+### v3.x+ 多租户 + 商业化探索（批 4，简短备忘）
+推迟，等以下任一条件触发：
+- 真实多租户客户出现
+- GitHub 1000+ stars
+- 商业方向明确
+- qc 决定 KubePivot 作主业
+
+### 时间线与依赖（批 4）
+v2.6.0 → v2.7 → v2.8 → v2.8.1 → v2.9 → v3.0
+~17 周 ≈ 4 个月，buffer 25% → ~5 个月
+v3.0 预计 release：2026-09 / 10 月
+
+### 风险全景（批 4）
+- 6 个技术风险（按严重程度排序）
+- 2 个时间风险
+- 3 个商业风险（远期）
+每个风险都附概率 + 影响 + 缓解措施
+
+写作约定：
+- Q1=A 高度技术（Go 接口草图 + DP 状态定义 + 算法伪代码）
+- Q2=灵感源段落删除（qc："好肉麻"）
+- Q3=B 简短商业方向（仅 v3.x+ 章节提及）
+
+预计完整版编辑：v2.9 / v3.0 进入实施阶段时再校准时间估算。
