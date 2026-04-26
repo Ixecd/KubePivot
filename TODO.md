@@ -267,6 +267,25 @@ e35bb0e  Step 4: 文档收尾 + CHANGELOG
 [ ] shadow 流量镜像
     流量复制 + 不影响主线
     用于"生产流量验证新版本"场景
+
+[ ] CRD 支持验证 + 局部增强
+    
+    现状：
+    ✓ 资源探测 / auto-heal / drift 治理 — 已天然支持 CRD
+    ✓ Sandbox 状态机 — 已 CRD-aware
+    
+    需要补完：
+    [ ] 蓝绿流量层加 IstioProvider / LinkerdProvider
+        v2.6 当前仅支持 Ingress / GatewayAPI
+        v2.6.x 内补完，~1 周
+    
+    [ ] 通用 RouteCRDProvider（兜底方案）
+        基于 jsonpath 的通用 CRD 流量切换
+        v3.x 范围
+    
+    [ ] PVC SNAPSHOTTING 是否覆盖 CRD 管理的 PVC
+        待验证（cmd/kp/pvc.go 实现细节）
+        如未覆盖，加 ownerReference 反向追溯逻辑
 ```
 
 ### v2.8 — 数据保护 + web3-blitz 升级
