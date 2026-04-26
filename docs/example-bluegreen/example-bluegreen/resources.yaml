@@ -1,0 +1,62 @@
+# KubePivot v2.6 蓝绿部署示例配置
+#
+# 这个文件展示 resources.yaml 的 v2.6 完整 schema：
+#   - resources: 现有 v2.5 资源声明（v2.6 不变）
+#   - traffic:   v2.6 新增流量层配置
+
+resources:
+  # 蓝色版本 Deployment
+  - kind: Deployment
+    name: whoami-blue
+    on-missing: auto-heal
+    max-retry: 3
+
+  # 绿色版本 Deployment
+  - kind: Deployment
+    name: whoami-green
+    on-missing: auto-heal
+    max-retry: 3
+
+  # 蓝色 Service
+  - kind: Service
+    name: whoami-blue
+    on-missing: alert
+
+  # 绿色 Service
+  - kind: Service
+    name: whoami-green
+    on-missing: alert
+
+  # Ingress（流量入口）
+  - kind: Ingress
+    name: whoami-ingress
+    on-missing: auto-heal
+
+# v2.6.0 流量层配置
+traffic:
+  # kind 可选：Ingress / Gateway / 不写=自动检测
+  # 自动检测顺序：Gateway API > Ingress
+  # 本 demo 显式 Ingress，让结果可预测
+  kind: Ingress
+
+  # v2.6.0 仅支持 blue-green
+  strategy: blue-green
+
+  # 流量层资源引用
+  refs:
+    name: whoami-ingress
+    # namespace 省略时用 deployment 命令传入的 -n 值
+
+  # 路由规则
+  # 切换前：blue=100, green=0   ← 流量全部到 blue
+  # 切换时：把 100 / 0 互换，由 KubePivot 一次性 apply
+  # 切换后：blue=0, green=100   ← 流量全部到 green
+  routes:
+    - service: whoami-blue
+      weight: 100
+    - service: whoami-green
+      weight: 0
+
+  # 部署后健康度验证
+  validation:
+    podReadyTimeoutSec: 60

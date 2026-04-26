@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whoami-blue
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: whoami
+    version: blue
+    app.kubernetes.io/managed-by: kp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: whoami
+      version: blue
+  template:
+    metadata:
+      labels:
+        app: whoami
+        version: blue
+    spec:
+      containers:
+        - name: whoami
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - "--name=whoami-blue"
+          ports:
+            - containerPort: 80
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

@@ -1,0 +1,70 @@
+docs: v2.6.0 P0 Step 3 — 蓝绿部署 demo 工程
+
+Q14 验收用例的"独立 demo 工程"：完整可运行的蓝绿部署示例，
+不依赖 web3-blitz（其升级是 v2.8 计划任务）。
+
+新增 docs/example-blue-green/（13 个文件）：
+
+  README.md (~250 行)
+    完整教程：前置条件 / 快速开始 / 文件结构 /
+    resources.yaml schema / 内部时序 / 失败回滚验证 /
+    与 web3-blitz 的关系说明 / 故障排查
+
+  Makefile
+    make setup     初始 blue 部署
+    make verify    检查当前流量指向
+    make switch    触发蓝绿切换
+    make cleanup   清理
+
+  resources.yaml
+    展示 v2.6 完整 schema：
+    - resources: v2.5 既有资源声明
+    - traffic:   v2.6 新增流量层（kind/strategy/refs/routes/validation）
+
+  chart/ Helm chart
+    - whoami-blue / whoami-green 两个 Deployment（traefik/whoami 镜像）
+    - 同名两个 Service
+    - 初始指向 blue 的 Ingress
+    - 带 KubePivot annotation/label（managed-by / strategy）
+
+  scripts/
+    - setup.sh    创建 namespace + helm install + 等 Pod ready
+    - switch.sh   kubectl patch 模拟蓝绿切换 + 等 ready
+    - cleanup.sh  helm uninstall + 删 namespace
+
+设计理念：
+  - 不用 nginx 默认页（看不出蓝绿差异）
+  - 用 traefik/whoami + --name flag 注入版本标识
+    curl 看到 "whoami-blue" 或 "whoami-green" 即知切流成功
+  - switch.sh 当前用 kubectl patch 简化版（教学清晰）
+    真实业务：kp sandbox commit 走完整 LOCKED → ... → RUNNING
+
+文档亮点：
+  - "蓝绿切换的内部时序" 章节
+    展示 LOCKED → SNAPSHOTTING → SIMULATING → COMMITTING:
+      a. runSandboxCommit (helm)
+      b. runBlueGreenSwitch (v2.6) ← Step 2 接入点
+    清楚解释 v2.6 在哪一步发挥作用
+    
+  - "失败回滚验证" 章节
+    手动改坏 green 镜像 → 触发切换 → 期望 RESTORING → 流量回 blue
+    教用户如何验证 KubePivot 的自愈能力
+    
+  - "故障排查" 章节
+    "Route provider is not available" 处理
+    Pod ready 超时调整
+    Ingress controller 缓存问题
+
+工作量：
+  - ~250 行 README + ~50 行 resources.yaml + ~30 行 Makefile
+  - ~150 行 Helm chart + ~120 行 scripts
+  - 合计 ~600 行（非代码：YAML + Markdown + Bash）
+
+下一步：
+  Commit 403: docs/design/traffic-layer-draft.md → traffic-layer.md（去草案）
+              + state-machine.md / architecture.md / README.md / CHANGELOG.md
+  Commit 404: kp release v2.6.0 → 打 tag
+
+工程意义：
+  v2.6 蓝绿能力从"代码 + 测试"延伸到"用户能跑"
+  下次任何人想验证 v2.6：cd docs/example-blue-green && make setup

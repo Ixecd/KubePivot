@@ -1,0 +1,27 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: whoami-ingress
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/managed-by: kp
+    kubepivot.io/strategy: blue-green
+  annotations:
+    kubepivot.io/managed: "true"
+    kubepivot.io/managed-fields: "spec.rules"
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                # 初始指向 blue，由 KubePivot v2.6 蓝绿切换更新
+                name: whoami-blue
+                port:
+                  number: 80
