@@ -1,0 +1,52 @@
+docs: 创建 sharding-tuning.md 雏形 + 记录环境约束发现
+
+v2.5.1 性能立方体测试规划的核心文档雏形。
+
+新增 docs/design/sharding-tuning.md（~250 行）：
+
+第一章：环境约束（来自 2026-04-26 实测发现）
+  1.1 单节点 Pod 容量上限
+      P_max ≈ node.pods - controller_replicas - system_pods
+            ≈ 110 - 3 - 9 = 98（orbstack 默认）
+      实测 P=100 第 100 个 pod FailedScheduling
+      
+  1.2 macOS 内存约束扭曲性能数据
+      K8s memory limits > 80% allocatable 时
+      macOS swap 启动 → load avg 突破 CPU 数
+      实测 P=99 数据废弃：avg CPU 23.79% 反而比 P=50 (33.80%) 还低
+      根因是 controller 被节流，不是真"更经济"
+      
+  1.3 测试方法论
+      benchmark 脚本应该测试前预检 load + memory
+      v2.5.1 性能立方体 matrix.sh 应具备此能力
+
+第二章：运维注意事项
+  2.1 大规模 cleanup 的"reconcile 死锁螺旋"
+      ≥50 ns 同时 cleanup 时
+      controller 持续 reconcile + finalizer 卡死
+      实测 100 ns cleanup 后 90 秒只清 6/100
+      解法：先 scale controller 到 0，再 cleanup
+      
+  2.2 Namespace 强删 API（kubectl replace --raw /finalize）
+      最后手段，仅适用 benchmark 集群
+
+第三章：性能立方体（待补）
+  当前数据点：P=10/50 R=3 N=10
+  P=10 → P=50 缩放性：CPU 4.65x（接近线性）
+  待跑：R=5、N 维度
+  前提：升 orbstack 或多节点环境
+
+第四章：配置建议（待数据驱动补完）
+  N 公式猜测：N_optimal ≈ R × ceiling(P / 30)
+  副本数选择参考表
+  
+工程意义：
+  这次"试错性"测试比成功测试更值钱
+  发现了真实的工程约束（pod 上限 + 内存压力 + cleanup 死锁）
+  这些约束写入文档后成为后续测试的前提条件
+  避免重复踩坑
+
+下一步（不阻塞 v2.6.0）：
+  - 升级 orbstack 到 16 GiB（或迁移到多节点测试集群）
+  - 跑完 P=100 / R=5 / N 维度的真实数据
+  - 完善第三章性能立方体 + 第四章配置建议

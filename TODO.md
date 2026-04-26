@@ -180,6 +180,19 @@ KubePivot 是 (项目数 P, 副本数 R, 分片数 N) 的三维空间，
     优先级：低
     理由：watcher 心跳守卫机制在 v2.4.0 已有单元测试覆盖
           集成测试是补强，不是必需
+
+[ ] 测试环境升级（v2.5.1 性能立方体的前置条件）
+    
+    当前问题：
+      orbstack 默认 8 GiB 不够测 P > 50
+      macOS 内存压力扭曲 benchmark 数据
+      
+    选项：
+      A. 升级 orbstack memory 到 16 GiB
+      B. 多节点 K3d 集群（docker 多 container 模拟）
+      C. 真实多节点 K8s 集群（云上）
+    
+    推荐 A：最小变更，能解锁 P=100/200 的真实数据
 ```
 
 ---
