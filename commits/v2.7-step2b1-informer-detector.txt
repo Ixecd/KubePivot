@@ -1,0 +1,140 @@
+feat(controller): v2.7 Step 2b-1 - InformerDetector with kubectl fallback
+
+Step 2b-1 完成：reconcile 路径首个 informer 接入点（双保险渐进切换）。
+
+变更：
+  internal/controller/informer_detector.go        新增 ~110 行
+  internal/controller/informer_detector_test.go   新增 ~278 行 (9 cases)
+  internal/controller/informer_pool.go            +20 行 (SetShardMgr 方法)
+  internal/controller/global.go                   ~+15 / -10 行（顺序调整 + handleTask 改造）
+
+合计 ~410 行新增 / ~10 行删除，9 个测试 cases。
+
+设计核心（C 路径：找到信任，没找到 fallback）:
+
+  现有架构发现：
+    Detector 接口已存在（v2.4/v2.5 设计）
+    KubectlDetector 是当前生产实现
+    mockDetector 是测试 mock
+    Reconciler.detector 是 interface field
+  
+  → Step 2b-1 不需要"改造 reconcile 路径"
+  → 仅新增 InformerDetector 实现 Detector 接口
+  → reconcile/heal 业务代码 0 改动
+  → 既有 75 个 controller 测试 0 改动
+
+InformerDetector 算法:
+  1. kind 转换为 informer resource name (仅试点 Deployment)
+  2. 不支持的 kind → fallback
+  3. informer 未启动 → fallback (fail soft 触发后)
+  4. informer.Get 找到 → return true (信任 cache)
+  5. informer.Get 未找到 → fallback (cache 可能滞后，二次验证)
+
+为什么"找到信任，没找到 fallback":
+  - 信任 cache: 找到的资源大概率真存在 (Watch 已收到 ADD 事件)
+  - 不信任 cache miss: cache 可能滞后 (list 未完成 / watch 延迟)
+                       → fallback 到 kubectl 保证不漏查
+  - 性能: 大部分查询走 cache (~50ns) 替代 kubectl fork (~100ms)
+  - 一致性: 既有 v2.5/v2.6 行为完全保留 (fallback 兜底)
+
+global.go 改造（最小侵入）:
+
+  顺序调整（informerPool 提前创建）:
+    informerPool := NewInformerPool(nil, totalShards, kubeconfig)  // shardMgr 占位 nil
+    pool := NewWorkerPool(20, func(...) error {
+        return handleTask(taskCtx, gs, kubeconfig, task, informerPool)
+    })
+    // ... shardMgr 创建 ...
+    informerPool.SetShardMgr(shardMgr)  // 延迟绑定（NewInformerPool 之后，Start 之前）
+    // ...
+    informerPool.Start(ctx, "deployments", "apps/v1")
+  
+  原因：handleTask 闭包必须能引用 informerPool
+        但 shardMgr 创建依赖 OnShardChanged 回调（自引用）
+        → "先创建空 pool，shardMgr 创建后再绑"模式
+
+  handleTask 改造:
+    detector := NewInformerDetector(informerPool, NewKubectlDetector(kubeconfig))
+
+InformerPool 新增 SetShardMgr 方法:
+  延迟绑定 shardMgr 的标准模式
+  Start 之前调用，绑定后影响后续 informer 启动
+  并发安全（mutex 保护）
+
+设计 review 决策记录:
+
+  S1: InformerDetector 算法 ✓
+  S2: kind 映射仅 Deployment（试点）✓
+  S3: fallback 策略 = C（找到信任，没找到 fallback）✓
+  S4: 测试覆盖 9 cases ✓
+  S5: global.go 改造点（informerPool 提前 + SetShardMgr 延迟绑定）✓
+  S6: 不等 cache warmup（fallback 自动处理）✓
+
+  Step 2b 重新拆分（基于 heal.go 实际审查）:
+    Step 2b-1 ✅ DetectResourceExists 接入（本 commit）
+    Step 2b-2 todo loadResourceLabels (heal.go line 42) - 仅 Deployment label 读
+    其他 heal.go 调用都是写操作 (scale/patch/apply) - 不改
+
+测试覆盖（9 cases）:
+
+  kind 映射（1 + 4 sub-cases）:
+    TestKindToResource - Deployment / 大小写不敏感 / 不支持 kind
+
+  Cache hit 路径（2）:
+    CacheHit_DoesNotCallFallback ⭐
+      验证 cache 命中时不调 fallback
+    CacheHit_IgnoresFallbackError ⭐
+      验证 cache 命中时即使 fallback 有错也不暴露
+      (这是 InformerDetector 真正的性能价值)
+  
+  Fallback 路径（4）:
+    CacheMiss_FallsBack            cache 未命中 → fallback
+    UnsupportedKind_FallsBack      Service 等不支持 kind → fallback
+    InformerNotStarted_FallsBack   informer 未启动 → fallback
+    NilPool_FallsBack              nil pool 防御性检查
+  
+  错误透传（1）:
+    FallbackError_IsPropagated     fallback error 不吞掉
+
+  接口契约（1）:
+    ImplementsDetector             编译期保证实现 Detector
+
+测试结果:
+  全部 ~230 cases 全 PASS
+  既有 controller 75 个测试不受影响
+  test/integration 不受影响
+  Race detector 全绿
+  make dev 全绿
+
+工程纪律亮点:
+
+  发现现有 Detector 接口 → 改造范围从 "5342 行" 缩减到 "新增 1 个文件 + 改 global.go 3 处"
+
+  否决项（值得记录）:
+    ✗ DryRun bool 字段 (anti-pattern: 为测试改生产)
+    ✗ source=cfg.Source() log (接口污染)
+    ✓ newInformerFunc 函数变量注入 (与 readTokenFile 同模式)
+
+  heal.go 实际改造范围比初评估小:
+    line 42  loadResourceLabels - 读 Deployment label - Step 2b-2 候选
+    line 286/321/400/454/689 - 写操作 - 不改 (informer 帮不上忙)
+    line 532  list pods - Step 2c (引入 pod informer 后才能改)
+    line 551  patch - 写操作 - 不改
+
+Step 2 进度:
+  Step 2a-1 done in-cluster auth (424)
+  Step 2a-2 done informer pool 接入 (425)
+  Step 2b-1 done InformerDetector 接入 reconcile (本 commit)
+  Step 2b-2 todo loadResourceLabels 改造（明天，30min）
+
+v2.7 整体进度:
+  ████████████████████████░░░░  ~80%
+  Step 1 ✅ eventstream 包 (5/5)
+  Step 2 ⏳ 渐进切换 (75% - 仅缺 2b-2)
+  Step 3 ⏳ MetricsClient (业务指标)
+  Step 4 ⏳ Bench 3 (envtest)
+  Step 5 ⏳ finalize + tag
+
+bug 修复:
+  unused import bug (eventstream) - qc 直接 micro-fix
+  Master 历史无 fix commit

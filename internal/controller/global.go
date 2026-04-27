@@ -39,8 +39,21 @@ func StartGlobal(ctx context.Context) {
 
 	gs := NewGlobalState()
 
+	// v2.7 Step 2b-1: informer pool 提前创建（在 worker pool 之前）
+	//
+	// 这样 handleTask 闭包可以引用 informerPool，让 reconciler 用 InformerDetector。
+	// 注意：NewInformerPool 创建空 pool 不依赖 shardMgr，
+	//       informerPool.Start 在 shardMgr 创建后调用（见下方 step 7）。
+	// shardMgr 此时还未创建，先传 nil；Start 时 pool 会用此时已创建的 shardMgr。
+	//
+	// 双保险：
+	//   - InformerDetector 优先查 cache（命中即返回 true）
+	//   - cache 未命中或 informer 未启动 → fallback 到 KubectlDetector
+	//   - 既有 v2.5/v2.6 的 reconcile 行为完全保留
+	informerPool := NewInformerPool(nil, totalShards, kubeconfig)
+
 	pool := NewWorkerPool(20, func(taskCtx context.Context, task ReconcileTask) error {
-		return handleTask(taskCtx, gs, kubeconfig, task)
+		return handleTask(taskCtx, gs, kubeconfig, task, informerPool)
 	})
 
 	var shardMgr *sharding.MultiLeaseManager
@@ -64,6 +77,9 @@ func StartGlobal(ctx context.Context) {
 			}
 		},
 	})
+
+	// v2.7 Step 2b-1: shardMgr 创建后，绑到 informerPool（informerPool 之前用 nil 占位）
+	informerPool.SetShardMgr(shardMgr)
 
 	var wg sync.WaitGroup
 
@@ -109,20 +125,14 @@ func StartGlobal(ctx context.Context) {
 		orphanSweeper(ctx, gs, shardMgr, totalShards)
 	}()
 
-	// 7. v2.7 Step 2a-2：informer pool（双保险渐进引入，fail soft）
+	// 7. v2.7 Step 2a-2 / 2b-1: informer pool 启动 + 接入 reconcile
 	//
-	// 当前阶段：
-	//   - informer 启动跑起来（cache 自动维护）
-	//   - 既有 KubectlWatcher / kubectl get 路径继续工作
-	//   - 没有 subscriber，事件流入 cache 即丢
+	// informerPool 在 NewWorkerPool 之前已创建（见上方 "v2.7 Step 2b-1" 注释块）
+	// 此处启动 informer（依赖 shardMgr.Shards()，要等 shardMgr 创建后）
 	//
 	// v2.7.x 计划：
 	//   - 加 controller HTTP server 暴露 /metrics
 	//   - 调 informerPool.RegisterMetrics(prometheus.DefaultRegisterer)
-	//
-	// v2.7.x / v2.8 计划：
-	//   - reconciler / drift_sync 用 informer.Get 替换 kubectl get
-	informerPool := NewInformerPool(shardMgr, totalShards, kubeconfig)
 	informerPool.Start(ctx, "deployments", "apps/v1")
 	defer informerPool.StopAll()
 
@@ -361,7 +371,8 @@ func enqueueProjectResources(
 // handleTask worker pool 的回调：单个资源的 reconcile
 //
 // v2.5.0：第二道 shard 过滤（防 task 入队后 shard 失主的 race）
-func handleTask(ctx context.Context, gs *GlobalState, kubeconfig string, task ReconcileTask) error {
+// v2.7 Step 2b-1：detector 用 InformerDetector（informer cache + kubectl fallback）
+func handleTask(ctx context.Context, gs *GlobalState, kubeconfig string, task ReconcileTask, informerPool *InformerPool) error {
 	if IsProtectedNamespace(task.Namespace) {
 		return fmt.Errorf("拒绝对 protected namespace 执行 reconcile: %s", task.Namespace)
 	}
@@ -405,11 +416,20 @@ func handleTask(ctx context.Context, gs *GlobalState, kubeconfig string, task Re
 		return fmt.Errorf("资源 %s/%s 已从 resources.yaml 移除", task.Kind, task.Name)
 	}
 
+	// v2.7 Step 2b-1: InformerDetector (informer cache hit) + KubectlDetector (fallback)
+	//
+	// 双保险:
+	//   - informer cache 命中 -> 直接 return true（避免 kubectl fork ~100ms）
+	//   - cache miss / informer 未启动 -> fallback 到 kubectl 二次验证
+	//   - 既有 v2.5/v2.6 行为完全保留（fallback 兜底）
+	kubectlDetector := NewKubectlDetector(kubeconfig)
+	detector := NewInformerDetector(informerPool, kubectlDetector)
+
 	r := &Reconciler{
 		sm:         sm,
 		kubeconfig: kubeconfig,
 		project:    task.Project,
-		detector:   NewKubectlDetector(kubeconfig),
+		detector:   detector,
 		helm:       &RealHelmClient{},
 		resources:  &ResourcesConfig{Resources: resources},
 	}

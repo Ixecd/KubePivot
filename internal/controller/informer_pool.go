@@ -196,6 +196,26 @@ func (p *InformerPool) RegisterMetrics(reg prometheus.Registerer) error {
 	return eventstream.RegisterInformerMetrics(reg, informers...)
 }
 
+// SetShardMgr 设置 sharding manager（延迟绑定）。
+//
+// 用于 controller 启动时的特殊场景：
+//   informerPool 必须先创建（让 worker pool 闭包引用）
+//   shardMgr 后创建（依赖 OnShardChanged 回调）
+//
+// 调用顺序：
+//   1. NewInformerPool(nil, totalShards, kubeconfig)
+//   2. ... shardMgr 创建 ...
+//   3. pool.SetShardMgr(shardMgr)
+//   4. pool.Start(...)
+//
+// SetShardMgr 必须在 Start 之前调用。
+// Start 后调用不会影响已启动 informer 的 ShardSet。
+func (p *InformerPool) SetShardMgr(shardMgr *sharding.MultiLeaseManager) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.shardMgr = shardMgr
+}
+
 // Size 返回当前持有的 informer 数量（debug 用）。
 func (p *InformerPool) Size() int {
 	p.mu.RLock()
