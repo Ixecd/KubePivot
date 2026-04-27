@@ -1,0 +1,62 @@
+docs(design): v2.7 Event Stream Infrastructure 设计草案
+
+新建 docs/design/eventstream-draft.md（~1290 行）。
+
+v2.7 是 KubePivot 进入"决策系统"领域的基础设施版本。
+核心论断："Informer ≠ Cache"——KubePivot v2.7 不是重新发明 client-go，
+而是为 KubePivot 自己的 reconcile 模式做专用 Cache。
+
+10 个核心设计 Q 全部拍板：
+
+  Q1=C   benchmark 决定（默认偏向自研）
+  Q2=C   Cache 分层双驱动（状态机 + 访问频率）
+  Q3=B+  Skeleton 字段：name/ns/kind/generation/labels/replicas/phase
+         + ResourceVersion（K8s 乐观锁字段，3 个用途）
+  Q4=C   immutable cache snapshot + atomic.Value 存根指针
+  Q5=C   ShardSet 启动时 + 运行时动态更新
+  Q6=B   Metrics 双 client（kubectl top + Prometheus）
+  Q7=C   Watch 重连指数退避 + jitter=0.2
+  Q8=C   Resync 默认 30min + 按资源类型差异化
+         (pods/events 10min, services 60min, namespaces 120min)
+  Q9=A   每种资源一个全局 Informer，shard 过滤在 dispatcher
+         （不为逻辑隔离浪费 connection）
+  Q10=C  渐进灰度 Step 1/2/3
+         Step 2 关键里程碑：写 kp list 验证 cache 命中率
+
+文档结构（16 章节）：
+  1. 摘要
+  2. 整体架构（ASCII 图）
+  3. Provider 接口
+     - Informer 接口（Get/List/Subscribe/Stats/Stop）
+     - Resource 类型（含 SkeletonChanged 比对函数）
+     - ShardSet 接口（v2.5 联动）
+  4. Cache 分层架构
+     - 三层结构（Hot/Warm/Cold）
+     - 分层判定规则（双驱动并集）
+     - lock-free Hot 层实现（atomic.Value + immutable snapshot）
+  5. 增量序列化
+     - ParseSkeleton 实现
+     - ResourceVersion 的 3 个用途
+  6. Watch 重连（指数退避 + jitter=0.2）
+  7. 按资源类型差异化 Resync
+  8. Shard Dispatcher（事件过滤层）
+  9. Metrics 接入双 client
+  10. 与 v2.5 sharding 集成（adapter 模式避免 import cycle）
+  11. 灰度上线计划（Step 1/2/3 三阶段）
+  12. Benchmark 计划 vs client-go
+     判定标准：差距 ≤ 10% 走自研，> 50% 仍倾向自研但记录
+  13. 14 个设计 Q 拍板表（10 个明确 + 4 个隐含）
+  14. 风险与对策（7 个）
+  15. 验收标准（功能 + 性能 + 集成）
+  16. 工作量预估（3 周分阶段）
+
+写作约定：
+  - 高度技术（完整 Go 接口草图 + 性能预测）
+  - 工程伦理（benchmark 数据公开 + 灰度回退路径）
+  - 不藏数据
+
+下一步：
+  Step 1 实施开始
+  - benchmark 框架 + client-go baseline
+  - Resource / Skeleton / Cache 三层实现
+  - Informer 接口 + watch 实现
