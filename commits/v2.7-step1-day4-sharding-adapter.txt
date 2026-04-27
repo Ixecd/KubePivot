@@ -1,0 +1,125 @@
+feat(eventstream): v2.7 Step 1 Day 4 - v2.5 sharding adapter
+
+Day 4 完成：将 v2.5 sharding 系统适配到 eventstream.ShardSet 接口。
+
+变更：
+  internal/eventstream/adapter_sharding.go      新增 124 行
+  internal/eventstream/adapter_sharding_test.go 新增 198 行
+
+合计新增 322 行，12 个测试用例。
+
+设计动机：
+
+  v2.5 sharding.ShardSet 实际签名：
+    func (s *ShardSet) OwnsNamespace(namespace string, totalShards int) bool
+
+  eventstream.ShardSet 接口期望：
+    Owns(namespace string) bool
+
+  差异：v2.5 是无状态分片索引集合（需传 totalShards）
+        eventstream 期望封装好的接口（只问 Owns）
+  
+  Adapter 桥接两者，并避免 internal/eventstream/ 直接 import
+  internal/sharding/（保持依赖单向，仅此 adapter 文件做桥）
+
+adapter_sharding.go 核心组件：
+
+  shardSetAdapter struct:
+    inner       *sharding.ShardSet  v2.5 类型借用引用
+    totalShards int                  启动时一次性配置
+  
+  NewShardSetAdapter(inner, totalShards) ShardSet
+    - inner=nil       -> 返回 nil（优雅降级）
+    - totalShards<=0  -> 返回 nil
+    - 否则封装为 ShardSet 接口
+  
+  Owns(ns) -> 转发 v2.5 的 OwnsNamespace
+    hash 算法（FNV-1a 32-bit）由 v2.5 提供，不重复计算
+    并发安全由 sharding.ShardSet 内部 RWMutex 保证
+
+  staticShardSet struct:
+    用于测试 / 单 pod 场景的固定 shard 实现
+    不依赖 v2.5 sharding
+  
+  NewStaticShardSet(namespaces []string) ShardSet
+    - nil 或空 slice -> 所有 ns 都归本 pod（单 pod 场景）
+    - 非空 slice     -> 仅这些 ns 归本 pod（明确指定）
+
+设计决策（A 路径锁定）：
+
+  问题：adapter 如何处理 totalShards？
+  
+  A. 持有静态配置（启动时一次传入）          ← 选择
+  B. 从 MultiLeaseManager 动态读
+  
+  数据：v2.5 的 m.totalShards 是私有字段（小写）
+        没有公开的 TotalShards() 方法
+        → B 路径不可行
+  
+  本质：v2.5 的 totalShards 是部署时配置（默认 10）
+        改 totalShards 通常意味着滚动升级
+        滚动升级时所有 informer 都会重建
+        → "totalShards 不变" 是合理假设
+  
+  → A 简单、清晰、符合 v2.5 实际语义
+
+OnShardChanged 回调的处理：
+
+  v2.5 的 MultiLeaseConfig 已含 OnShardChanged 回调:
+    OnShardChanged func(added, removed []int)
+  
+  v2.7.0 当前实现：adapter 不订阅此 callback
+    shard 变化时漏事件，由 resync ticker（默认 30min）周期性兜底
+    
+  v2.7.1+ 计划：在 adapter 内启动 goroutine 监听 OnShardChanged
+    新接管的 shard 对应 ns 触发 EventResync 补发对象
+    实现复杂度高，YAGNI 暂不做
+  
+  注释中已记录此扩展点位置
+
+测试覆盖：
+
+  参数验证（4）：
+    NilInner / ZeroTotalShards / NegativeTotalShards / ValidConstruction
+  
+  Owns 行为（3）：
+    OwnsAllShards     拥有所有 shard 时任何 ns 都归属
+    OwnsNoShards      不持有 shard 时任何 ns 都不归属
+    PartialShards     部分 shard 时与 inner 行为一致
+  
+  v2.5 联动（1）：
+    ConsistentWithShardOf 50 个 ns 验证 adapter 与 v2.5 ShardOf 完全一致
+  
+  staticShardSet（3）：
+    AllNamespaces     nil/空 slice 全部归属
+    SpecificNamespaces 指定列表精确归属
+    EmptyVsNil        nil 与空 slice 行为一致
+  
+  集成（1）：
+    IntegrationWithInformer 接口契约（编译期 + runtime 双重验证）
+
+工程收益：
+
+  v2.7 controller 改造路径打通：
+    sharding.NewMultiLeaseManager(...).Shards() 
+      -> eventstream.NewShardSetAdapter(_, totalShards) 
+      -> InformerOptions.ShardSet 
+      -> 自动过滤非本 pod 的事件
+
+  保持 Master 哲学：
+    eventstream 不直接 import sharding
+    仅 adapter_sharding.go 一个文件做桥
+    依赖图保持清晰
+
+Step 1 进度：
+  Day 1 done benchmark + perf 决策 (414)
+  Day 2 done 包基础 + Cache + cache_policy (415-416)
+  Day 3 done 接口 + reconnect + resync + watch loop + 测试 (417-418)
+  Day 4 done v2.5 sharding adapter (本 commit)
+  Day 5 todo Metrics + Bench 3 + docs 收尾
+
+测试结果：
+  全部 ~152 cases 全 PASS
+  覆盖率 88.2% (vs 87.7% before, 略升)
+  Race detector 全绿
+  make dev 全绿
