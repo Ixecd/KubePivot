@@ -127,21 +127,28 @@ func NewInformer(ctx context.Context, opts InformerOptions) (Informer, error) {
 	// CachePolicy 零值即可（默认全 Hot 行为）
 	// 当前 v2.7.0 仅实现 Hot 层，CachePolicy 主要影响后续版本
 
+	// v2.7 Step 2a-1: 通过 resolveK8sConfig 解析连接配置 (auth.go)
+	//
+	// 三种路径自动选择：
+	//   - opts.APIServerURL 非空 → 显式 URL（无 auth，测试 / kubectl proxy 场景）
+	//   - opts.KubeConfig 非空    → kubeconfig 解析（v2.7.0 暂未实施）
+	//   - 三者都空                → in-cluster ServiceAccount + CA
+	//
+	// 失败时直接返回 error（不做猜测式 fallback）。
+	// 调用方（如 controller informer pool）决定 fail soft 或退出。
+	k8sCfg, err := resolveK8sConfig(opts)
+	if err != nil {
+		return nil, fmt.Errorf("eventstream: NewInformer: %w", err)
+	}
+	// 写回标准化的 URL（如 trim 尾部斜杠），buildBaseURL 等仍读 opts.APIServerURL
+	opts.APIServerURL = k8sCfg.APIServerURL()
+
 	im := &informerImpl{
-		opts:   opts,
-		cache:  NewCache(),
-		stopCh: make(chan struct{}),
-		doneCh: make(chan struct{}),
-		httpClient: &http.Client{
-			// watch 不能用整体 timeout，per-request 用 ctx 控制
-			Timeout: 0,
-			Transport: &http.Transport{
-				MaxIdleConns:        10,
-				IdleConnTimeout:     90 * time.Second,
-				DisableCompression:  false,
-				ResponseHeaderTimeout: httpRequestTimeout,
-			},
-		},
+		opts:       opts,
+		cache:      NewCache(),
+		stopCh:     make(chan struct{}),
+		doneCh:     make(chan struct{}),
+		httpClient: k8sCfg.HTTPClient(),
 	}
 
 	return im, nil

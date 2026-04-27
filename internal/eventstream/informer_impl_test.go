@@ -2,6 +2,7 @@ package eventstream
 
 import (
 	"context"
+	"errors"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -277,6 +278,37 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool, msg string) 
 // ═══════════════════════════════════════════════════════════════════
 // 测试：未 Start 直接 Stop（修复 bug 验证）
 // ═══════════════════════════════════════════════════════════════════
+
+// TestNewInformer_AuthResolveFailure 验证 NewInformer 真的调 resolveK8sConfig。
+//
+// 当三种 auth 路径都失败时（不传 APIServerURL + 不传 KubeConfig + in-cluster
+// 文件不可读），NewInformer 应返回 error。
+//
+// 此测试确保 auth.go 真的接入了 informer_impl，没有变成"代码挂在那但没人调"。
+func TestNewInformer_AuthResolveFailure(t *testing.T) {
+	// mock readTokenFile 返回 error，模拟 in-cluster 路径失败
+	oldRead := readTokenFile
+	readTokenFile = func() ([]byte, error) {
+		return nil, errors.New("simulated in-cluster failure")
+	}
+	defer func() { readTokenFile = oldRead }()
+
+	_, err := NewInformer(context.Background(), InformerOptions{
+		Resource:   "deployments",
+		APIVersion: "apps/v1",
+		// 不传 APIServerURL，不传 KubeConfig → 走路径 3 → 应失败
+	})
+	if err == nil {
+		t.Fatal("expected error when all auth paths fail")
+	}
+	// 错误应包含 NewInformer prefix（来自 informer_impl）+ auth prefix（来自 auth.go）
+	if !strings.Contains(err.Error(), "NewInformer") {
+		t.Errorf("error 应含 NewInformer prefix，得到: %v", err)
+	}
+	if !strings.Contains(err.Error(), "auth") {
+		t.Errorf("error 应含 auth prefix（说明真的调了 resolveK8sConfig），得到: %v", err)
+	}
+}
 
 func TestInformer_StopWithoutStart(t *testing.T) {
 	informer, err := NewInformer(context.Background(), InformerOptions{
