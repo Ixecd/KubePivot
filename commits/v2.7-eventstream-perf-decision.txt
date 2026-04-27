@@ -1,0 +1,44 @@
+docs: v2.7 Event Stream 性能基准决策文档
+
+新建 docs/design/eventstream-perf.md（~345 行）。
+
+KubePivot v2.7 自研 Cache vs client-go cache.Indexer Day 1 基准数据。
+作为 v2.7 实施的"决策锚点"+ 对外公开的"性能测试结果"。
+
+核心数据（Apple M4 / Go 1.25）：
+  Cache Get             3.1x 时间 + 6x 内存
+  Cache List (ns)       46x 时间 + 100x 内存 ⭐
+  Cache ListAll         持平时间 + 2x 内存
+  ColdStart 1000        1.8x 时间 + 8.5x 内存
+  ColdStart 10000       1.9x 时间 + 8.6x 内存
+  内存放大率 (1w obj)   1.65x vs 4.69x → 2.84x 优势 ⭐
+
+文档结构：
+  1. 摘要（决策结论）
+  2. 测试方法（公平性约定 + 5 个 bench）
+  3. 数据汇总（完整对比表）
+  4. 关键洞察（4 个，含全量持平的诚实标注）
+  5. 测试限制（4 项诚实标注：fake 数据 / macOS heap / Bench 3 缺）
+  6. 实施迭代（v1 失败 → v2 修复，工程透明）
+  7. 决策门（按 draft.md 判定标准）
+  8. 后续动作（Step 1/2 路线）
+  9. 数据原始档（指向 feature 分支）
+
+工程伦理：
+  - 不藏数据（v1 实现的失败也写出来）
+  - 不夸大（全量场景持平诚实标注）
+  - 测试限制透明（macOS heap 替代 RSS / Bench 3 未实施）
+  - 原始数据可追溯（feature/client-go-comparison 分支）
+
+决策结论：
+  按 draft.md 判定标准 → 自研路径 100% 成立
+  按 v2.7 计划进入 Step 1 实施
+  
+  Master 分支永不依赖 client-go（KubePivot 哲学不动摇）
+  feature/client-go-comparison 分支保留作为长期档案
+
+预期使用场景：
+  - v2.7 Step 1 实施时回看（性能目标基线）
+  - v2.7.0 release 时引用（产品文档）
+  - v2.7.x / v2.8.x 重新跑对比时引用
+  - 对外 README / 博客叙事时引用
