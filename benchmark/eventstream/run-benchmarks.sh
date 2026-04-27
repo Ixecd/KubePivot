@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
-# v2.7 Event Stream Benchmark - Day 1 一键执行
+# v2.7 Event Stream Benchmark - 完整 5 项基准
+#
+# Bench 1: Cache Get 单条读延迟
+# Bench 2: Cache List 全量遍历
+# Bench 3: Watch 稳态吞吐
+# Bench 4: 启动时间 cold start
+# Bench 5: 内存放大率（核心差异化指标）
 #
 # 跑完输出对比报告
 # 数据自动归档到 docs/design/eventstream-perf/$(date)/
@@ -31,7 +37,7 @@ log "GOGC=${GOGC} GOMEMLIMIT=${GOMEMLIMIT} GOMAXPROCS=${GOMAXPROCS}"
 log "Output: ${OUTPUT_DIR}"
 
 # ─── Bench 1-4 (标准 go bench) ────────────────────────────────
-log "运行 Bench 1-4 (Cache Get / List / Cold Start / Watch)..."
+log "运行 Bench 1-4 (Cache Get / List / Cold Start / Watch Throughput)..."
 go test -bench=. -benchmem -run=^$ -count=10 -timeout=30m \
     -cpuprofile="${OUTPUT_DIR}/cpu.prof" \
     -memprofile="${OUTPUT_DIR}/mem.prof" \
@@ -58,6 +64,14 @@ go test -run=TestMemoryAmplification_KubePivot -v -timeout=10m \
 
 ok "Bench 5 完成"
 
+# ─── Bench 3: Watch Throughput 对比报告 (events/sec) ──────────
+log "运行 Bench 3 对比报告: Watch 稳态吞吐..."
+
+go test -run=TestWatchThroughputComparison -v -timeout=10m \
+    | tee "${OUTPUT_DIR}/watch-throughput.txt"
+
+ok "Bench 3 对比报告完成"
+
 # ─── 反序列化对比 (Bench 5 辅助) ─────────────────────────────
 log "运行 ParseOnly 对比 (反序列化基线)..."
 go test -bench=BenchmarkParseOnly -benchmem -run=^$ -count=5 \
@@ -70,7 +84,8 @@ echo -e "${GREEN}  Day 1 Benchmark 完成${NC}"
 echo -e "${GREEN}═══════════════════════════════════════════════${NC}"
 echo
 echo "  数据归档: ${OUTPUT_DIR}/"
-echo "    - bench-results.txt           Bench 1-4"
+echo "    - bench-results.txt           Bench 1-4 (含 Bench 3 BenchmarkXxx)"
+echo "    - watch-throughput.txt        Bench 3 对比报告 (events/sec)"
 echo "    - memory-clientgo.txt         Bench 5 client-go"
 echo "    - memory-kubepivot.txt        Bench 5 KubePivot"
 echo "    - parse-only.txt              反序列化对比"
