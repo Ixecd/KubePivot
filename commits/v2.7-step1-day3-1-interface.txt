@@ -1,0 +1,98 @@
+feat(eventstream): v2.7 Step 1 Step 3.1 - Informer 接口 + 重连退避 + 差异化 resync
+
+新增 internal/eventstream/ 包 6 个文件，~1042 行 (含单测)。
+
+文件结构：
+  informer.go         238 行   接口 + 类型定义（无具体实现）
+  reconnect.go        134 行   ReconnectPolicy + NextBackoff + jitter
+  resync.go           135 行   按资源差异化 resync 周期映射
+  
+  informer_test.go    126 行    6 cases  类型契约
+  reconnect_test.go   221 行    9 cases  退避序列 + jitter 范围 + 防雷鸣群
+  resync_test.go      188 行   12 cases  4 频率组 + 容错 + 数值锁定
+
+合计 27 个新增 test cases。
+
+informer.go 核心组件：
+  - EventType enum (ADD/UPDATE/DELETE/RESYNC) + String()
+  - Event struct + EventHandler 函数类型
+  - Subscription interface (Unsubscribe + Stats)
+  - SubscriberStats (atomic.Uint64 计数器)
+  - Informer interface (Start/Get/List/ListAll/Subscribe/Stats/Stop)
+  - InformerOptions (含 ShardSet 引用 v2.5)
+  - InformerStats (Prometheus 监控指标)
+  - ShardSet 接口占位（Owns 方法，Day 4 adapter_sharding 完整适配）
+  - NewInformer 占位实现 (Step 3.2 替换为完整 watch loop)
+  - errInformerNotImplemented sentinel
+
+reconnect.go 实现 Q7=C "指数退避 + jitter=0.2"：
+  - ReconnectPolicy struct (5 个字段 + rng 注入测试用)
+  - DefaultReconnectPolicy: 1s/30s/2.0/0.2/0(unlimited)
+  - NextBackoff(attempt): 指数增长 + 封顶 + 对称 jitter ±20%
+  - 处理 attempt 溢出 / 负值
+  - ShouldGiveUp() 判定（MaxAttempts=0 永不放弃）
+
+  退避序列示例 (jitter=0.2)：
+    attempt 1: 1s   ± 0.2s
+    attempt 2: 2s   ± 0.4s
+    attempt 5: 16s  ± 3.2s
+    attempt 6+: 30s ± 6s (封顶)
+
+resync.go 实现 Q8=C "按资源类型差异化"：
+  - 4 个 ResyncPeriod 常量:
+    High      (10min)  pods / events
+    Medium    (30min)  deployments / statefulsets / jobs / ...
+    Low       (60min)  services / configmaps / ingresses / ...
+    VeryLow  (120min)  namespaces / nodes / storageclasses / ...
+  - DefaultResyncPeriod() 主入口
+  - normalizeResource: 大小写不敏感 + 单复数容错（pod → pods）
+  - 未知资源兜底 Medium 30min
+
+测试亮点：
+  reconnect_test.go:
+    - 退避序列精确锁定（无 jitter 模式）
+    - jitter 范围 100 次采样验证
+    - 100 informer 防雷鸣群验证（unique 时间戳分散度）
+    - 边界场景: zero jitter / negative attempt
+    - ShouldGiveUp unlimited / limited 双场景
+  
+  resync_test.go:
+    - 4 个频率组完整资源类型清单
+    - 大小写不敏感（Deployments/DEPLOYMENTS/deployments）
+    - 单数转复数（pod/deployment/service/ingress/namespace）
+    - Whitespace 容错（"  pods  "/\\tpods\\n）
+    - 数值锁定（防止误改默认值）
+  
+  informer_test.go:
+    - EventType.String() 全枚举
+    - SubscriberStats atomic 计数器
+    - InformerOptions 零值
+    - NewInformer 占位实现错误返回（Step 3.2 替换）
+
+设计决策：
+  ShardSet 接口占位（不直接 import internal/sharding/）：
+    避免内部包反向依赖
+    Day 4 adapter_sharding.go 完整适配 v2.5 sharding
+    
+  NewInformer 当前返回 errInformerNotImplemented：
+    Step 3.1 仅完成接口定义 + 配套基础组件
+    Step 3.2 实施 watch loop 主体（HTTP chunked + 重连状态机）
+    分步走避免一次性 1500+ 行难以审查 / 调试
+
+性能 / 资源约束：
+  ReconnectPolicy / ResyncPeriod 都是值类型，零内存开销
+  rng 注入便于测试 deterministic（生产用 math/rand 全局源）
+
+Step 1 进度：
+  Day 1 ✅ benchmark + perf 决策 (414)
+  Day 2 ✅ 包基础 + Cache + cache_policy (415-416)
+  Day 3 Step 3.1 ✅ 接口 + reconnect + resync (本 commit)
+  Day 3 Step 3.2 ⏳ watch loop 主体 (下一轮)
+  Day 4 ⏳ Dispatcher + Subscriber + ShardSet 适配
+  Day 5 ⏳ Metrics + Bench 3 + 收尾
+
+测试结果（含累积）：
+  原 80+ cases + 新增 27 cases = ~107 cases 全 PASS
+  覆盖率 93.8%
+  Race detector 全绿
+  make dev 全绿
