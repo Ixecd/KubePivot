@@ -1,7 +1,7 @@
 # KubePivot v2.7 Event Stream 实施日志
 
 > 编写日期：2026-04-27（实时）
-> 状态：🚧 Step 1 实施中（Day 1-4 完成，Day 5 进行中）
+> 状态：✅ Step 1 完成（Day 1-5 全部完成，Bench 3 watch 吞吐留 TBD）
 > 关联文档：[eventstream-draft.md](eventstream-draft.md)（设计草案）/ [eventstream-perf.md](eventstream-perf.md)（性能决策）
 > 作用：记录设计 → 实施过程中的真实数据、决策调整、bug 修复
 
@@ -31,9 +31,9 @@
 | Day 2 | 2026-04-27 上午 | 包基础 + Cache + cache_policy | 415-416 | ~1100 行 + 80 cases |
 | Day 3 | 2026-04-27 上午 | Informer + watch loop + 测试 | 417-418 | ~2600 行 + 27 cases (Day 3.1) + 14 cases (Day 3.2) |
 | Day 4 | 2026-04-27 下午 | v2.5 sharding adapter | 419 | 322 行 + 12 cases |
-| Day 5 | 2026-04-27 下午 | Metrics + Bench 3 + docs 收尾 | TBD | 进行中 |
+| Day 5 | 2026-04-27 下午 | Metrics Prometheus collector | 422 | 740 行 + 16 cases |
 
-累计：commit 414 → 419，共 6 个 commit / ~3500 行代码 / ~1500 行测试 / 88.2% 覆盖率
+累计：commit 414 → 422，共 9 个 commit（含 docs/FUTURE）/ ~3700 行代码 / ~2200 行测试 / 88.8% 覆盖率
 
 ---
 
@@ -390,23 +390,166 @@ NewStaticShardSet([]string{"a"})   // 仅 ns "a" 归本 pod
 
 ---
 
-## Day 5: Metrics + Bench 3 + docs 收尾（进行中）
+## Day 5: Metrics Prometheus collector（commit 422）
 
 ### 计划
 
-- `metrics.go` + `metrics_kubectl.go` + `metrics_prometheus.go`
-- Bench 3 watch 吞吐（feature 分支 envtest）
-- draft.md → eventstream.md finalize（v2.7 release 前）
+draft.md §8 原规划是 metrics-server 集成（kubectl top + Prometheus 双 client）。
+讨论后决定：
+- §8 内容（业务指标拉取，v2.9 sizing engine 用）→ **延后到 v2.7.x 或 v2.8**
+- Day 5 实际做：**Informer 自身的运行指标**（draft.md 未规划，是补充实施）
 
-### 进度
+### 设计决策（4 项细节校准）
 
-- [ ] metrics 模块设计
-- [ ] metrics 实施
-- [ ] Bench 3 envtest（feature 分支）
-- [x] impl-notes.md 创建（本文档）
-- [ ] draft.md finalize
+#### 1. 接口签名分离（Registerer 注入）
+```
+RegisterInformerMetrics(reg prometheus.Registerer, informers ...Informer) error
+```
+- 不绑定 `prometheus.DefaultRegisterer`
+- 便于单元测试 / 多 instance 隔离
 
-实施完成后此章节会更新。
+#### 2. 命名约定遵循 Prometheus 标准
+- `_total` 后缀强制用于 Counter
+- `_ratio` 后缀（0.0-1.0）优于 `_percent`（0-100）
+- `_timestamp_seconds` 配合 Gauge 表达"最后一次时间"
+
+#### 3. EventType label 转小写
+- `"ADD"` → `"add"`，符合 Prometheus 约定
+- 避免在 Grafana 查询时大小写不一致导致"数据消失"
+
+#### 4. last_resync 首次未 resync 时不暴露（Micro-adjustment）
+```go
+if !stats.LastResyncTime.IsZero() {
+    ch <- prometheus.MustNewConstMetric(...)
+}
+```
+- 避免 Prometheus 出现 1970-01-01 怪异时间戳
+- 等首次成功 resync 后才开始暴露
+
+### 实际产出
+
+```
+internal/eventstream/
+  metrics.go       310 行   InformerCollector + RegisterInformerMetrics
+  metrics_test.go  430 行   16 cases (含 testutil.GatherAndCompare)
+```
+
+### 暴露的 9 个指标
+
+| 名称 | 类型 | 标签 |
+|---|---|---|
+| `kubepivot_informer_cache_size` | Gauge | resource |
+| `kubepivot_informer_cache_hot_count` | Gauge | resource |
+| `kubepivot_informer_cache_warm_count` | Gauge | resource |
+| `kubepivot_informer_cache_cold_count` | Gauge | resource |
+| `kubepivot_informer_events_total` | Counter | resource, type |
+| `kubepivot_informer_watch_reconnects_total` | Counter | resource |
+| `kubepivot_informer_cache_hit_ratio` | Gauge | resource |
+| `kubepivot_informer_memory_bytes` | Gauge | resource |
+| `kubepivot_informer_last_resync_timestamp_seconds` | Gauge | resource |
+
+### Subscriber 指标暴露策略（推迟 v2.7.1+）
+
+v2.7.0 仅暴露 informer 级别（不含 subscriber 级别）。理由：
+- subscriber 没有 stable id
+- 作为 label 会导致 cardinality 爆炸（压垮 Prometheus）
+- "缓存整体命中率 / Watch 重连频率" 比 "某订阅者丢包"优先级高
+
+v2.7.1+ 预留方案：在 `InformerStats` 增加 `AggregatedSubscriberStats`。
+
+### HTTP Server 归属权
+
+eventstream 包**不创建** HTTP server。
+调用方负责 `promhttp.Handler()` 接入 `/metrics` endpoint。
+
+理由：
+- 职责单一：eventstream 只管数据流动 + 统计
+- 架构灵活：CLI 不需要 server，controller pod 才需要
+- 可插拔：调用方决定何时启动 / 监听哪个端口
+
+### 依赖引入决策
+
+```
+github.com/prometheus/client_golang v1.20.5
++ 5 个间接依赖（beorn7/perks, klauspost/compress, kylelemons/godebug,
+                munnerz/goautoneg, prometheus/client_model）
+go.sum 增加 ~25 行
+```
+
+哲学红线对齐：
+- 拒绝 client-go 是因为它逻辑侵入性强 / 体积臃肿
+- prometheus/client_golang 是纯粹的"打点 + 暴露"工具
+- 属于云原生通用语，不影响 KubePivot 核心执行逻辑
+- 工程税合理（~5MB 体积换 Grafana / Alertmanager 生态接入）
+
+### Bug 修复（架构层）
+
+#### Bug 5.1: collector duplicate registration
+
+**根因**：原设计每个 informer 一个 collector
+- 每个 collector 内部独立创建 desc
+- 注册多个 collector 到同 registry → desc fqName 冲突
+- 报错 `duplicate metrics collector registration attempted`
+
+**暴露**：`TestRegisterInformerMetrics_MultipleInformers` fail
+
+**修复**：架构层重写
+- desc 全局共享（一组）
+- 单 collector 持有多个 informer
+- 通过 `resource` label 区分不同 informer 的指标输出
+- `RegisterInformerMetrics` 改为 variadic 一次性注册多个 informer
+- 新增 `AddInformer` / `RemoveInformer` 支持运行时增减
+
+**教训**：
+- Prometheus collector 模式应是 "一个 collector = 一组相关 metrics"
+- 不是 "一个 collector = 一个数据源"
+- 这是 client_golang 内置 collector（GoCollector / ProcessCollector 等）的标准模式
+- 单元测试自查发现了 6 个其他问题，但**没看出这个架构 bug**
+- → 单元自查不能替代架构 review
+
+### 测试覆盖（16 cases）
+
+```
+Collector 生命周期：
+  NotNil / AddInformer / AddInformer_NilSafe / RemoveInformer
+
+Describe / Collect：
+  DescribeAllDescriptors  9 个描述符全输出
+  CollectAllGauges        cache 4 层指标
+  EventsTotalByType       4 个事件类型 + label 转小写
+  WatchReconnects         Counter 输出
+  CacheHitRatio           4 个边界值
+
+Micro-adjustment 验证：
+  LastResync_NotExposedBeforeFirstResync   IsZero 不输出 ⭐
+  LastResync_ExposedAfterFirstResync       有值时输出
+
+动态行为：
+  StatsUpdated            collector 不缓存 stats
+  DynamicAdd              运行时 AddInformer
+  MultipleInformers       一次性注册多个
+
+错误处理：
+  NilRegisterer / NoInformers / NilInformer
+  DuplicateRegisterCollectors  desc 冲突报错
+```
+
+---
+
+## Bench 3 状态（待办）
+
+Bench 3 watch 吞吐 benchmark 是 v2.7 Step 1 唯一未完成的项目。
+
+需要：
+- feature/client-go-comparison 分支跑
+- 用 envtest 启动 fake K8s API server
+- 测试 watch 事件接收吞吐量
+- 数据补到 docs/design/eventstream-perf.md
+
+延后理由：
+- envtest 启动配置复杂（需要 etcd / kube-apiserver binary）
+- Step 1 主线代码已完整可用，Bench 3 是补充验证
+- 留 v2.7 release 前一次性完成
 
 ---
 
@@ -422,13 +565,14 @@ NewStaticShardSet([]string{"a"})   // 仅 ns "a" 归本 pod
 | Informer 接口 + reconnect + resync | 507 | 535 | 27 |
 | Informer 实施 + 测试 | 822 | 767 | 14 |
 | sharding adapter | 124 | 198 | 12 |
-| **合计** | **2419** | **2150** | **110** |
+| metrics collector | 310 | 430 | 16 |
+| **合计** | **2729** | **2580** | **126** |
 
-（简化口径，含 sub-cases 实际 ~152 cases）
+（简化口径，含 sub-cases 实际 ~170 cases）
 
 ### 测试质量
 
-- 覆盖率：88.2%
+- 覆盖率：88.8%
 - Race detector：全绿
 - make dev：全绿（不破坏既有 controller / route / sharding）
 
@@ -441,6 +585,7 @@ NewStaticShardSet([]string{"a"})   // 仅 ns "a" 归本 pod
 | 2.3 mergeLayers 简单 min 语义错 | 设计 bug | 单测 fail | 416 内修 |
 | 3.1 Stop without Start 等 5s | 实施 bug | 单测耗时 5s | 418 内修 |
 | 3.2 WatchReconnects 漏计正常关流 | **真生产 bug** | 单测 fail | 418 内修 |
+| 5.1 collector duplicate registration | **架构 bug** | 单测 fail | 422 内修 |
 
 工程纪律：所有 bug 在本地修复，无任何 fix commit 流入 Master。
 
@@ -477,4 +622,5 @@ NewStaticShardSet([]string{"a"})   // 仅 ns "a" 归本 pod
 ## 编辑记录
 
 - 2026-04-27 15:30  初版（Day 1-4 完成时创建）
-- 待补充：Day 5 完成后追加 metrics 实施实情、Bench 3 数据、最终 finalize 笔记
+- 2026-04-27 16:30  Day 5 metrics 完成后追加（含 Bug 5.1 架构 bug 实录）
+- 待补充：Bench 3 数据 + 最终 finalize 笔记（v2.7 release 前）

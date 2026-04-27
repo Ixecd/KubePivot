@@ -1,0 +1,45 @@
+docs(eventstream): update impl-notes with Day 5 metrics 实施实情
+
+v2.7 Step 1 Day 5 (commit 422) 完成后，将 metrics 模块的实施实情、设计决策、bug 修复记录补入 eventstream-impl-notes.md。
+
+变更：
+  docs/design/eventstream-impl-notes.md  ~150 行新增 + 多处更新
+
+主要内容：
+
+1. Day 5 章节填充实情（替换占位段落）：
+   - 计划与 draft.md §8 的边界澄清
+     （§8 metrics-server 集成延后到 v2.7.x，Day 5 实际做 Informer 自身指标）
+   - 4 项设计决策（Registerer 注入 / Prometheus 命名 /
+     EventType label 转小写 / last_resync IsZero 不暴露）
+   - 9 个指标完整表
+   - Subscriber 指标推迟 v2.7.1+ 的理由
+   - HTTP server 归属决策（eventstream 不创建 server）
+   - prometheus/client_golang 依赖引入决策
+
+2. Bug 修复链增加 Bug 5.1（架构层）：
+   collector duplicate registration
+   根因：每个 informer 一个 collector → desc fqName 冲突
+   修复：架构层重写为单 collector + 多 informer 模式
+   教训：Prometheus collector 模式应是 "一个 collector = 一组相关 metrics"
+         而不是 "一个 collector = 一个数据源"
+
+3. 累计数据更新：
+   commit 414 → 419 (6 个) → 414 → 422 (9 个)
+   代码 ~3500 → ~3700 行
+   测试 cases ~152 → ~170
+   覆盖率 88.2% → 88.8%
+
+4. Bench 3 状态段：
+   说明 Bench 3 watch 吞吐 benchmark 是 Step 1 唯一未完成项
+   留 v2.7 release 前一次性完成
+
+5. 顶部状态从"Step 1 实施中"改为"Step 1 完成"
+
+完整工程纪律落地：
+  6 个 bug 全部本地修复（无 fix commit 流入 Master）
+  draft.md（设计意图）保持稳定
+  impl-notes.md（实施日志）反映完整实情
+  FUTURE.md（远景探索）记录 CBA 种子
+
+v2.7 Step 1 至此实施实录闭环。
