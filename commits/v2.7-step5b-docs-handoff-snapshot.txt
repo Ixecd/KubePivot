@@ -1,0 +1,61 @@
+docs: HANDOFF + TODO + SNAPSHOT 更新到 v2.7.0 视角
+
+v2.7.0 release 后的三文档大更新（与 v2.6.0 release 后的工作流一致）。
+
+变更:
+  HANDOFF.md  完整重写 (~640 行)
+  TODO.md     完整重写 (~340 行)
+  SNAPSHOT.md 完整重写 (~330 行)
+
+HANDOFF.md 主要变化:
+  - 一节加 v2.7 起延伸论断（"工具 → 工程 → 智能调度系统"）
+  - 2.2 节加 v2.7.0 完整章节（eventstream / metrics / 5 项 benchmark）
+  - 2.3 节移除"自研 informer 候选"（已实现），加 v2.7.x 推迟项
+  - 3.1 节加 prometheus/client_golang 例外说明
+  - 3.4 节加 v2.7 案例（14 个 Q + 实施期 R/S/M/B 拍板）
+  - 3.7 节加 v2.7 教训 7 条:
+    * Bug 1: Stop without Start 5s timeout (atomic.Bool started)
+    * Bug 2: WatchReconnects 漏计正常关流
+    * Bug 5.1: Prometheus collector 一组 metrics 一个 collector
+    * Bug 8: KubePivot executor 是具体类型单例（函数变量注入式 mock）
+    * 全局信息收集 vs 凭记忆设计
+    * 基准公平性原则（envtest vs fake source 选择）
+    * 工程纪律 > 数字仪式感
+  - 4.2 节加 benchmark/eventstream/ 新章节
+  - 6 节加 FUTURE.md / ROADMAP.md / eventstream-* 三件套
+  - 7 节路线图全重写（v2.7.1 / v2.6.1 / v2.5.1 / v2.8 / v2.9 / v3.0）
+
+TODO.md 主要变化:
+  - v2.7.0 整章 ⏳ → ✅
+    * 5 个 Step 完整完成项
+    * 14 个核心设计 Q + 实施期 R/S/M/B 多轮拍板
+    * 完整 commit 链（414 → 431, ~17 个 commit）
+    * 实施节奏（17h / 27 commit / 0 fix commit ⭐）
+  - 新增 v2.7.1 候选章节（8 项推迟功能）
+  - 远期规划按 ROADMAP §v2.8/v2.8.1/v2.9/v3.0 重写
+  - 工作流箭头链更新到 v2.7.0
+  - 已废弃章节加 v2.7 教训（envtest 路径调整）
+
+SNAPSHOT.md 主要变化:
+  - metadata 更新（commit 69b6a0e / tag v2.7.0 / total 431）
+  - 一节: v2.7.0 核心 commit 链表（含 feature 分支 36c2e7f / 7599d61）
+  - 节奏巧合: v2.0=329 / v2.6=404 / v2.7=431（诚实标注未刻意对齐）
+  - 二节: 代码结构加 internal/eventstream/ + internal/metrics/
+  - 三节: 测试矩阵更新（eventstream 89.0% / metrics 81.2% / 230+ cases）
+  - 四节: 性能数据 5 项 benchmark 完整表 + Allocs 5.4x 关键洞察
+  - 八节: 关键 metrics 累计（v2.7 新增 ~5500 行 / 总计 ~16200 行）
+
+工程纪律落地:
+  ✓ 三文档 release 后大更新与 v2.6.0 节奏一致
+  ✓ HANDOFF.md 3.7 节 v2.7 教训 7 条全部沉淀
+  ✓ TODO.md v2.7.1 候选清单完整（8 项推迟功能 + 优先级 + 工作量）
+  ✓ SNAPSHOT.md 节奏巧合诚实标注（不强行编造意义）
+  ✓ 路线图与 ROADMAP.md 保持一致
+
+旧文档归档（用户手工处理）:
+  archived/handoff/HANDOFF-v2.6.md
+  archived/todo/TODO-v2.6.md
+  archived/snapshot/SNAPSHOT-v2.6.md
+  snapshots/SNAPSHOT-kubepivot-2026-04-27-v2.7.0.md
+
+v2.7.0 完整 release 至此闭环 ✓
