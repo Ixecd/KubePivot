@@ -1,0 +1,117 @@
+feat(controller): v2.7 Step 2a-2 - informer pool 接入 controller
+
+Step 2a-2 完成：在 controller StartGlobal 中加 informer pool（双保险渐进引入）。
+
+变更：
+  internal/controller/informer_pool.go        新增 204 行
+  internal/controller/informer_pool_test.go   新增 256 行 (10 cases)
+  internal/controller/global.go               +15 行（orphanSweeper 之后）
+
+合计 ~475 行新增 / 0 行删除，10 个测试 cases。
+
+设计核心（双保险 + 添加而非嵌入）:
+
+  InformerPool 管理 controller 范围的 Informer 实例。
+  
+  关键性质：
+    1. fail soft - informer 启动失败 log warn，既有路径继续工作
+       （与 KubectlWatcher 失败处理同谱）
+    2. 添加而非嵌入 - 加在既有 6 个 goroutine 之后，顺序不变
+    3. 不订阅事件 - cache 自动维护，等 Step 2b/c/d 调用方接入
+    4. 不注册 metrics - HTTP server 未实施，留 v2.7.x
+
+  公共 API:
+    NewInformerPool(shardMgr, totalShards, kubeconfig)
+    pool.Start(ctx, resource, apiVersion)
+    pool.Get(resource) - nil 表示未启动 / 失败
+    pool.StopAll() - 幂等，多次调用安全
+    pool.RegisterMetrics(reg) - 留 v2.7.x 调用
+    pool.Size() - debug 用
+
+可测试性设计:
+
+  newInformerFunc 是函数变量（var）而非直接 eventstream.NewInformer
+    var newInformerFunc = eventstream.NewInformer
+    
+  测试中替换为 fake：
+    oldFunc := newInformerFunc
+    newInformerFunc = func(...) { return &fakeInformer{}, nil }
+    defer func() { newInformerFunc = oldFunc }()
+    
+  与 internal/eventstream/auth.go 的 readTokenFile / readCAFile 同模式。
+  避免引入 DryRun 字段污染生产 API（设计 review 中讨论后否决）。
+
+global.go 接入位置:
+
+  在 orphanSweeper 之后，leader election 之前。
+  既有 6 个 goroutine 顺序完全不变。
+  
+  ```go
+  // 7. v2.7 Step 2a-2: informer pool（双保险渐进引入）
+  informerPool := NewInformerPool(shardMgr, totalShards, kubeconfig)
+  informerPool.Start(ctx, "deployments", "apps/v1")
+  defer informerPool.StopAll()
+  ```
+
+试点资源选择:
+
+  deployments / apps/v1
+  
+  理由：
+    - 是 KubePivot 主要管理的资源
+    - 比 namespace 更接近"业务对象"
+    - 不与既有 KubectlWatcher（namespace/configmap）重叠
+    - v2.9 sizing engine 未来直接用
+
+  ShardSet 桥接：
+    NewShardSetAdapter(shardMgr.Shards(), totalShards)
+    与 namespace watcher 同样的 namespace hash 过滤
+
+测试覆盖（10 cases）:
+
+  生命周期:
+    NewInformerPool_Empty
+    Start_Success / Start_FailSoft / Start_Multiple
+    StopAll / StopAll_Idempotent
+    NilShardMgr (测试场景容错)
+
+  Metrics 接口:
+    RegisterMetrics_Empty (空 pool 不报错)
+    RegisterMetrics_WithInformers (注册多 informer)
+    RegisterMetrics_DuplicateError (重复注册报 desc 冲突)
+
+  fakeInformer 实现 eventstream.Informer 7 个方法
+  withMockedNewInformer / withFailingNewInformer 注入 helpers
+
+设计 review 决策记录:
+
+  R1: 接入位置 = orphanSweeper 之后（添加而非嵌入）
+  R2: metrics 注册 = Step 2a-2 不调（HTTP server 未实施）
+  R3: ShardSet = NewShardSetAdapter 直用
+  R4: fail soft = 与 KubectlWatcher 同谱
+  R5: pool 重试 = 不做（informer.reconnect 已处理）
+
+  否决项（值得记录）:
+    ✗ source=cfg.Source() log - 接口污染（K8sConfig 不暴露）
+    ✗ DryRun bool 字段 - "为测试改生产代码" anti-pattern
+    
+    替代方案: newInformerFunc 函数变量注入（与 readTokenFile 同模式）
+
+测试结果:
+  全部 ~220 cases 全 PASS
+  controller 包既有 ~75 测试不受影响
+  test/integration 不受影响
+  Race detector 全绿
+  make dev 全绿
+
+Step 2 进度:
+  Step 2a-1 done in-cluster auth + integration (424)
+  Step 2a-2 done informer pool 接入 controller (本 commit)
+  Step 2b/c/d todo controller reconcile path 渐进切换
+  
+v2.7 整体进度:
+  Step 1 done eventstream 包基础（414-422）
+  Step 2 done 基础设施层接入（424-425）
+  Step 3 todo MetricsClient (业务指标，可独立)
+  Step 4 todo Bench 3 (envtest)
+  Step 5 todo finalize + tag

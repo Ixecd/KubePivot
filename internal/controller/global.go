@@ -109,6 +109,23 @@ func StartGlobal(ctx context.Context) {
 		orphanSweeper(ctx, gs, shardMgr, totalShards)
 	}()
 
+	// 7. v2.7 Step 2a-2：informer pool（双保险渐进引入，fail soft）
+	//
+	// 当前阶段：
+	//   - informer 启动跑起来（cache 自动维护）
+	//   - 既有 KubectlWatcher / kubectl get 路径继续工作
+	//   - 没有 subscriber，事件流入 cache 即丢
+	//
+	// v2.7.x 计划：
+	//   - 加 controller HTTP server 暴露 /metrics
+	//   - 调 informerPool.RegisterMetrics(prometheus.DefaultRegisterer)
+	//
+	// v2.7.x / v2.8 计划：
+	//   - reconciler / drift_sync 用 informer.Get 替换 kubectl get
+	informerPool := NewInformerPool(shardMgr, totalShards, kubeconfig)
+	informerPool.Start(ctx, "deployments", "apps/v1")
+	defer informerPool.StopAll()
+
 	// ── Leader 选举（仅为 sweeper）──────────────────────────────────────────────
 
 	wg.Add(1)
