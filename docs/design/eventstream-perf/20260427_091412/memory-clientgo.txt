@@ -1,0 +1,13 @@
+=== RUN   TestMemoryAmplification_ClientGo
+    memory_amplification_test.go:105: 
+        ═══════════════════════════════════════════════
+    memory_amplification_test.go:106:   client-go cache 内存放大率
+    memory_amplification_test.go:107: ═══════════════════════════════════════════════
+    memory_amplification_test.go:108:   对象数:        10000
+    memory_amplification_test.go:109:   RawJSON 总量:  71.99 MB
+    memory_amplification_test.go:110:   Cache RSS:    342.67 MB
+    memory_amplification_test.go:111:   放大率:        4.76x
+    memory_amplification_test.go:112: ═══════════════════════════════════════════════
+--- PASS: TestMemoryAmplification_ClientGo (1.27s)
+PASS
+ok  	github.com/Ixecd/kubepivot/benchmark/eventstream	1.700s

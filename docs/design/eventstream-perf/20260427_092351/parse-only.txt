@@ -1,0 +1,16 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Ixecd/kubepivot/benchmark/eventstream
+cpu: Apple M4
+BenchmarkParseOnly_ClientGo-4    	   20258	     58699 ns/op	   34736 B/op	     516 allocs/op
+BenchmarkParseOnly_ClientGo-4    	   20276	     58445 ns/op	   34736 B/op	     516 allocs/op
+BenchmarkParseOnly_ClientGo-4    	   19054	     64574 ns/op	   34736 B/op	     516 allocs/op
+BenchmarkParseOnly_ClientGo-4    	   20163	     65877 ns/op	   34736 B/op	     516 allocs/op
+BenchmarkParseOnly_ClientGo-4    	   16920	     61306 ns/op	   34736 B/op	     516 allocs/op
+BenchmarkParseOnly_KubePivot-4   	   33553	     34359 ns/op	    4008 B/op	      88 allocs/op
+BenchmarkParseOnly_KubePivot-4   	   34860	     33850 ns/op	    4008 B/op	      88 allocs/op
+BenchmarkParseOnly_KubePivot-4   	   35295	     34071 ns/op	    4008 B/op	      88 allocs/op
+BenchmarkParseOnly_KubePivot-4   	   34428	     34874 ns/op	    4008 B/op	      88 allocs/op
+BenchmarkParseOnly_KubePivot-4   	   35380	     34386 ns/op	    4008 B/op	      88 allocs/op
+PASS
+ok  	github.com/Ixecd/kubepivot/benchmark/eventstream	17.289s

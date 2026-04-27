@@ -1,0 +1,70 @@
+bench: v2.7 Day 1 client-go vs KubePivot 对比基准
+
+仅限 feature/client-go-comparison 分支：
+  此分支临时引入 k8s.io/client-go v0.32.0 作为基线对照
+  不会合并回 Master（Master 永不依赖 client-go）
+
+新增 benchmark/eventstream/（~1000 行）：
+  - go.mod                          独立模块（含 client-go 依赖）
+  - testdata.go                     generateComplexDeployment（5-8KB 复杂对象）
+  - cache_get_test.go               Bench 1 + SkeletonCache + ParseSkeleton
+  - cache_list_test.go              Bench 2 + ListAll
+  - cold_start_test.go              Bench 4（1000 / 10000 两档）
+  - memory_amplification_test.go    Bench 5（qc 强调的核心）
+  - run-benchmarks.sh               一键执行（GOGC=200 / GOMEMLIMIT=4GiB）
+  - README.md                       使用说明
+
+公平性约定：
+  - GOGC=200, GOMEMLIMIT=4GiB, GOMAXPROCS=4
+  - 仅用 encoding/json 标准库（不引 json-iterator / sonic）
+  - 每次冷启动重置 cache（b.StopTimer / StartTimer）
+  - 1w 对象 + 强制 GC + 读 RSS（内存放大率）
+
+5 个 benchmark：
+  Bench 1: Cache Get 单条读延迟
+  Bench 2: Cache List 全量
+  Bench 4: 启动时间（1000 / 10000）
+  Bench 5: 内存放大率（核心差异化测试）
+  ParseOnly: 反序列化基线
+
+Bench 3 (Watch 吞吐) 暂未实现（需 envtest），延后到 Day 2。
+
+数据归档：
+  docs/design/eventstream-perf/20260427_092351/
+    - bench-results.txt
+    - memory-clientgo.txt
+    - memory-kubepivot.txt
+    - parse-only.txt
+    - cpu.prof / mem.prof
+
+实施迭代：
+  v1: 初版 SkeletonCache 实现 (immutable snapshot + atomic.Value)
+       List(ns) 全表扫描 → 9700ns（差）
+       ColdStart 10000 → 1580ms / 2370MB (O(N²) 拷贝灾难)
+  v2: 修复（fix_hotcache patch）
+       SkeletonCache 改用 ns 二级索引 (map[ns]map[name]*Skeleton)
+       新增 PutBulk 批量写入（避免 O(N²)）
+       List(ns) 9700ns → 147ns (66x 提升)
+       ColdStart 10000 1580ms → 341ms (4.6x 提升)
+       内存放大率保持 ~1.65x
+
+修复后核心数据（vs client-go，Apple M4 / Go 1.25）：
+  Cache Get:           14.5ns vs 45ns        (3.1x 时间, 6x 内存)
+  Cache List (ns):     147ns vs 6800ns       (46x 时间, 100x 内存)
+  Cache ListAll:       7500ns vs 7300ns      (持平时间, 2x 内存)
+  ColdStart 1000:      35ms vs 61ms          (1.8x 时间, 8.5x 内存)
+  ColdStart 10000:     341ms vs 645ms        (1.9x 时间, 8.6x 内存)
+  ParseOnly:           35μs vs 60μs          (1.7x 时间, 8.7x 内存)
+  内存放大率 (1w obj): 1.65x vs 4.69x        (2.84x 优势)
+
+工程伦理：
+  - 不藏数据
+  - 业务场景大胜，全量遍历持平，内存全场胜
+  - 测试限制诚实标注（fake 数据 / macOS heap 替代 RSS / Bench 3 缺）
+
+决策门：自研路径 100% 成立
+  按 v2.7 draft.md 进入 Step 1 实施
+
+不合并回 Master：
+  此分支作为长期档案保留
+  Master 分支只接收 docs/design/eventstream-perf.md 决策文档

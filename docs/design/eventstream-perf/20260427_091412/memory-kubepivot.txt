@@ -1,0 +1,13 @@
+=== RUN   TestMemoryAmplification_KubePivot
+    memory_amplification_test.go:143: 
+        ═══════════════════════════════════════════════
+    memory_amplification_test.go:144:   KubePivot cache 内存放大率
+    memory_amplification_test.go:145: ═══════════════════════════════════════════════
+    memory_amplification_test.go:146:   对象数:        10000
+    memory_amplification_test.go:147:   RawJSON 总量:  71.99 MB
+    memory_amplification_test.go:148:   Cache RSS:    103.98 MB
+    memory_amplification_test.go:149:   放大率:        1.44x
+    memory_amplification_test.go:150: ═══════════════════════════════════════════════
+--- PASS: TestMemoryAmplification_KubePivot (2.18s)
+PASS
+ok  	github.com/Ixecd/kubepivot/benchmark/eventstream	2.437s
