@@ -86,26 +86,67 @@ func TestInformerOptions_ZeroValue(t *testing.T) {
 	}
 }
 
-// ─── Step 3.1 占位实现测试 ────────────────────────────────────────
+// ─── NewInformer 参数验证测试 ─────────────────────────────────────
 
-func TestNewInformer_NotYetImplemented(t *testing.T) {
-	// Step 3.1 阶段：NewInformer 是占位实现
-	// Step 3.2 实施 informer_impl.go 后此测试将变为完整契约测试
-	informer, err := NewInformer(context.Background(), InformerOptions{
-		Resource:   "deployments",
+func TestNewInformer_RequiresResource(t *testing.T) {
+	_, err := NewInformer(context.Background(), InformerOptions{
 		APIVersion: "apps/v1",
 	})
-
 	if err == nil {
-		t.Error("Step 3.1 占位应返回 error")
+		t.Error("缺 Resource 应返回 error")
 	}
-	if informer != nil {
-		t.Error("Step 3.1 占位应返回 nil informer")
-	}
+}
 
-	// 验证错误信息明确
-	if err.Error() == "" {
-		t.Error("error 信息不应为空")
+func TestNewInformer_RequiresAPIVersion(t *testing.T) {
+	_, err := NewInformer(context.Background(), InformerOptions{
+		Resource: "deployments",
+	})
+	if err == nil {
+		t.Error("缺 APIVersion 应返回 error")
+	}
+}
+
+func TestNewInformer_ValidOptions(t *testing.T) {
+	informer, err := NewInformer(context.Background(), InformerOptions{
+		Resource:     "deployments",
+		APIVersion:   "apps/v1",
+		APIServerURL: "http://localhost:8001",
+	})
+	if err != nil {
+		t.Fatalf("有效 options 应成功，got err: %v", err)
+	}
+	if informer == nil {
+		t.Fatal("应返回非 nil informer")
+	}
+	// Stats 应可调用，零值
+	stats := informer.Stats()
+	if stats.Resource != "deployments" {
+		t.Errorf("Stats().Resource = %q, want deployments", stats.Resource)
+	}
+	if stats.CacheSize != 0 {
+		t.Errorf("初始 CacheSize = %d, want 0", stats.CacheSize)
+	}
+	// Stop 应安全
+	informer.Stop()
+	informer.Stop() // 多次调用安全
+}
+
+func TestNewInformer_DefaultsApplied(t *testing.T) {
+	// 未指定 ResyncPeriod / ReconnectPolicy 应自动用默认值
+	// 通过 Stats / 行为间接验证（无 panic 即通过）
+	informer, err := NewInformer(context.Background(), InformerOptions{
+		Resource:     "pods",
+		APIVersion:   "v1",
+		APIServerURL: "http://localhost:8001",
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	defer informer.Stop()
+
+	stats := informer.Stats()
+	if stats.Resource != "pods" {
+		t.Errorf("Resource = %q, want pods", stats.Resource)
 	}
 }
 

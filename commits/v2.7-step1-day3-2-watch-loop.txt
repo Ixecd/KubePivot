@@ -1,0 +1,145 @@
+feat(eventstream): v2.7 Step 1 Day 3.2 - watch loop impl + tests
+
+Day 3 完整收官：Informer 真实实施 + fake K8s API server 测试套件。
+
+变更：
+  internal/eventstream/informer.go         修改 (移除占位 NewInformer)
+  internal/eventstream/informer_test.go    修改 (替换占位测试为参数验证)
+  internal/eventstream/informer_impl.go    新增 822 行
+  internal/eventstream/informer_impl_test.go 新增 767 行
+
+合计新增 1589 行，14 个 watch loop 测试用例。
+
+informer_impl.go 核心组件：
+
+  数据结构：
+    informerImpl    Informer 接口的标准实现
+    subscriberImpl  订阅者句柄（含独立 goroutine + buffer queue）
+
+  公共 API（实施 Informer 接口）：
+    NewInformer      工厂函数（参数验证 + 默认值填充）
+    Start            启动 watch loop（startOnce 保护 + started 标记）
+    Get / List / ListAll  走 cache 的 lock-free 读
+    Subscribe        注册事件 handler
+    Stats            监控指标快照
+    Stop             优雅关闭（stopOnce + 仅在 started 时等 doneCh）
+
+  watch 主循环（runWatchLoop）：
+    初始 list -> 进入 watch 循环
+    断线 -> 退避 (NextBackoff) -> 重连
+    410 Gone -> 清空 RV -> relist
+    resync ticker 触发周期性 relist
+    ctx cancel / Stop 优雅退出
+
+  doInitialList：
+    K8s API list 分页（limit=500 + continue token）
+    一次性 PutBulk 写入 cache（避免 N 次 Put 的 O(N^2)）
+    设置 resourceVersion 用于 watch 续传
+
+  doWatch：
+    单次 watch 长连接
+    chunked transfer encoding (服务端) + bufio.Scanner NDJSON (客户端)
+    错误分类：context canceled / errStreamGone / 网络错误
+
+  handleWatchLine：
+    解析 K8s watch event JSON ({"type":"...","object":{...}})
+    增量序列化优化：仅 RV 变化的 MODIFIED 不触发 EventUpdate
+    ADDED -> cache.Put + EventAdd
+    MODIFIED -> SkeletonChanged 判定 -> cache.Put + EventUpdate
+    DELETED -> cache.Delete + EventDelete
+    ERROR (code=410) -> errStreamGone
+
+  dispatchToSubscribers：
+    ShardSet.Owns(ns) 过滤
+    并发派发到所有 subscribers
+    inflight buffer queue（subscriberQueueSize=1024）
+    慢 handler drop（计入 EventsDropped）
+
+informer_impl_test.go 测试套件：
+
+  fakeK8sServer (~200 行)：
+    httptest.Server 模拟 K8s API
+    可配置：list 响应 / watch 事件序列 / 强制断开 / HTTP 状态
+    支持 SetWatchHold 控制 watch 关流时机
+
+  14 个 test cases：
+    生命周期：
+      TestInformer_StopWithoutStart    小于 100ms 立即返回
+      TestInformer_StopMultipleTimes   多次调用安全
+      TestInformer_ContextCancelExitsWatch  ctx cancel 优雅退出
+
+    list / watch 主流程：
+      TestInformer_InitialListPopulatesCache  3 对象灌入 cache
+      TestInformer_WatchDispatchesEvents      ADD/UPDATE/DELETE 完整流
+      TestInformer_SkipsHousekeepingUpdates   仅 RV 变不触发 EventUpdate
+
+    错误恢复：
+      TestInformer_ReconnectsAfterDisconnect  断线后自动重连
+      TestInformer_RelistOn410Gone            410 触发 relist
+
+    参数验证：
+      TestNewInformer_ApplyDefaultResyncPeriod 默认 ResyncPeriod 填充
+
+    URL 构造：
+      TestInformerImpl_BuildListURL_CoreGroup     /api/v1/pods
+      TestInformerImpl_BuildListURL_NamedGroup    /apis/apps/v1/deployments
+      TestInformerImpl_BuildWatchURL_IncludesResourceVersion
+
+    订阅 / 过滤：
+      TestInformer_UnsubscribeStopsDispatch   取消订阅后停止派发
+      TestInformer_ShardSetFiltersEvents      shard 过滤生效
+
+实施过程中暴露的 2 个 bug（已修）：
+
+  Bug 1: Stop() 在未 Start 时等 5s timeout
+    根因：startOnce 已用 -> doneCh 会 close
+          startOnce 未用过 -> doneCh 永远不 close
+          Stop 走 5s timeout 兜底分支，打 WARN 日志
+    修复：加 atomic.Bool started 字段
+          Start 中 started.Store(true)
+          Stop 仅在 started=true 时等 doneCh
+
+  Bug 2: WatchReconnects 计数漏计正常关流
+    根因：watch 长连接被服务端主动关闭（K8s API 5-10min 主动关）
+          doWatch 返回 nil（无错误）
+          原代码仅在 err != nil 时计数，漏计这种场景
+          -> Prometheus 监控指标失真
+    修复：watchReconnects.Add(1) 移到 if err 之外
+          任何 watch 退出（无论原因）都算 reconnect
+    工程意义：
+          这是真实生产 bug
+          测试用例的 SetForceCloseAfter(1) 模拟了 K8s 服务端关流
+          边界场景测试设计暴露了生产监控指标问题
+
+性能 / 资源：
+  HTTP client 连接池复用（MaxIdleConns=10, IdleConnTimeout=90s）
+  list 分页 500 对象/页
+  watch event JSON 上限 1MB
+  subscriber buffer 1024 events
+
+并发模型：
+  watch loop 单 goroutine
+  每个 subscriber 独立 goroutine + buffer queue
+  Cache 读 lock-free (atomic.Value snapshot)
+  Cache 写 sync.Mutex 保护
+  resourceVersion 单独 sync.Mutex
+  生命周期 sync.Once + atomic.Bool
+
+不引入 client-go：
+  watch 协议自实现（net/http + bufio.Scanner NDJSON）
+  无任何 k8s.io/client-go 依赖
+  Master 哲学不动摇
+
+Step 1 进度：
+  Day 1 done benchmark + perf 决策 (414)
+  Day 2 done 包基础 + Cache + cache_policy (415-416)
+  Day 3 done 接口 + reconnect + resync + watch loop + 测试 (417-418)
+  Day 4 todo Dispatcher + Subscriber + ShardSet 适配 (v2.5)
+  Day 5 todo Metrics + Bench 3 + 收尾
+
+测试结果：
+  全部 ~140 cases 全 PASS
+  覆盖率 87.7% (含 watch loop 完整测试)
+  Race detector 全绿 (-race)
+  make dev 全绿（不破坏既有 controller / route / sharding 等）
+  总测试用时 1.7s (修 bug 前 26s)

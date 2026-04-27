@@ -138,9 +138,10 @@ type Informer interface {
 // 不归属的事件直接 drop，不分发给订阅者。
 //
 // 完整适配实现在 Day 4 的 adapter_sharding.go：
-//   eventstream.ShardSet (本接口)
-//     ↑ adapter_sharding.go 适配
-//   sharding.ShardSet (v2.5 实际实现)
+//
+//	eventstream.ShardSet (本接口)
+//	  ↑ adapter_sharding.go 适配
+//	sharding.ShardSet (v2.5 实际实现)
 //
 // 这样避免 internal/eventstream/ 直接 import internal/sharding/
 // 减少包间耦合，便于独立测试。
@@ -228,28 +229,10 @@ type InformerStats struct {
 	MemoryBytes uint64
 }
 
-// ─── 工厂函数（声明，实施在 informer_impl.go） ────────────────────
-
+// ─── 工厂函数 ──────────────────────────────────────────────────────
+//
 // NewInformer 创建并返回一个 Informer 实例（不自动启动）。
 //
-// 调用方需要 informer.Start(ctx) 启动 watch loop。
+// 调用方负责调用 informer.Start(ctx) 启动 watch loop。
 //
-// 实施位于 informer_impl.go（下一轮 Step 3.2 提供）。
-// 此处仅声明签名，编译期无引用 → 不影响 Step 3.1 单测。
-//
-// 占位实现：返回 nil 表示"待 Step 3.2 实施"。
-// Step 3.2 时本函数会被替换为真实工厂。
-func NewInformer(ctx context.Context, opts InformerOptions) (Informer, error) {
-	// 占位：Step 3.2 实施
-	return nil, errInformerNotImplemented
-}
-
-// errInformerNotImplemented Step 3.1 阶段的占位错误。
-// Step 3.2 实施 informer_impl.go 后此变量删除。
-var errInformerNotImplemented = &informerNotImplementedError{}
-
-type informerNotImplementedError struct{}
-
-func (e *informerNotImplementedError) Error() string {
-	return "eventstream: Informer impl not yet available (Step 3.2)"
-}
+// 实施位于 informer_impl.go（包内同 package，无需 import）。
