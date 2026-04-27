@@ -95,6 +95,58 @@ func (d *InformerDetector) ResourceExists(kind, name, namespace string) (bool, e
 	return d.fallback.ResourceExists(kind, name, namespace)
 }
 
+// ─── LabelGetter 接口（v2.7 Step 2b-2）─────────────────────────────
+//
+// LabelGetter 暴露"按资源 ID 拉取 labels"的能力，独立于 Detector。
+//
+// 为什么独立成接口（而非扩展 Detector）：
+//   - Detector 接口已被 KubectlDetector / mockDetector 实现
+//   - 扩展 Detector 会强制所有实现加新方法（破坏既有测试）
+//   - LabelGetter 是 InformerDetector 特有能力（cache 中已有 labels）
+//   - 调用方用类型断言判断（heal.go loadResourceLabels）
+//
+// 实现者：
+//   InformerDetector  - 从 informer cache 读 Resource.Labels
+//   KubectlDetector   - 不实现（loadResourceLabels 走原 kubectl 路径）
+//   mockDetector      - 不实现（既有测试不受影响）
+//
+// 返回 bool 而非 error：
+//   - cache 查询不会出 error
+//   - bool 表示"cache 是否找到该资源"
+//   - 调用方 fallback 到 kubectl 路径，跟 ResourceExists 一致
+type LabelGetter interface {
+	GetResourceLabels(kind, name, namespace string) (map[string]string, bool)
+}
+
+// GetResourceLabels 实现 LabelGetter 接口。
+//
+// 算法（与 ResourceExists 同模式）:
+//   1. kind → resource 映射（仅试点 Deployment）
+//   2. 不支持 / pool nil / informer 未启动 / cache miss → 返回 (nil, false)
+//   3. cache 命中 → 返回 (Resource.Labels, true)
+//
+// 注意：返回的 labels 可能为 nil（K8s 对象本身无 labels）
+// 调用方应理解 (nil, true) = "cache 找到资源但该资源无 labels"
+// 这与原 kubectl 路径行为一致（obj.Metadata.Labels 也可能 nil）。
+func (d *InformerDetector) GetResourceLabels(kind, name, namespace string) (map[string]string, bool) {
+	resource, ok := kindToResource(kind)
+	if !ok {
+		return nil, false
+	}
+	if d.pool == nil {
+		return nil, false
+	}
+	informer := d.pool.Get(resource)
+	if informer == nil {
+		return nil, false
+	}
+	r, found := informer.Get(namespace, name)
+	if !found || r == nil {
+		return nil, false
+	}
+	return r.Labels, true
+}
+
 // kindToResource 把 K8s Kind (大驼峰单数) 映射到 API resource name (小写复数)。
 //
 // v2.7.0 仅支持 Deployment（informer 试点资源）。

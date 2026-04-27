@@ -32,6 +32,15 @@ func (f *cacheBackedFakeInformer) addResource(ns, name string) {
 	}
 }
 
+// addResourceWithLabels 跟 addResource 一样但支持自定义 labels（Step 2b-2 测试用）
+func (f *cacheBackedFakeInformer) addResourceWithLabels(ns, name string, labels map[string]string) {
+	f.items[ns+"/"+name] = &eventstream.Resource{
+		Namespace: ns,
+		Name:      name,
+		Labels:    labels,
+	}
+}
+
 func (f *cacheBackedFakeInformer) Start(_ context.Context) <-chan error {
 	ch := make(chan error)
 	close(ch)
@@ -268,6 +277,99 @@ func TestInformerDetector_CacheHit_IgnoresFallbackError(t *testing.T) {
 	if fallback.calls != 0 {
 		t.Errorf("cache hit 不应调 fallback, calls=%d", fallback.calls)
 	}
+}
+
+// ─── LabelGetter 测试（Step 2b-2）───────────────────────────────
+
+func TestInformerDetector_GetResourceLabels_CacheHit_ReturnsLabels(t *testing.T) {
+	informer := newCacheBackedFakeInformer("deployments")
+	labels := map[string]string{
+		"app":             "myapp",
+		"app.kubernetes.io/managed-by": "Helm",
+	}
+	informer.addResourceWithLabels("default", "myapp", labels)
+
+	pool := poolWithInformer(t, "deployments", informer)
+	detector := NewInformerDetector(pool, newMockDetector())
+
+	got, ok := detector.GetResourceLabels("Deployment", "myapp", "default")
+	if !ok {
+		t.Fatal("cache hit 应返回 ok=true")
+	}
+	if len(got) != 2 {
+		t.Errorf("labels len=%d, want 2", len(got))
+	}
+	if got["app"] != "myapp" {
+		t.Errorf("labels[\"app\"]=%q, want myapp", got["app"])
+	}
+}
+
+func TestInformerDetector_GetResourceLabels_CacheHit_NilLabels(t *testing.T) {
+	// K8s 对象本身可能没 labels (metadata.labels 缺失或空)
+	// 此时 informer.Get 返回的 Resource.Labels 是 nil
+	// LabelGetter 应返回 (nil, true) — 表示"找到了，但没 labels"
+	informer := newCacheBackedFakeInformer("deployments")
+	informer.addResource("default", "no-labels") // 默认无 labels
+
+	pool := poolWithInformer(t, "deployments", informer)
+	detector := NewInformerDetector(pool, newMockDetector())
+
+	got, ok := detector.GetResourceLabels("Deployment", "no-labels", "default")
+	if !ok {
+		t.Error("cache hit (即使 labels=nil) 应返回 ok=true")
+	}
+	if got != nil {
+		t.Errorf("无 labels 资源应返回 nil map, got %v", got)
+	}
+}
+
+func TestInformerDetector_GetResourceLabels_CacheMiss_ReturnsFalse(t *testing.T) {
+	informer := newCacheBackedFakeInformer("deployments")
+	// 不 add 任何资源 → cache miss
+
+	pool := poolWithInformer(t, "deployments", informer)
+	detector := NewInformerDetector(pool, newMockDetector())
+
+	got, ok := detector.GetResourceLabels("Deployment", "missing", "default")
+	if ok {
+		t.Error("cache miss 应返回 ok=false")
+	}
+	if got != nil {
+		t.Errorf("cache miss 应返回 nil map, got %v", got)
+	}
+}
+
+func TestInformerDetector_GetResourceLabels_UnsupportedKind(t *testing.T) {
+	informer := newCacheBackedFakeInformer("deployments")
+	pool := poolWithInformer(t, "deployments", informer)
+	detector := NewInformerDetector(pool, newMockDetector())
+
+	// Service 不在 kind 映射中 → 返回 (nil, false)
+	got, ok := detector.GetResourceLabels("Service", "myservice", "default")
+	if ok {
+		t.Error("不支持的 kind 应返回 ok=false")
+	}
+	if got != nil {
+		t.Errorf("不支持的 kind 应返回 nil map, got %v", got)
+	}
+}
+
+func TestInformerDetector_GetResourceLabels_NilPool(t *testing.T) {
+	detector := NewInformerDetector(nil, newMockDetector())
+
+	got, ok := detector.GetResourceLabels("Deployment", "myapp", "default")
+	if ok {
+		t.Error("nil pool 应返回 ok=false")
+	}
+	if got != nil {
+		t.Errorf("nil pool 应返回 nil map, got %v", got)
+	}
+}
+
+// ─── LabelGetter 接口契约编译期验证 ───────────────────────────
+
+func TestInformerDetector_ImplementsLabelGetter(t *testing.T) {
+	var _ LabelGetter = (*InformerDetector)(nil)
 }
 
 // ─── 接口契约编译期验证 ────────────────────────────────────────

@@ -35,6 +35,16 @@ func (r *Reconciler) loadResourceLabels(res *Resource) bool {
 		return false
 	}
 
+	// v2.7 Step 2b-2: informer cache fast path
+	// 仅在 detector 实现 LabelGetter 接口时触发（InformerDetector）
+	// cache miss / kind 不支持 / pool 不可用 → 自动 fallback 到下方 kubectl 路径
+	if lg, ok := r.detector.(LabelGetter); ok {
+		if labels, found := lg.GetResourceLabels(res.Kind, res.Name, res.Namespace); found {
+			res.Labels = labels
+			return true
+		}
+	}
+
 	// 🔥 修复：5秒超时，永不阻塞 Reconciler
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
