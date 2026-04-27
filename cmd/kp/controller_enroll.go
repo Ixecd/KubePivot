@@ -62,7 +62,7 @@ func runControllerEnrollReal(args []string) {
 	resourcesData, err := os.ReadFile(resourcesPath)
 	if err != nil {
 		P.Fail(fmt.Sprintf("读取 %s 失败: %v", resourcesPath, err))
-		P.Info("💡", fmt.Sprintf("提示：kp init 会生成 configs/resources.yaml"))
+		P.Info("💡", "提示：kp init 会生成 configs/resources.yaml")
 		os.Exit(1)
 	}
 	if len(strings.TrimSpace(string(resourcesData))) == 0 {

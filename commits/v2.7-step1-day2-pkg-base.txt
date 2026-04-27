@@ -1,0 +1,54 @@
+feat(eventstream): v2.7 Step 1 Day 2 - 包基础
+
+新建 internal/eventstream/ 包，~1500 行（含单测）。
+
+文件结构：
+  doc.go              package 文档
+  resource.go         Resource / Skeleton / SkeletonChanged (208 行)
+  cache.go            Cache 接口 + SkeletonCache 实现 (370 行)
+  serializer.go       ParseSkeleton (113 行)
+  
+  resource_test.go    14 cases (208 行)
+  cache_test.go       20 cases (326 行)
+  serializer_test.go  12 cases (204 行)
+  
+合计 46 个 test cases (清单目标 30，超额完成)。
+
+设计要点（详见 docs/design/eventstream-draft.md）：
+  
+  Resource (Skeleton 模型):
+    - 业务关心字段：APIVersion / Kind / NS / Name / Labels / Replicas / Phase
+    - 关键字段：ResourceVersion (K8s 乐观锁 + watch 续传)
+    - RawJSON 保留 (Cold 层降级用 + 按需反序列化)
+    - cacheLayer / lastAccessed / accessCount (Cache 内部元数据)
+  
+  SkeletonChanged:
+    - 增量序列化核心
+    - 仅 ResourceVersion 变 = K8s housekeeping → 不视为 changed
+    - Generation / Phase / Replicas / Labels / Annotations 变化 → changed
+  
+  SkeletonCache (Cache 接口实现):
+    - immutable snapshot + atomic.Value (lock-free 读)
+    - ns 二级索引 (List(ns) O(N_ns))
+    - Put 单条 (运行时 reconcile)
+    - PutBulk 批量 (ColdStart / Resync)
+    - Delete 自动清理空 ns
+  
+  ParseSkeleton:
+    - 仅反序列化 Skeleton 字段 (vs 全量 8.7x 内存效率)
+    - 必要字段验证 (kind / name)
+    - 时间戳容错 (无效格式返回零值)
+    - RawJSON 共享底层 buffer (无拷贝)
+
+性能基线 (Day 1 benchmark 已验证)：
+  Get:        14.5 ns
+  List(ns):   147 ns (1000 items)
+  PutBulk:    341 ms (10000 items)
+  内存放大率: 1.65x (vs client-go 4.69x)
+
+并发安全：
+  TestCache_ConcurrentReadWrite 跑 race detector 无报告
+  10 reader + 5 writer + 1000 ops × 各自
+
+下一步：
+  Day 3: Informer 接口 + watch loop (不引入 client-go)
