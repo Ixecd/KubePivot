@@ -3,6 +3,7 @@
 > 编写日期：2026-04-27
 > 状态：📐 设计草案（待 Step 1 实施时 finalize）
 > 关联文档：[ROADMAP.md v2.7 章节](../../ROADMAP.md) / [decision-stack.md](decision-stack.md)
+> 实施日志：[eventstream-impl-notes.md](eventstream-impl-notes.md) ← Day 1-4 实施过程、数据、bug 修复实录
 > 实施周期：3 周（含 benchmark + 灰度上线）
 
 ---

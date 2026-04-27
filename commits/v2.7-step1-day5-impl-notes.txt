@@ -1,0 +1,29 @@
+docs(eventstream): add impl-notes for Day 1-4 实施日志
+
+新建 docs/design/eventstream-impl-notes.md（480 行）记录 v2.7 Step 1
+Day 1-4 实施实情，与 eventstream-draft.md（设计意图）互补：
+
+  draft.md       = 设计文档（为什么这样设计）
+  impl-notes.md  = 实施日志（实际做的时候发生了什么）
+
+内容覆盖：
+  Day 1 (414):    benchmark vs client-go 5 个 + perf 决策
+                  含 v1 失败迭代 (ColdStart 1580ms → 341ms 4.6x 提升)
+  Day 2 (415-416): Cache + cache_policy
+                  含 3 个本地修复 bug（cold_start helper / Decide
+                  默认值 / mergeLayers 简单 min 语义错）
+  Day 3 (417-418): Informer + watch loop
+                  含 2 个 bug（Stop without Start / WatchReconnects 漏计）
+                  + commit hook 踩坑教训 (-m -F 命令冲突)
+  Day 4 (419):    v2.5 sharding adapter (A 路径锁定)
+  Day 5:          进行中占位
+
+累计数据：
+  代码 ~3500 行 / 测试 ~1500 行 / 152+ test cases
+  覆盖率 88.2% / Race 全绿
+  6 个 commit / 5 个 bug 全部本地修复（无 fix commit 流入 Master）
+
+工程哲学落实记录：
+  不藏数据 / 不引入 client-go / 设计先行 / 不 push 中间状态
+
+draft.md 顶部加 link 指向 impl-notes，主体内容不变。
