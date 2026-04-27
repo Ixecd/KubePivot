@@ -1,0 +1,50 @@
+docs: introduce FUTURE.md - architecture exploration log
+
+新建 FUTURE.md（项目根目录），定位为"实验室" vs ROADMAP.md "军令状"。
+
+文档定位：
+  ROADMAP.md = 确定性工程交付（3-6 个月军令状）
+  FUTURE.md  = 高价值/高风险种子库（远景探索，非承诺）
+
+每个种子必须包含：
+  - 动机（为什么记录）
+  - 核心想法（一段话讲清）
+  - 工程税（诚实列出实施成本）
+  - 适用前提（重新评估的必要条件）
+  - 重新评估时机（与 ROADMAP 的交点）
+
+首版加入第一个种子：
+
+F1: Cell-based Architecture (CBA)
+  从 1D Hash-sharding 演化到 2D Matrix-orchestration
+  维度：Shard x Workload-class（Stateful/Stateless 隔离）
+  
+  关键洞察：
+    v2.5 sharding 模型在无状态资源上工作良好（接管掩盖故障）
+    v2.8 引入有状态资源后接管模型不再适用（数据迁移成本爆炸）
+    需要"故障可控边界 > 故障不可见"的新模型
+  
+  故障处理差异化：
+    Stateless Cell  -> 走 v2.5 快速接管路径
+    Stateful Cell   -> 就地隔离/自愈，不触发数据迁移
+  
+  诚实列出 4 项工程税：
+    1. Cell 粒度选择困难
+    2. Cell 间通信开销（gRPC over network）
+    3. 测试矩阵 O(N^2) 爆炸
+    4. workload-class 自动判定算法成本
+  
+  适用前提（5 项 checkbox）：
+    集群规模 >= 100 ns / v2.8 有状态资源保护已引入 /
+    工程容量足够 / 真实生产痛点 / classifier 算法已设计
+
+  重新评估时机：v2.8 设计阶段（约 2026-Q3）
+
+灵感来源：
+  v2.7 实施中讨论生成（commit 419-420 期间）
+  从工业 Matrix 工具的"细胞 grid"可视化延伸到爆炸半径设计
+
+附编辑约定：
+  - 种子添加标准（高价值/高风险/可暂缓）
+  - 状态流转（探索中 -> 已毕业/已弃用/长期搁置）
+  - 弃用种子保留作为决策依据，不删除
