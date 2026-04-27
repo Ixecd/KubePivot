@@ -1,0 +1,51 @@
+feat(eventstream): v2.7 Step 1 Day 2 - Cache 三层分层判定策略
+
+新增 internal/eventstream/cache_policy.go (222 行) + 单测 (286 行)。
+
+实现 Q2=C "状态机 + 访问频率双驱动并集" 拍板：
+  - 状态机驱动：根据 ProjectState (RUNNING/VALIDATING/IDLE/TERMINATED)
+  - 访问频率驱动：根据 lastAccessed / accessCount
+  - 双驱动取并集（任一升级则升级）
+  - 默认 Warm
+
+核心组件：
+  - ProjectState enum: 5 个状态值（含 Unknown 兜底）
+  - CachePolicy struct: 4 个可调参数
+  - DefaultCachePolicy(): 推荐默认值
+    AccessWindow: 5min
+    AccessThreshold: 3
+    IdleWindow: 30min
+    WarmSizeThreshold: 1000
+  
+  - Decide(r, state, now): 主判定函数
+    返回 r 应归属的 CacheLayer
+    双驱动并集 (mergeLayers 取较热者)
+  
+  - ShouldDemote / ShouldPromote: 周期 evict / 访问时升级判定
+  - MarkAccessed: 更新访问元数据 (best-effort，非原子)
+  - SetLayer: Cache 内部维护层级状态
+
+13 个 test cases (含 sub-cases 实际更多)：
+  - DefaultCachePolicy 默认值
+  - 仅状态机驱动 (6 sub-cases，覆盖所有 state)
+  - 仅访问频率驱动 (7 sub-cases，覆盖时间窗口边界)
+  - 双驱动并集 (5 sub-cases，核心场景):
+    * 状态 Hot + 访问 Hot → Hot
+    * 状态 Hot + 访问 Cold → Hot (并集胜)
+    * 状态 Cold + 访问 Hot → Hot (并集胜)
+    * 状态 Idle + 访问 Cold → Cold
+    * 状态 Idle + 访问 Warm → Warm
+  - ShouldDemote / ShouldPromote 触发判定
+  - 极端场景：nil Resource / 双驱动禁用 / 工具函数
+
+并发安全说明：
+  MarkAccessed 是 best-effort（非原子），多读者并发可能漏计 1-2 次
+  对统计无显著影响（v2.7.0 接受此 trade-off）
+  v2.7.1 可改 atomic.Uint32 + atomic.Pointer[time.Time] 严格化
+
+Day 2 完整收官：
+  上午 commit 415: doc/resource/cache/serializer + 46 cases (覆盖率 93.9%)
+  本 commit:       cache_policy + 13 cases
+  
+  Day 2 全部内容完成 ✓
+  下一步 Day 3: Informer 接口 + watch loop (不引入 client-go)
