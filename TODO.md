@@ -202,6 +202,9 @@ feature/client-go-comparison:
 
 [ ] controller HTTP server + /metrics endpoint
     informer pool RegisterMetrics(reg) 当前未调用
+    端到端 CPU% / 内存 RSS vs v2.5/v2.6 实测对比 ⭐
+    Cache 命中率 ≥ 95% 验收 (ROADMAP §v2.7 验收剩 2 项)
+    真实集群 P=10 / P=50 稳态 5min / 24h 跑
     需要给 controller pod 加 :8080 /metrics endpoint (promhttp.Handler)
     Build 新 controller 镜像 (qingchun22/kubepivot-controller:v2.7.1)
     9 项 informer 指标暴露到 Grafana / Prometheus
