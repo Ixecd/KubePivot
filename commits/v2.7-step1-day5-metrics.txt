@@ -1,0 +1,158 @@
+feat(eventstream): v2.7 Step 1 Day 5 - Prometheus metrics collector
+
+Day 5 完成：Informer Prometheus exposition 模块。
+v2.7 Step 1 至此完成 5/5（仅剩 Bench 3 watch 吞吐留 TBD）。
+
+变更：
+  go.mod / go.sum                                新增 prometheus/client_golang v1.20.5
+  internal/eventstream/metrics.go                新增 ~310 行
+  internal/eventstream/metrics_test.go           新增 ~430 行
+
+合计新增 ~740 行，16 个测试用例。
+
+依赖引入：
+  github.com/prometheus/client_golang v1.20.5
+  含 5 个间接依赖（beorn7/perks, klauspost/compress, kylelemons/godebug,
+  munnerz/goautoneg, prometheus/client_model 等）
+  go.sum 增加 ~25 行
+  
+  哲学红线对齐：
+    拒绝 client-go 是因为它逻辑侵入性强 / 体积臃肿
+    prometheus/client_golang 是纯粹的"打点 + 暴露"工具
+    属于云原生通用语，不影响 KubePivot 核心执行逻辑
+    工程税合理（~5MB 体积换 Grafana / Alertmanager 生态接入）
+
+设计核心（Pure Collector 模式）：
+  
+  InformerCollector struct:
+    - 持有 []Informer + sync.RWMutex
+    - 内置 9 个 prometheus.Desc（全局共享）
+    - 实现 prometheus.Collector 接口
+  
+  公共 API:
+    NewInformerCollector()              工厂（不绑定具体 informer）
+    AddInformer(informer)               动态添加
+    RemoveInformer(informer)            动态移除
+    Describe(ch) / Collect(ch)          实现 collector 接口
+    RegisterInformerMetrics(reg, ...)   一行注册（variadic）
+  
+  错误定义:
+    ErrNilRegisterer / ErrNilInformer
+
+暴露的 9 个指标（含 helper 含义）:
+  
+  | 指标名                                            | 类型    | 标签            |
+  |--------------------------------------------------|---------|-----------------|
+  | kubepivot_informer_cache_size                    | Gauge   | resource        |
+  | kubepivot_informer_cache_hot_count               | Gauge   | resource        |
+  | kubepivot_informer_cache_warm_count              | Gauge   | resource        |
+  | kubepivot_informer_cache_cold_count              | Gauge   | resource        |
+  | kubepivot_informer_events_total                  | Counter | resource, type  |
+  | kubepivot_informer_watch_reconnects_total        | Counter | resource        |
+  | kubepivot_informer_cache_hit_ratio               | Gauge   | resource        |
+  | kubepivot_informer_memory_bytes                  | Gauge   | resource        |
+  | kubepivot_informer_last_resync_timestamp_seconds | Gauge   | resource        |
+
+设计决策（4 项细节校准）:
+  
+  1. 接口签名分离 (Registerer 注入)
+     RegisterInformerMetrics 接收 prometheus.Registerer 参数
+     不绑定 prometheus.DefaultRegisterer
+     便于单元测试 / 多 instance 隔离
+  
+  2. 命名约定遵循 Prometheus 标准
+     _total 后缀强制用于 Counter
+     _ratio 后缀（0.0-1.0）优于 _percent（0-100）
+     _timestamp_seconds 配合 Gauge 表达"最后一次时间"
+  
+  3. EventType label 转小写
+     "ADD" -> "add"，符合 Prometheus 约定
+     避免在 Grafana 查询时大小写不一致导致"数据消失"
+  
+  4. last_resync 首次未 resync 时不暴露 (Micro-adjustment)
+     IsZero() 时跳过 Collect 输出
+     避免 Prometheus 出现 1970-01-01 怪异时间戳
+     等首次成功 resync 后才开始暴露
+
+Subscriber 指标暴露策略:
+  
+  v2.7.0 仅暴露 informer 级别（不含 subscriber 级别）
+  理由：
+    - subscriber 没有 stable id
+    - 作为 label 会导致 cardinality 爆炸（压垮 Prometheus）
+    - "缓存整体命中率 / Watch 重连频率" 比 "某订阅者丢包"优先级高
+  
+  v2.7.1+ 预留方案：
+    在 InformerStats 增加 AggregatedSubscriberStats
+    避免标签爆炸的同时保留可观测性
+
+HTTP Server 归属权:
+  
+  eventstream 包不创建 HTTP server
+  调用方负责 promhttp.Handler() 接入 /metrics endpoint
+  
+  理由：
+    - 职责单一：eventstream 只管数据流动 + 统计
+    - 架构灵活：CLI 不需要 server，controller pod 才需要
+    - 可插拔：调用方决定何时启动 / 监听哪个端口
+
+实施过程踩坑（1 个 bug 暴露 + 修复）:
+  
+  Bug 5.1: collector duplicate registration
+    根因：原设计每个 informer 一个 collector
+          每个 collector 内部独立创建 desc
+          注册多个 collector 到同 registry → desc fqName 冲突
+          报错 "duplicate metrics collector registration attempted"
+    
+    暴露：TestRegisterInformerMetrics_MultipleInformers fail
+    
+    修复：架构层重写
+          desc 全局共享（一组）
+          单 collector 持有多个 informer
+          通过 resource label 区分不同 informer 的指标输出
+          RegisterInformerMetrics 改为 variadic 一次性注册
+    
+    教训：
+      Prometheus collector 模式应是 "一个 collector = 一组相关 metrics"
+      不是 "一个 collector = 一个数据源"
+      这是 client_golang 内置 collector（GoCollector 等）的标准模式
+
+测试覆盖（16 cases）:
+  
+  Collector 生命周期：
+    NotNil / AddInformer / AddInformer_NilSafe / RemoveInformer
+  
+  Describe / Collect:
+    DescribeAllDescriptors  9 个描述符全输出
+    CollectAllGauges        cache 4 层指标
+    EventsTotalByType       4 个事件类型 + label 转小写
+    WatchReconnects         Counter 输出
+    CacheHitRatio           4 个边界值
+  
+  Micro-adjustment 验证:
+    LastResync_NotExposedBeforeFirstResync   IsZero 不输出 ⭐
+    LastResync_ExposedAfterFirstResync       有值时输出
+  
+  动态行为:
+    StatsUpdated            collector 不缓存 stats
+    DynamicAdd              运行时 AddInformer
+    MultipleInformers       一次性注册多个
+  
+  错误处理:
+    NilRegisterer / NoInformers / NilInformer
+    DuplicateRegisterCollectors  desc 冲突报错
+
+Step 1 进度（v2.7 收官）:
+  Day 1 done benchmark + perf 决策 (414)
+  Day 2 done Cache + cache_policy (415-416)
+  Day 3 done Informer + watch loop (417-418)
+  Day 4 done v2.5 sharding adapter (419)
+  Day 5 done Metrics collector (本 commit)
+  Bench 3 todo watch 吞吐（feature 分支 envtest，留 v2.7 release 前）
+
+测试结果:
+  全部 ~170 cases 全 PASS
+  覆盖率 88.8% (vs 87.7% 上一轮)
+  Race detector 全绿
+  make dev 全绿
+  总测试用时 1.67s
