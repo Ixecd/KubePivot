@@ -1,0 +1,15 @@
+docs(changelog): v2.7.0 章节
+
+按 v2.6.0 标准结构和风格添加 v2.7.0 完整变更记录。
+
+7 个 section:
+  Added           Event Stream / In-cluster auth / Controller 切换 /
+                  MetricsClient / Bench 3 / 设计文档
+  Changed         global.go / heal.go / informer_impl.go
+  Tests           eventstream 89.0% / metrics 81.2% / 230+ cases
+  Documentation   draft / perf / impl-notes / FUTURE / ROADMAP
+  设计原则核对    6 项 ✅ (0 client-go / 单二进制 / 双保险 / ...)
+  工程教训        5 条深度反思
+  Commits         10 个关键 commit hash
+
+为 v2.7.0 release commit 做准备 (kp release v2.7.0 之前，与 v2.6.0 节奏一致)。
