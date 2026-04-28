@@ -19,6 +19,8 @@ import (
 // ════════════════════════════════════════════════════════════════════════════
 
 func TestResolveTeamsConfigPath_NeitherExists(t *testing.T) {
+	switchToTempProjectRoot(t)
+
 	// 项目根 / 用户 home 都没 teams.yaml
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -33,6 +35,8 @@ func TestResolveTeamsConfigPath_NeitherExists(t *testing.T) {
 }
 
 func TestResolveTeamsConfigPath_UserOnly(t *testing.T) {
+	switchToTempProjectRoot(t)
+
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -61,6 +65,8 @@ func TestGetRBACChecker_NilSafe(t *testing.T) {
 	ResetRBACCheckerForTest()
 	defer ResetRBACCheckerForTest()
 
+	switchToTempProjectRoot(t)
+
 	// 临时 home, 无任何 teams.yaml
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -77,6 +83,8 @@ func TestGetRBACChecker_NilSafe(t *testing.T) {
 func TestGetRBACChecker_EmptyConfig_AllowsAll(t *testing.T) {
 	ResetRBACCheckerForTest()
 	defer ResetRBACCheckerForTest()
+
+	switchToTempProjectRoot(t)
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -97,6 +105,8 @@ func TestGetRBACChecker_EmptyConfig_AllowsAll(t *testing.T) {
 func TestMustCheck_NoConfig_DoesNotExit(t *testing.T) {
 	ResetRBACCheckerForTest()
 	defer ResetRBACCheckerForTest()
+
+	switchToTempProjectRoot(t)
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -119,6 +129,8 @@ func TestMustCheck_NoConfig_DoesNotExit(t *testing.T) {
 func TestMustCheck_ChecksUnderlyingChecker(t *testing.T) {
 	ResetRBACCheckerForTest()
 	defer ResetRBACCheckerForTest()
+
+	switchToTempProjectRoot(t)
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -153,6 +165,8 @@ func TestMustCheck_ChecksUnderlyingChecker(t *testing.T) {
 }
 
 func TestResetRBACCheckerForTest_ReloadsConfig(t *testing.T) {
+	switchToTempProjectRoot(t)
+
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	kpDir := filepath.Join(home, ".kp")
@@ -183,4 +197,32 @@ func TestResetRBACCheckerForTest_ReloadsConfig(t *testing.T) {
 	c3 := getRBACChecker()
 	err := c3.Check(context.Background(), user, "kp-test", rbac.PermDeploy)
 	require.Error(t, err, "重置 + 重新加载后应应用新规则")
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 测试 helper: 切到临时项目根
+// ════════════════════════════════════════════════════════════════════════════
+
+// switchToTempProjectRoot 切 cwd 到临时项目根 (含 Makefile + 空 configs/).
+//
+// 用途: 隔离测试不受真实项目根的 configs/teams.yaml 干扰.
+// resolveTeamsConfigPath 优先项目级, 不切走会读到真实 configs/teams.yaml,
+// 导致测试结果依赖真实项目状态 (B.4 后 configs/teams.yaml 可能存在并影响测试).
+//
+// t.Cleanup 自动 chdir 回原目录.
+func switchToTempProjectRoot(t *testing.T) string {
+	t.Helper()
+	oldCwd, err := os.Getwd()
+	require.NoError(t, err)
+
+	projectDir := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(projectDir, "Makefile"),
+		[]byte("# stub for projectRoot()"), 0o644))
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(projectDir, "configs"), 0o755))
+	require.NoError(t, os.Chdir(projectDir))
+
+	t.Cleanup(func() { _ = os.Chdir(oldCwd) })
+	return projectDir
 }

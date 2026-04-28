@@ -115,6 +115,8 @@ func main() {
 			// CLI 管理命令：install / uninstall / status / enroll / projects
 			runController(os.Args[2:])
 		}
+	case "team":
+		runTeam(os.Args[2:])
 	default:
 		// 未知命令 → 尝试作为插件执行
 		execPlugin(os.Args[1], os.Args[2:])

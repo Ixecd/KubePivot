@@ -1,0 +1,155 @@
+feat(team-cli): v2.8 B.4 — kp team 8 个子命令完整实现 + 修 446 测试环境依赖缺陷
+
+v2.8 B 模块多团队 RBAC 治理收尾的最后一块 (CLI admin 入口).
+8 个子命令一次性提供管理员闭环: 增删改查 + 成员管理 + 语法校验.
+
+Q-B4.7=A 一锅端: 同时修复 commit 446 的潜伏测试缺陷 (rbac_helper_test 环境依赖).
+
+变更:
+  cmd/kp/team.go              新增 787 行   8 个子命令 + helper
+  cmd/kp/team_test.go         新增 246 行   22 cases
+  cmd/kp/main.go              1 处 patch    case "team": runTeam(os.Args[2:])
+  cmd/kp/rbac_helper_test.go  整体替换      加 switchToTempProjectRoot helper
+
+合计: 1033 行新代码 + 2 文件 patch
+
+设计核心:
+
+  8 个子命令 (Q-B4.1):
+    kp team list                         列出所有 team (表格输出)
+    kp team show <name>                  显示 team 详情
+    kp team add <name> [--flags]         新增 team (双模式 Q-B4.3)
+    kp team remove <name> [--force]      删除 team (二次确认)
+    kp team member add <team> <member>   增加成员
+    kp team member remove <team> <member> 删除成员
+    kp team check <user> <ns> <perm>     校验权限 (详细决策路径 Q-B4.5)
+    kp team validate                     校验 teams.yaml 语法
+
+  Q-B4.2=A 默认操作目标:
+    项目级 configs/teams.yaml (符合 KubePivot 项目即代码哲学)
+    --user 显式切到 ~/.kp/teams.yaml (本地开发测试)
+
+  Q-B4.3=C add 双模式:
+    有 flag (--members / --namespaces / --permissions) → CLI 直接落库
+    无 flag → 走交互式提示 (新手友好)
+
+  Q-B4.4=C yaml 重写告警:
+    saveTeamConfig 前调 warnYAMLOverwrite
+    "⚠️  注意: 即将重写 yaml 文件, 既有注释/字段排序可能丢失"
+
+  Q-B4.5=B check 详细决策路径:
+    探出命中的 team / user 匹配方式 / namespace 匹配模式 / 命中 permission
+    --json 可选输出 (CI 友好)
+
+  Q-B4.6=C kp team * 不走 mustCheck:
+    teams.yaml 是文件级权限 (谁能写文件谁能改)
+    避免 chicken-egg (用户没 PermAll 但又想加自己进 ops-team)
+    跟 KubePivot 既有 kp context add 同模式 (无 RBAC)
+
+  Q-B4.7=A 一锅端 (实施期涌现):
+    一并修复 commit 446 的 rbac_helper_test 环境依赖缺陷
+    详见下方 "446 测试缺陷修复" 章节
+
+实施期 14 次打脸盘点 (本次 commit 修复了 4 次):
+  
+  第 12 次 (本地拦下): []rbac.Permission 类型不匹配
+    Team.Permissions 是 []string 不是 []rbac.Permission
+    grep 验证类型时发现, 立即修
+  
+  第 13 次 (用户跑后修): main.go controller case 是 if/else 块
+    我假设 case "controller": runController(args[1:]) 单行
+    真实是 if/else 块 + os.Args[2:]
+    改用 default 锚点 surgical patch (永远稳定)
+  
+  第 14 次 (实操使用揭示): kp team add 位置参数后 flag 失效
+    Go flag.Parse 标准行为: 遇到第一个非 flag 后停止解析
+    kp team add backend --members ... 看到 "backend" 就停 → flag 全空
+    修法: 提取位置参数后再 flags.Parse(args[N:])
+    影响 6 处: runTeamShow / runTeamAdd / runTeamRemove /
+             runTeamMemberAdd / runTeamMemberRemove / runTeamCheck
+  
+  第 15 次 (实操使用揭示): commit 446 rbac_helper_test 测试环境依赖
+    本期 kp team add 创建 configs/teams.yaml 后, 446 的测试 FAIL
+    Root cause: resolveTeamsConfigPath 优先项目级
+                测试只 t.Setenv("HOME") 不切 cwd
+                → 读到真实项目级配置, 不是临时 home 的 yaml
+    修法: 加 switchToTempProjectRoot helper, 测试切 cwd 到临时项目根
+    本期 7 处测试加保护
+
+446 测试缺陷修复:
+  
+  缺陷描述:
+    rbac_helper_test.go 里 7 处测试只 t.Setenv("HOME"), 不切 cwd
+    resolveTeamsConfigPath 项目级优先 → 读真实 cwd 的 configs/teams.yaml
+    commit 446 入库时 configs/teams.yaml 不存在 → 测试通过
+    本期 kp team add 创建后 → 测试 FAIL (依赖真实项目状态, 测试缺陷)
+
+  根本原因:
+    生产代码 resolveTeamsConfigPath 行为正确 (项目级优先)
+    测试代码隔离不充分 (没控制 cwd)
+    测试是单测, 应该完全自洽不依赖外部环境
+
+  修法 (Option C 测试代码改造):
+    新增 switchToTempProjectRoot(t) helper:
+      - 创建临时目录 + 写 stub Makefile + 创建空 configs/
+      - os.Chdir 到该目录
+      - t.Cleanup 自动 chdir 回原目录
+    
+    7 处测试调用 switchToTempProjectRoot(t) 在 t.Setenv("HOME") 前
+
+  为什么不修生产代码:
+    resolveTeamsConfigPath 项目级优先是 Q-B7.11=C 拍板, 行为正确
+    为测试改生产 (加测试钩子 / 环境变量优先) 不干净
+    测试改造 100% 解决问题, 不影响生产逻辑
+
+测试覆盖 (新增 22 cases + 修复 7 cases):
+  
+  team.go 22 cases:
+    teamsFilePath (1):           UserLevel
+    loadTeamConfig (4):          NotExists / NilTeams / RoundTrip / BadYAML
+    findTeamIndex (3):           Found / NotFound / EmptyList
+    splitCSV (4):                Basic / TrimsWhitespace / SkipsEmpty / Empty
+    joinPerms (2):               Multiple / Empty
+    matchNamespacePattern (3):   Exact / Prefix / Glob
+    warnYAMLOverwrite (2):       FileExists / FileNotExists
+    E2E 完整闭环 (1):            Add → List → Show → Member Add → Check → Remove
+  
+  rbac_helper_test 修复 7 cases:
+    所有依赖 resolveTeamsConfigPath 的测试加 switchToTempProjectRoot
+
+测试结果:
+  ✓ cmd/kp 全跑通过
+  ✓ 既有 cmd/kp 87 cases 不受影响
+  ✓ 446 修复后 TestMustCheck_ChecksUnderlyingChecker / 
+    TestResetRBACCheckerForTest_ReloadsConfig 不再依赖项目根状态
+  ✓ make dev 全绿
+  
+  实操验证 (kp team CLI 真实使用):
+    ✓ kp team list / show / add / remove / member-add / check / validate
+    ✓ flag 直接落库 (不再走交互)
+    ✓ 无 flag 走交互 (Q-B4.3=C 双模式正确)
+    ✓ --json 输出
+    ✓ check 详细决策路径
+
+测试边界 (诚实标注):
+  ✓ 单元测试: 22 cases 覆盖 helpers + E2E 闭环
+  ✗ runTeamX 命令入口 CLI flag 解析路径不在测试矩阵
+    → 第 14 次打脸暴露的 flag 顺序 bug 测试矩阵原本没覆盖
+    → 后续 v2.8.x 可补 CLI 入口 e2e 测试
+
+工程纪律亮点:
+  - 0 第三方依赖 (跟 v2.8 A/B/B7 一致)
+  - 8 个子命令一次性 (避免后续多次扩展)
+  - sync.Once 单文件读 (项目级优先, 跟 KPEnv 模式对齐)
+  - Q-B4.7=A 一锅端: 修 446 测试缺陷不留尾巴 (无 fix commit)
+  - 交互式 + CLI 双模式无差异 yaml 写入
+
+打脸盘点 (累计):
+  1-11: 之前 commit 已记录
+  12: []rbac.Permission 类型不匹配 (本地拦下)
+  13: main.go controller if/else 块 + os.Args[2:] (用户跑后, 已修)
+  14: kp team add 位置参数后 flag 失效 (实操使用, 本 commit 修)
+  15: commit 446 rbac_helper_test 环境依赖 (B.4 引入暴露, 本 commit 修)
+  
+  累计 15 次打脸 (12 本地拦下 + 1 git hook + 2 实操发现)
+  Master fix commit 数: 0 (Q-B4.7=A 一锅端策略生效)
