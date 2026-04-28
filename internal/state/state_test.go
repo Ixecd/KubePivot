@@ -820,3 +820,142 @@ func TestSandboxTransitions_RunningCanEnterLocked(t *testing.T) {
 	err := sm.Transition(StateLocked, "sandbox start")
 	assert.NoError(t, err)
 }
+
+// ── RunningSinceFromHistory 测试（v2.6.1 verifiedTrafficWriter 前置依赖）────
+
+func TestRunningSinceFromHistory_FirstDeploy(t *testing.T) {
+	sm := newTestMachine(t)
+	sm.Transition(StateInitializing, "")
+	sm.Transition(StateDeploying, "")
+	sm.Transition(StateValidating, "")
+
+	beforeRunning := time.Now()
+	sm.Transition(StateRunning, "首次部署 v1.0")
+	afterRunning := time.Now()
+
+	got := RunningSinceFromHistory(sm.Record())
+	require.NotNil(t, got, "RUNNING 状态应该有 since 时间戳")
+	assert.True(t, !got.Before(beforeRunning), "since 应该 >= 进入 RUNNING 之前的时间")
+	assert.True(t, !got.After(afterRunning), "since 应该 <= 进入 RUNNING 之后的时间")
+}
+
+func TestRunningSinceFromHistory_AfterRedeploy(t *testing.T) {
+	sm := runningMachine(t)
+	firstSince := *RunningSinceFromHistory(sm.Record())
+
+	time.Sleep(time.Millisecond) // 确保时间戳能区分
+
+	// 重新部署：RUNNING → INITIALIZING → ... → RUNNING
+	sm.Transition(StateInitializing, "重新部署 v2.0")
+	sm.Transition(StateDeploying, "")
+	sm.Transition(StateValidating, "")
+	sm.Transition(StateRunning, "v2.0 上线")
+
+	got := RunningSinceFromHistory(sm.Record())
+	require.NotNil(t, got)
+	assert.True(t, got.After(firstSince),
+		"重新部署后 since 应该是新的 RUNNING 时间，不是首次部署时间")
+}
+
+func TestRunningSinceFromHistory_AfterRollback(t *testing.T) {
+	sm := runningMachine(t)
+	firstSince := *RunningSinceFromHistory(sm.Record())
+
+	time.Sleep(time.Millisecond)
+
+	// 重新部署 → 失败 → 回滚回 RUNNING
+	sm.Transition(StateInitializing, "更新")
+	sm.Transition(StateDeploying, "")
+	sm.Transition(StateRollingBack, "更新失败")
+	sm.Transition(StateRunning, "回滚成功")
+
+	got := RunningSinceFromHistory(sm.Record())
+	require.NotNil(t, got)
+	assert.True(t, got.After(firstSince),
+		"回滚后 RUNNING 也算最新 since（writer 写实际状态，逻辑自洽）")
+}
+
+func TestRunningSinceFromHistory_NotInRunning(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(*Machine)
+	}{
+		{"IDLE", func(sm *Machine) {}},
+		{"INITIALIZING", func(sm *Machine) {
+			sm.Transition(StateInitializing, "")
+		}},
+		{"DEPLOYING", func(sm *Machine) {
+			sm.Transition(StateInitializing, "")
+			sm.Transition(StateDeploying, "")
+		}},
+		{"ROLLING_BACK", func(sm *Machine) {
+			sm.Transition(StateInitializing, "")
+			sm.Transition(StateDeploying, "")
+			sm.Transition(StateRollingBack, "")
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sm := newTestMachine(t)
+			tc.setup(sm)
+
+			got := RunningSinceFromHistory(sm.Record())
+			assert.Nil(t, got, "非 RUNNING 状态应返回 nil")
+		})
+	}
+}
+
+func TestRunningSinceFromHistory_NilRecord(t *testing.T) {
+	got := RunningSinceFromHistory(nil)
+	assert.Nil(t, got, "nil record 应返回 nil（防御性）")
+}
+
+func TestRunningSinceFromHistory_RunningWithoutHistoryEntry(t *testing.T) {
+	// 边界场景：State == RUNNING 但 History 没有 →RUNNING 转换
+	// 实际 Transition() 不会产生这种状态，但 ForceState 可能直接强制到 RUNNING
+	// 此时 [force] 标记的 history 记录的 To 仍然是 StateRunning，所以会被找到
+	// 这里测试 History 完全为空的极端防御场景
+	record := &DeployRecord{
+		State:   StateRunning,
+		History: []Transition{},
+	}
+	got := RunningSinceFromHistory(record)
+	assert.Nil(t, got, "RUNNING 状态但 History 为空应返回 nil（防御性）")
+}
+
+func TestRunningSinceFromHistory_MultipleRunningTakesLatest(t *testing.T) {
+	sm := runningMachine(t)
+	first := *RunningSinceFromHistory(sm.Record())
+
+	time.Sleep(time.Millisecond)
+
+	// 第二次 RUNNING（重部署）
+	sm.Transition(StateInitializing, "")
+	sm.Transition(StateDeploying, "")
+	sm.Transition(StateValidating, "")
+	sm.Transition(StateRunning, "")
+	second := *RunningSinceFromHistory(sm.Record())
+
+	time.Sleep(time.Millisecond)
+
+	// 第三次 RUNNING（再次重部署）
+	sm.Transition(StateInitializing, "")
+	sm.Transition(StateDeploying, "")
+	sm.Transition(StateValidating, "")
+	sm.Transition(StateRunning, "")
+	third := *RunningSinceFromHistory(sm.Record())
+
+	// 三次时间戳应严格递增
+	assert.True(t, second.After(first), "第二次 RUNNING since 应晚于第一次")
+	assert.True(t, third.After(second), "第三次 RUNNING since 应晚于第二次")
+
+	// History 中应有 3 个 →RUNNING 记录，但 RunningSinceFromHistory 只返回最近一个
+	count := 0
+	for _, h := range sm.Record().History {
+		if h.To == StateRunning {
+			count++
+		}
+	}
+	assert.Equal(t, 3, count, "History 中应记录所有 3 次 →RUNNING")
+}

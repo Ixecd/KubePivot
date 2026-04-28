@@ -1,0 +1,57 @@
+feat(state): v2.6.1 Step 1 — RunningSinceFromHistory helper
+
+v2.6.1 多环境流量传播实施 Step 1。
+state.RunningSinceFromHistory 是 Step 2 verifiedTrafficWriter 的
+前置依赖（用于 5min 稳态判定）。
+
+变更:
+  internal/state/state.go         +~30 行 (1 函数)
+  internal/state/state_test.go    +~140 行 (7 cases)
+
+设计核心:
+
+  RunningSinceFromHistory(record) *time.Time
+    倒序遍历 record.History 找最近一次 To == StateRunning 的 Timestamp
+    
+    返回 nil 的场景:
+      - record == nil          (防御性)
+      - record.State != RUNNING (语义边界)
+      - History 没有 →RUNNING  (防御性)
+
+  Q1 校准点 A "不排除回滚后 RUNNING":
+    writer 写的是当前 K8s 实际 traffic 状态 (kubectl get ingress)
+    不是历史声明值
+    回滚后 K8s 实际 traffic 已切回 blue, 写出去就是 blue 100%
+    逻辑自洽
+  
+  Q2.1=B "不改 state schema":
+    DeployRecord.History 已有完整 Transition.Timestamp
+    复用既有结构, 不引入 RunningSince *time.Time 字段
+    跨 controller 重启稳定 (etcd / 本地文件持久化保证)
+
+测试覆盖 (7 cases):
+
+  TestRunningSinceFromHistory_FirstDeploy                  首次进 RUNNING
+  TestRunningSinceFromHistory_AfterRedeploy                重部署取最新 (Q1=A 关键场景)
+  TestRunningSinceFromHistory_AfterRollback                回滚后 RUNNING 也算 since
+  TestRunningSinceFromHistory_NotInRunning                 4 sub: IDLE/INIT/DEPLOY/ROLLBACK
+  TestRunningSinceFromHistory_NilRecord                    防御性
+  TestRunningSinceFromHistory_RunningWithoutHistoryEntry   防御性 (History 完全为空)
+  TestRunningSinceFromHistory_MultipleRunningTakesLatest   3 次 RUNNING 严格递增
+
+测试结果:
+  ✓ 7 个新 cases 全 PASS
+  ✓ internal/state 既有 ~50 cases 不受影响
+  ✓ make dev 全绿
+  ✓ test/integration 不受影响
+
+工程纪律:
+  - 风格对齐既有 state_test.go (testify require/assert + table-driven 用 t.Run sub)
+  - 复用既有 helper newTestMachine / runningMachine, 不造新 fixture
+  - 函数纯逻辑无副作用, 不需要 mock 注入
+  - 文档 docstring 标注 Q1/Q2.1 拍板依据 + 防御性场景
+
+下一步 Step 2: verifiedTrafficWriter (controller 端)
+  internal/controller/verified_traffic_writer.go (~250 行)
+  internal/controller/global.go (+~10 行接入)
+  函数变量注入式 mock (与 v2.7 readTokenFile / kubectl func 同模式)

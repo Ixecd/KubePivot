@@ -180,3 +180,23 @@ func (m *Machine) ForceState(to State, reason string) error {
 	m.record.UpdatedAt = time.Now()
 	return m.store.Save(m.record)
 }
+
+// RunningSinceFromHistory 倒序遍历 record.History 找最近一次 To == StateRunning
+// 的 Timestamp，返回 nil 表示当前不在 RUNNING 或没有进入 RUNNING 的历史。
+//
+// [完整 docstring 见 snippet]
+func RunningSinceFromHistory(record *DeployRecord) *time.Time {
+	if record == nil {
+		return nil
+	}
+	if record.State != StateRunning {
+		return nil
+	}
+	for i := len(record.History) - 1; i >= 0; i-- {
+		if record.History[i].To == StateRunning {
+			ts := record.History[i].Timestamp
+			return &ts
+		}
+	}
+	return nil
+}
