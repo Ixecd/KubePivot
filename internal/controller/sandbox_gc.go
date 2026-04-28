@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Ixecd/kubepivot/internal/executor"
+	"github.com/Ixecd/kubepivot/internal/rbac"
 )
 
 const sandboxSessionTTL = time.Hour
@@ -91,6 +92,11 @@ func (r *Reconciler) cleanExpiredSandbox(session sandboxSessionFile, sessionPath
 	ns := session.Namespace
 	if ns == "" {
 		ns = getenv("KUBE_NAMESPACE", session.Project)
+	}
+
+	// v2.8 B.5 (D-Level1): RBAC + audit denied 接入 (ns 解析后)
+	if !mustCheckController(context.Background(), ns, rbac.PermSandboxGC, "sandbox.gc") {
+		return // ENFORCE 模式拒绝, 跳过本次 GC
 	}
 
 	slog.Info("清理 Sandbox 残余资源",

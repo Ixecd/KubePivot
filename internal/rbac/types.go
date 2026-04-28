@@ -47,6 +47,12 @@ const (
 	PermControllerInstall   Permission = "controller-install"
 	PermControllerUninstall Permission = "controller-uninstall"
 	PermAll                 Permission = "*"
+
+	// v2.8 B.5 (D-Level1): controller reconcile 端 4 个新增 Permission
+	PermDriftSync          Permission = "drift-sync"     // controller drift force-sync
+	PermHeal               Permission = "heal"           // controller 资源 healing
+	PermSandboxGC          Permission = "sandbox-gc"     // sandbox 超期清理
+	PermSweeperLease       Permission = "sweeper-lease"  // 孤儿 lease 清理
 )
 
 // String 实现 fmt.Stringer.

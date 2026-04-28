@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Ixecd/kubepivot/internal/executor"
+	"github.com/Ixecd/kubepivot/internal/rbac"
 )
 
 // runSweeperLoop 周期性清理任务，仅 leader pod 跑
@@ -52,6 +53,12 @@ func runSweeperLoop(ctx context.Context, kubeconfig string, totalShards int) {
 func cleanupOrphanShardLeases(ctx context.Context, kubeconfig string, totalShards int) {
 	const namespace = "kubepivot-system"
 	const leasePrefix = "kubepivot-controller-shard-"
+
+	// v2.8 B.5 (D-Level1): RBAC + audit denied 接入
+	// system namespace 操作, 严格检查权限
+	if !mustCheckController(ctx, namespace, rbac.PermSweeperLease, "sweeper.cleanup-lease") {
+		return // ENFORCE 模式拒绝, 跳过本轮清理
+	}
 
 	// 列举所有 shard lease
 	out, err := executor.GetExecutor().Kubectl(ctx, kubeconfig,

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Ixecd/kubepivot/internal/audit"
+	"github.com/Ixecd/kubepivot/internal/rbac"
 	"github.com/Ixecd/kubepivot/internal/executor"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
@@ -129,6 +130,11 @@ func detectDrift(kubeconfig, namespace string, res Resource) ([]string, error) {
 
 // forceSync 触发 helm upgrade 强制对齐
 func (r *Reconciler) forceSync(namespace string, res Resource) error {
+	// v2.8 B.5 (D-Level1): RBAC + audit denied 接入
+	if !mustCheckController(context.Background(), namespace, rbac.PermDriftSync, "drift.force-sync") {
+		return nil // ENFORCE 模式拒绝, 跳过本次 force-sync
+	}
+
 	release := findReleaseForResource(namespace, res)
 	if release == "" {
 		return fmt.Errorf("找不到对应的 helm release")

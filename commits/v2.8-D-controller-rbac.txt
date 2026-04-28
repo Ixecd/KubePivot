@@ -1,0 +1,134 @@
+feat(controller-rbac): v2.8 B.5 (D-Level1) — controller reconcile 端 RBAC + audit denied
+
+ROADMAP §2.2 B 节最后一块: controller 端 RBAC 接入.
+按 D-Level1 最小可行交付, 不做 ConfigMap 同步 / live reload (留 v2.9).
+
+变更:
+  internal/controller/rbac_hook.go         新增 214 行   mustCheckController + lazy load
+  internal/controller/rbac_hook_test.go    新增 260 行   13 cases
+  internal/rbac/types.go                   1 处 patch    加 4 个 Permission 常量
+  internal/controller/drift_sync.go        2 处 patch    import + forceSync 入口
+  internal/controller/heal.go              2 处 patch    import + checkAndHeal 入口
+  internal/controller/sandbox_gc.go        2 处 patch    import + cleanExpiredSandbox 入口
+  internal/controller/sweeper.go           2 处 patch    import + cleanupOrphanShardLeases 入口
+
+合计: 474 行新代码 + 9 处 patch
+
+设计核心 (8 个 Q 全锁):
+
+  Q-D.1=D-Level1 最小可行 (~470 行):
+    - 不做 teams.yaml ConfigMap 同步 (留 v2.9)
+    - 不做 controller watch ConfigMap + live reload (留 v2.9)
+    - 不做 state.History Actor 字段 (留 v2.9)
+    - 当前: 启动时 lazy load /etc/kubepivot/teams.yaml, 全程 cache
+
+  Q-D.2=HIGH 4 处接入:
+    drift_sync.forceSync          PermDriftSync     namespace = res.Namespace
+    heal.checkAndHeal             PermHeal          namespace = res.Namespace
+    sandbox_gc.cleanExpiredSandbox PermSandboxGC    namespace = ns (resolve 后)
+    sweeper.cleanupOrphanShardLeases PermSweeperLease namespace = "kubepivot-system"
+
+  Q-D.3=source="rbac" + action 区分 (跟 cmd/kp 端一致):
+    audit.Record(source="rbac", action="rbac.denied", actor=ResolveControllerActor(),
+                  resource=Permission, namespace=ns, outcome=Denied,
+                  reason="controller <action> denied: <err>")
+
+  Q-D.4=etcd 直写 audit (跟 drift_sync 同模式):
+    audit.Record 内部默认行为 (etcd 失败降级 slog)
+
+  Q-D.5=A fake user 校验:
+    UserContext{Email: "kubepivot-controller@system"}
+    teams.yaml 配置 system-team 含此成员
+
+  Q-D.6=A 4 个新 Permission 加到 types.go:
+    PermDriftSync          = "drift-sync"
+    PermHeal               = "heal"
+    PermSandboxGC          = "sandbox-gc"
+    PermSweeperLease       = "sweeper-lease"
+    跟既有 PermDeploy/PermSandbox 同列表, 共享 IsValid() 校验
+
+  Q-D.7=C 写死路径 + fallback:
+    1. ENV KUBEPIVOT_TEAMS_FILE 显式覆盖
+    2. /etc/kubepivot/teams.yaml (K8s 标准 ConfigMap mount 路径)
+    3. 都不存在 → empty checker (Q-B5 全权限 fallback)
+
+  Q-D.8=A1 fake user "kubepivot-controller@system" + exact match:
+    跟 cmd/kp 端 file_based.go members map[string]bool 一致
+    teams.yaml 写法:
+      members: ["kubepivot-controller@system"]   ← exact match
+
+  fail-open 默认 + ENV 切 fail-close:
+    默认: mustCheckController 失败 → audit denied + slog.Warn + return true (继续)
+    ENFORCE: KUBEPIVOT_RBAC_ENFORCE=true 时校验失败 → return false (拒绝)
+    理由: 向后兼容 (v2.7 之前部署的项目无 teams.yaml 也能正常运行)
+
+关键设计差异 (vs cmd/kp 端 mustCheck):
+  - controller 端 mustCheckController 永不 os.Exit (会杀整个 pod)
+  - 返回 bool 让调用方决定 (cmd/kp 端用 P.Fail + Exit 直接退出)
+  - audit denied 走 audit.ResolveControllerActor (真实 pod 标识)
+  - 默认 fail-open, ENV 切 fail-close (cmd/kp 端总是 fail-close)
+
+测试矩阵 (13 cases):
+
+  resolveControllerTeamsPath 路径优先级 (3):
+    NeitherExists / EnvExists / EnvNotExistsFallsBackToDefault
+
+  getControllerChecker lazy load (3):
+    NoConfig_ReturnsEmptyChecker (Q-B5 fallback)
+    LazyOnce (sync.Once 验证)
+    LoadsValidConfig (system-team 完整加载)
+
+  isEnforceMode (3):
+    Default (空) / True (true/1/yes) / OtherValues (false/0/no/大写不匹配)
+
+  mustCheckController 集成 (4):
+    NoConfig_AllowsAll
+    FailOpen_DefaultMode (无权限也通过)
+    FailClose_EnforceMode (无权限拒绝)
+    AllowedWithSystemTeam (4 个 Permission 全测)
+    DeniedActionInEnforce (有 drift-sync 但缺 heal)
+
+测试结果:
+  ✓ 13 cases 全部 PASS
+  ✓ make dev 全绿 (cmd/kp + internal/controller + ...)
+  ✓ 既有 controller 测试 0 regression
+
+测试边界 (诚实标注):
+  ✗ 4 个 reconcile 操作的 e2e 不在测试矩阵 (单元测试只覆盖 mustCheckController 本身)
+  ✗ 没测真实 controller pod 内 /etc/kubepivot/teams.yaml mount 行为 (留 v2.9 e2e)
+
+工程纪律亮点:
+  - 0 client-go (mustCheckController 纯 Go stdlib + audit + rbac)
+  - 跟 cmd/kp 端 rbac_helper.go 模式 100% 一致 (sync.Once + atomic cache)
+  - fail-open 默认保证向后兼容 (v2.7 集群升级到 v2.8 后 controller 不会拒绝任何操作)
+  - 配套 ENV 提供"渐进启用"路径 (production 用户先观察 audit.denied → 再启用 ENFORCE)
+
+打脸盘点 (本次 commit 实施期):
+
+  第 16 次打脸 (写 Python 脚本时自己发现, 没流到用户):
+    sandbox_gc.go cleanExpiredSandbox 函数体已有 "ns := session.Namespace"
+    我 patch 想在函数体开头插入校验, 复制 ns 解析逻辑 → 重复声明编译错
+    修法: 改为在原 ns resolve 完成后插入校验, 不复制变量声明
+
+  第 17 次打脸 (fake 项目验证拦下):
+    fake heal.go 没含 internal/* import
+    patch_heal_go fallback 找 internal/* 锚点失败
+    真实 heal.go 含 executor + state import, 不会失败
+    修法: fake 加真实 import 后通过
+
+  第 18 次打脸 (实操使用揭示, 已修):
+    我假设 PermAll 行 16 空格对齐
+    真实代码 22 字符对齐 (PermControllerUninstall 22 字符是最长)
+    PermAll 行实际是 17 空格 (差 1 空格 → exact string match 失败)
+    修法: regex 模板容忍任意空格数:
+      re.compile(r'(\tPermAll\s+Permission\s*=\s*"\*")', re.MULTILINE)
+
+  累计 18 次打脸 (16 本地拦下 + 1 git hook + 1 实操发现立刻修)
+  Master fix commit 数: 0 (本次也没流入 Master, 因为 D-Level1 还没 push 时就拦下)
+
+后续 (v2.9+):
+  D-Level2 (state.History Actor 字段):
+    state 模块加 Actor 持久化, controller reconcile 拿真实操作发起人校验
+  D-Level3 (ConfigMap 同步 + live reload):
+    teams.yaml 自动同步到 controller pod (不需 mount + 重启)
+    controller watch ConfigMap → atomic.Pointer 切换 cache

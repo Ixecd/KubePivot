@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Ixecd/kubepivot/internal/executor"
+	"github.com/Ixecd/kubepivot/internal/rbac"
 	"github.com/Ixecd/kubepivot/internal/state"
 )
 
@@ -102,6 +103,11 @@ func (r *Reconciler) healCustom(res Resource) error {
 
 // checkAndHeal 检查资源是否存在，缺失时执行自愈
 func (r *Reconciler) checkAndHeal(res Resource) error {
+	// v2.8 B.5 (D-Level1): RBAC + audit denied 接入
+	if !mustCheckController(context.Background(), res.Namespace, rbac.PermHeal, "heal.check") {
+		return nil // ENFORCE 模式拒绝, 跳过本次 healing
+	}
+
 	exists, err := r.detector.ResourceExists(res.Kind, res.Name, res.Namespace)
 	if err != nil {
 		return fmt.Errorf("检查资源状态失败: %w", err)
