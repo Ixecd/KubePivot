@@ -136,6 +136,15 @@ func StartGlobal(ctx context.Context) {
 	informerPool.Start(ctx, "deployments", "apps/v1")
 	defer informerPool.StopAll()
 
+	// 8. v2.6.1: VerifiedTrafficWriter (每 pod 跑, shardSet 过滤)
+	// 周期扫描 RUNNING + 5min 稳态的项目, 把 K8s 实际 traffic 写入
+	// kubepivot-verified-traffic ConfigMap (多环境流量传播链生产者)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runVerifiedTrafficWriter(ctx, gs, shardMgr, totalShards, kubeconfig)
+	}()
+
 	// ── Leader 选举（仅为 sweeper）──────────────────────────────────────────────
 
 	wg.Add(1)

@@ -1,0 +1,117 @@
+feat(controller): v2.6.1 Step 2 — verifiedTrafficWriter (生产者)
+
+v2.6.1 多环境流量传播实施 Step 2。
+verifiedTrafficWriter 是传播链「生产者」端：周期扫描 RUNNING + 5min
+稳态的项目, 把 K8s 实际 traffic 状态写入 kubepivot-verified-traffic
+ConfigMap. 下游 env 通过 kp deploy --from-env (Step 3) 读取这个
+ConfigMap 完成"已验证 traffic 配置"的传播.
+
+变更:
+  internal/controller/verified_traffic_writer.go        新增 405 行
+  internal/controller/verified_traffic_writer_test.go   新增 463 行 (17 cases)
+  internal/controller/global.go                         +8 行 (Step 8 接入)
+
+设计核心:
+
+  跟 orphanSweeper 同模式 (而非 sweeper.go leader-only):
+    - 每 pod 跑 (不是 leader-only)
+    - shardSet 过滤本 pod 持有的 namespace
+    - warn-only 失败 (不阻断后续 ns 处理)
+  
+  gate 链 (任一不通过即跳过本 ns):
+    1. shardMgr.Owns(ns)              shard 过滤
+    2. record.State == RUNNING         state 过滤
+    3. RunningSinceFromHistory ≥ 5min  稳态过滤 (依赖 Step 1)
+    4. cfg.HasBlueGreen()              蓝绿启用过滤 (复用 v2.6.0 既有 gate)
+    5. !needsTrafficUpdate             重复写过滤 (Q2 校准点 B)
+  
+  函数变量注入式 mock (与 v2.7 readTokenFile / kubectl func 同模式):
+    - loadStateRecord
+    - readResourcesConfigMap
+    - readActualRoutes
+    - needsTrafficUpdate
+    - writeVerifiedTrafficCM
+  
+  ConfigMap schema (Q4 校准点 C 双文件设计):
+    data:
+      traffic.yaml:  跟 resources.yaml traffic block 同 schema (yaml.Marshal Traffic)
+      source.yaml:   出处溯源 (project/namespace/version/runningSince/verifiedAt)
+    annotations:
+      kubepivot.io/last-verified
+      kubepivot.io/source-state
+      kubepivot.io/running-since
+      kubepivot.io/source-version
+      kubepivot.io/traffic-sha256
+    labels:
+      kubepivot.io/verified-traffic: "true"
+      app.kubernetes.io/managed-by: kp
+      app.kubernetes.io/component: traffic-layer
+
+实施期校准 (基于看清现状再设计, 与 v2.7 R/S/M/B 多轮拍板模式一致):
+
+  V1: 接入位置校准
+    -impl-draft §5.3 写的是"orphanSweeper 之后", 但 sweeper.go 是 leader-only
+    实际正确模板是 orphanSweeper (每 pod 跑 + ShardSet 过滤)
+    校准: 接入位置 step 8, 跟 orphanSweeper 风格 1:1 对齐
+  
+  V2: traffic 字段来源选择 (B 路径)
+    GlobalState.projects[ns] 不持有 traffic 字段 (v2.6.0 当时没考虑 controller 端读)
+    选项 A: 扩展 GlobalState 加 Traffic 字段 (改 GetProject 签名 → 影响 enqueue 路径)
+    选项 B: verifiedTrafficWriter 自己 kubectl 读 ConfigMap + yaml.Unmarshal
+    校准: 选 B, 跟 v2.7 LabelGetter "不破坏既有接口"教训对齐
+          GlobalState.GetProject 签名不变, 既有 reconcile 路径不动
+  
+  V3: ConfigMap schema 补 Strategy 字段
+    -impl-draft §4.2 写的 traffic.yaml 漏了 Strategy 字段
+    校准: 直接 yaml.Marshal Traffic struct (含 Strategy/Kind/Refs/Routes/Validation 全字段)
+  
+  V4: indent / sha256Hex helper 跨包不能复用
+    cmd/kp/controller_enroll.go 的 indent / sha256Hex 是 main 包私有函数
+    internal/controller/ 不能引用 main 包
+    校准: 本地复制一份 (indentYAML / sha256HexBytes), 跟既有 KubePivot 风格对齐
+  
+  V5: provider 工厂函数选择
+    既有有 NewProvider(kind) 和 ProviderForKind(ctx, kind) 两个工厂
+    NewProvider 不调 Validate, ProviderForKind 含 Validate
+    校准: 用 ProviderForKind (一步到位 + traffic.Kind 为空时自动检测)
+
+测试覆盖 (17 cases / 5 sub-cases):
+
+  主流程 10 cases:
+    HappyPath / NotInRunning / LessThan5MinStable / StateLoadFailure
+    NoBlueGreen / StrategyNotBlueGreen / ResourcesCMReadFailure
+    ReadRoutesFailure / NoUpdateNeeded / WriteFailure
+  
+  边界 1 case (4 sub):
+    RunningSinceCalculation
+      刚进 RUNNING (1s)        → 跳过
+      接近 5min (4:59)          → 跳过
+      刚到 5min (5:00)          → 通过 (阈值精确)
+      远超 5min (1h)           → 通过
+  
+  集成 1 case:
+    ScanOnce_MultipleNamespaces_PartialSuccess
+      3 ns 不同状态, 只 1 个通过所有 gate → 写入 1 次
+  
+  辅助 5 cases:
+    BuildSourceMetadata_Fields
+    IndentYAML_BasicIndent / TrailingNewlineHandling / EmptyInput
+    Sha256HexBytes_Determinism / Different
+
+测试结果:
+  ✓ 17 cases 全 PASS
+  ✓ 既有 controller 测试 ~91 cases 不受影响 (含 v2.5 sharding / v2.7 informerPool / 75 个 reconciler)
+  ✓ test/integration 不受影响
+  ✓ make dev 全绿
+
+工程纪律亮点:
+  - 看清现状再设计 (5 个实施期校准全部本地修复, Master 历史 0 fix commit)
+  - 函数变量注入式 mock 跨包统一 (eventstream/auth / controller/informer_pool /
+                                  metrics/kubectl / 本 commit 第 4 处)
+  - "不破坏既有接口" 教训应用 (B 路径选择, 跟 v2.7 LabelGetter 同型)
+  - 接入位置严格区分每-pod 与 leader-only (orphanSweeper vs sweeper.go)
+
+下一步 Step 3: cmd/kp/deploy.go --from-env flag (读取侧 / "搬运工"角色)
+  ~120 行 + ~80 行测试
+  fail-fast Q7/Q8/Q11 + audit log
+  预计 ~半天
