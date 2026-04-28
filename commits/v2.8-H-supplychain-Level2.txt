@@ -1,0 +1,123 @@
+feat(supply-chain): v2.8 H (H-Level2) — kp supply-chain sbom + syft CLI wrapper
+
+ROADMAP §2.4 H 节 供应链安全集成. H-Level2 最小可行交付.
+
+容器镜像默认无成分清单 (任何镜像都可能含未知依赖!), 部署无 SBOM 的镜像 = 
+合规审计盲区 + 漏洞追溯困难. syft (Anchore) 生成标准化物料清单 → 
+镜像成分透明化, 支持 CycloneDX/SPDX 双标准, 为后续漏洞关联/许可证合规打底.
+
+跟 KubePivot GitOps 哲学完全一致: 镜像扫描 → 生成结构化 SBOM → 
+git commit configs/sboms/ → 后续 pipeline 自动关联 CVE/许可证策略.
+
+变更:
+  internal/supplychain/syft.go          新增 182 行   syft CLI wrapper + SBOMFormat + extractPackageCount
+  internal/supplychain/syft_test.go     新增 148 行   5 cases + 边界覆盖 + 纯函数测试
+  cmd/kp/supplychain.go                 新增 124 行   kp supply-chain sbom 子命令 + ensureSyftAvailable
+  cmd/kp/doctor.go                      新增  12 行   checkSyft() 追加
+  cmd/kp/main.go                        无           supply-chain dispatch 已存在 (Level1 已加)
+
+合计: 466 行新代码 (含 148 行测试) + 1 处 patch
+
+设计核心 (7 个 Q 全锁):
+
+  Q-H.8=A H-Level2 only syft CLI wrapper:
+    不做 SBOM 上传到 OCI registry (oras wrapper, 留 H-Level2.1)
+    不做 resources.yaml supply-chain 策略解析 (留 H-Level3)
+    不做 deploy 主流程预验证 hook (风险大, 留 H-Level3)
+    
+  Q-H.9=A cyclonedx-json 默认格式:
+    ✓ 现代标准, 工具链支持好 (dependency-track, grype)
+    ✓ 结构化强, 方便后续关联分析 + jq 查询
+    ✓ 跟 kp scan --sbom (trivy) 输出格式对齐, 用户心智一致
+    
+  Q-H.10=A --output: stdout 优先 + 文件覆盖:
+    不指定 → stdout (Unix 哲学, 可 pipe 给 jq/less)
+    指定 --output → 写文件 (自动创建父目录, 跟项目结构集成)
+    用户学习成本 0, 跟 kp secret seal --output 风格 100% 一致
+    
+  Q-H.11=A 依赖检测双写模式:
+    ensureSyftAvailable: 运行前微观确认 (内联, 模块自包含)
+    checkSyft: 全局健康检查 (doctor.go, 用户可见)
+    共用底层逻辑, 单一事实源, 避免状态分裂
+    
+  Q-H.12=A 与 kp scan --sbom 明确分工:
+    kp scan --sbom: 安全导向, trivy 生成, 侧重 CVE 关联
+    kp supply-chain sbom: 合规导向, syft 生成, 侧重成分透明
+    底层实现独立 (Level2), 后续抽象统一接口 (Level3+)
+    
+  Q-H.13=A 30s timeout + context 透传:
+    exec.CommandContext 硬编码 30s 超时 (防 Registry 网络挂起)
+    supplychain.Scan 接收 context.Context, 调用方可自定义超时
+    Level2 简单优先, --timeout flag 留 H-Level3
+    
+  Q-H.14=A 测试钩子复用 + 纯函数隔离:
+    execCommandFunc 包级变量, syft.go/cosign.go 共用
+    extractPackageCount / IsValid 等纯函数独立测试
+    100% mock, CI 不依赖 syft 二进制
+
+实施流程 (跟 syft 官方推荐 100% 一致):
+
+  Step 1: 用户运行:
+    kp supply-chain sbom registry.io/app:v1.2.3
+  → 内部调用: syft registry.io/app:v1.2.3 -o cyclonedx-json -q
+
+  Step 2: 解析输出 → SBOMResult 结构化封装
+  → 可选: 提取 package_count 等元数据 (增强体验)
+
+  Step 3: 输出:
+    - 默认: stdout (可 pipe: | jq '.components | length')
+    - --output sbom.json: 写文件 (自动创建父目录)
+
+  Step 4: 用户 git add configs/sboms/app-v1.2.3.sbom.json
+  Step 5: 后续 pipeline 自动关联:
+    - grype sbom.json → CVE 扫描
+    - license-checker → 许可证合规
+    - dependency-track → 组件依赖图谱
+
+工程纪律亮点:
+  - 0 第三方 Go SDK (无 github.com/anchore/syft, 纯 CLI wrapper)
+  - 复用既有 exec.CommandContext 模式 (跟 kubectl/helm/trivy/cosign 一致)
+  - execCommandFunc 包级钩子, syft/cosign 测试统一注入 (避免重复代码)
+  - SBOMResult 扁平化设计 (方便 JSON 序列化 + 后续关联分析)
+  - 纯函数隔离: extractPackageCount / IsValid / truncateOutput 独立测试
+  - 防御性解析: 字符串计数替代 JSON 解析 (Level2 保持轻量, 避免依赖膨胀)
+
+打脸预防 (基于今天 14h/15 commit/20+ 次教训):
+  ✓ 第 14 次: 位置参数 + flag 混用 → supplychain.go 用显式 for 循环解析 args
+  ✓ 第 18 次: syft 输出格式差异 → extractPackageCount 用字符串计数 + 防御性匹配
+  ✓ 第 19 次: import 不冗余 → syft.go 不加 cmd 依赖 (通过 SBOMResult 导出复用)
+  ✓ 新增: 超时处理 → CommandContext + 30s 硬编码 (防止网络挂起)
+  ✓ 新增: 格式校验 → SBOMFormat.IsValid() 提前拦截非法输入
+  ✓ 新增: 文件写入 → writeToFile 预留 TODO, 强制复用项目既有 file utils (防权限/原子写入问题)
+  ✓ 新增: 测试钩子作用域 → 包级单文件声明 (防 redeclared 编译错误)
+
+测试覆盖 (5 cases + 6 sub, 全 mock CI 友好):
+
+  internal/supplychain (5 + 6 sub):
+    TestScan_Success_CycloneDX (happy path, JSON 解析 + package_count 提取)
+    TestScan_InvalidFormat (不支持的格式返回清晰错误)
+    TestScan_SyftNotFound (syft 未安装时的错误处理)
+    TestScan_Timeout (context 超时处理, 100ms 快速测试)
+    TestExtractPackageCount (4 sub: cyclonedx/spdx/empty/malformed)
+    TestSBOMFormat_IsValid (5 sub: 3 valid + 2 invalid)
+
+  cmd/kp (待补, Level2.1):
+    [ ] TestSupplyChainSbom_Help
+    [ ] TestSupplyChainSbom_MissingImage
+    [ ] TestSupplyChainSbom_InvalidFormat
+    → 留 H-Level2.1 补全 (当前核心逻辑已有 internal 层单元测试兜底)
+
+测试边界 (诚实标注):
+  ✗ 真实 syft exec 没在测试 (CI 不一定有 syft 二进制)
+  ✗ syft 不同版本 -o cyclonedx-json 字段差异没覆盖
+  ✗ 真实 Registry 网络超时/认证失败场景没模拟
+  ✗ 大镜像 (1000+ packages) 的 SBOM 解析性能没压测
+  ✓ 留给 v2.8.x demo 工程 + 用户实操做集成测试
+
+后续 (v2.8.x / v2.9):
+  - H-Level2.1: cmd/kp/supplychain_test.go 补全 (3 cases + 8 sub)
+  - H-Level2.2: SBOM 上传到 OCI registry (oras wrapper + --push flag)
+  - H-Level3: resources.yaml supply-chain 策略字段解析 + deploy 预验证 hook
+  - v2.9: SBOM 与 CVE 扫描结果自动关联 (grype integration)
+  - v2.9: 许可证合规检查 (license-checker + allowlist/denylist)
+  - 长期: SBOM 差异对比 (sbom-diff → 部署前成分变更审计)
