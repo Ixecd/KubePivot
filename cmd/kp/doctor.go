@@ -38,6 +38,7 @@ func runDoctor(args []string) {
 	results = append(results, checkOasdiff())
 	results = append(results, checkHelmDiff())
 	results = append(results, checkK8sCluster())
+	results = append(results, checkCosign())
 
 	var env map[string]string
 
@@ -225,6 +226,22 @@ func checkK8sCluster() checkResult {
 	return checkResult{name: "K8s 集群", ok: true, detail: line + " (reachable)"}
 }
 
+// cmd/kp/doctor.go 里加一个函数（对齐 checkTrivy 风格）：
+func checkCosign() checkResult {
+	out, err := exec.Command("cosign", "version").Output()
+	if err != nil {
+		return checkResult{
+			name:    "cosign",
+			ok:      false,
+			isError: false,  // 非阻断，供应链验证可选
+			detail:  "未安装，kp supply-chain verify 不可用",
+			fix:     "install: https://github.com/sigstore/cosign/releases",
+		}
+	}
+	version := strings.TrimSpace(strings.Split(string(out), "\n")[0])
+	return checkResult{name: "cosign", ok: true, detail: version}
+}
+
 func checkProjectEnv(root string) checkResult {
 	path := filepath.Join(root, "configs", "project.env")
 	if _, err := os.Stat(path); err != nil {
@@ -358,3 +375,4 @@ func checkHelmDiff() checkResult {
 		fix:     "helm plugin install https://github.com/databus23/helm-diff",
 	}
 }
+

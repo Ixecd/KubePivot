@@ -95,6 +95,8 @@ func main() {
 		runPolicy(os.Args[2:])
 	case "audit":
 		runAudit(os.Args[2:])
+	case "supply-chain":
+		runSupplyChain(os.Args[2:])
 	case "chaos":
 		runChaos(os.Args[2:])
 	case "plugin":

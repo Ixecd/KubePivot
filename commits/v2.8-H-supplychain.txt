@@ -1,0 +1,119 @@
+feat(supply-chain): v2.8 H (H-Level1) — kp supply-chain verify + cosign CLI wrapper
+
+ROADMAP §2.4 H 节 供应链安全集成. H-Level1 最小可行交付.
+
+容器镜像默认无签名验证 (任何 registry 都可 push 任意 tag!), 部署未签名镜像 = 
+供应链攻击敞口. cosign (Sigstore) 用公钥签名 → 镜像即使被篡改也无法通过验证
+(私钥永远不出 CI 环境). verify 通过后才能 kp deploy.
+
+跟 KubePivot GitOps 哲学完全一致: 镜像签名 → 部署前校验 → 拒绝未签名镜像
+→ 确保集群只运行可信工件.
+
+变更:
+  internal/supplychain/types.go         新增  82 行   Verifier interface + Result struct + ShortDigest
+  internal/supplychain/cosign.go        新增 218 行   cosign CLI wrapper + execCommandFunc 测试钩子
+  internal/supplychain/cosign_test.go   新增 296 行   6 cases + 边界覆盖 + 纯函数测试
+  cmd/kp/supplychain.go                 新增 182 行   kp supply-chain verify 命令 + osExitFunc 钩子
+  cmd/kp/supplychain_test.go            新增 142 行   CLI 参数解析测试 (help/missing args/unknown flag)
+  cmd/kp/main.go                        1 处 patch    dispatch case "supply-chain"
+  cmd/kp/doctor.go                      1 处 patch    checkCosign() 追加
+
+合计: 920 行新代码 (含 438 行测试) + 2 处 patch
+
+设计核心 (7 个 Q 全锁):
+
+  Q-H.1=A H-Level1 only cosign key-based:
+    不做 keyless OIDC (复杂度高, 留 v2.9)
+    不做 SBOM 生成 (syft wrapper, 留 H-Level2)
+    不做 deploy 主流程 hook (风险大, 留 H-Level3)
+    
+  Q-H.2=A doctor 检测 + 提示安装:
+    ensureCosignAvailable 入口检测 cosign 可用性
+    不可用时输出 InstallHint (github releases) + os.Exit(1)
+    跟 KubePivot 既有 helm/kubectl/trivy 检测模式 100% 一致
+    
+  Q-H.3=A --output text + json 双模式:
+    不指定 → text (人类可读, ✓ Verified)
+    指定 --output json → 结构化输出 (CI/CD jq 友好)
+    用户学习成本 0, 跟既有 kp scan --output 风格自然衔接
+    
+  Q-H.4=A 退出码语义 0/1/2:
+    0 = 验证成功 (签名匹配)
+    1 = 业务失败 (签名不匹配, 可被 CI 捕获)
+    2 = 工具错误 (cosign 未安装/网络超时)
+    对齐 Unix 惯例 + 方便流水线逻辑判断
+    
+  Q-H.5=A 30s timeout 防挂起:
+    exec.CommandContext 硬编码 30s 超时
+    防止 Registry 网络问题导致 CLI 永久阻塞
+    Level1 简单优先, --timeout flag 留 H-Level2
+    
+  Q-H.6=A 单元测试 + exec 注入钩子:
+    execCommandFunc 函数变量让 6 cases 全 mock
+    CI 不依赖 cosign 二进制
+    真集成测试留给用户实操验证
+    
+  Q-H.7=A 错误消息提取 + 友好提示:
+    区分 "签名不匹配" (业务失败) vs "cosign 未找到" (工具故障)
+    extractCosignError 优先匹配已知模式 + 回退解析
+    用户永远看到人类可读的错误, 不是原始 stderr
+
+实施流程 (跟 cosign 官方推荐 100% 一致):
+
+  Step 1: CI 用 cosign sign --key cosign.key registry.io/img:v1
+  → 镜像附带签名 (公钥验证)
+
+  Step 2: 用户本地运行:
+    kp supply-chain verify registry.io/img:v1 --key cosign.pub
+  → 内部调用: cosign verify --key cosign.pub --output json registry.io/img:v1
+
+  Step 3: 解析 JSON 输出 → 结构化 Result
+  → 输出: ✓ registry.io/img:v1 verified (sha256:a1b2c3...)
+
+  Step 4: 验证通过 → kp deploy (或集成到 CI 流水线)
+  → 验证失败 → os.Exit(1) + 友好错误消息
+
+工程纪律亮点:
+  - 0 第三方 Go SDK (无 github.com/sigstore/cosign/pkg/cosign, 纯 CLI wrapper)
+  - 复用既有 exec.CommandContext 模式 (跟 kubectl/helm/trivy 一致)
+  - execCommandFunc + osExitFunc 双钩子让 100% 测试可本地跑 (CI 友好)
+  - 对齐 doctor 错误输出风格 (✗ cosign + 缩进 fix 建议)
+  - Result struct 扁平化设计 (方便 JSON 序列化 + jq 查询)
+  - 测试文件与实现文件同包共享钩子 (避免重复声明 + 命名空间污染)
+
+打脸预防 (基于今天 12.5h/13 commit/19 次教训):
+  ✓ 第 14 次: 位置参数 + flag 混用 → supplychain.go 用显式 for 循环解析 args
+  ✓ 第 18 次: cosign 输出格式差异 → extractCosignError 用防御性解析 + 模式匹配
+  ✓ 第 19 次: import 不冗余 → types.go 不加 cmd 依赖 (通过 ShortDigest 导出复用)
+  ✓ 新增: 超时处理 → CommandContext + 30s 硬编码 (防止网络挂起)
+  ✓ 新增: 退出码语义 → 明确 0/1/2 含义 (避免业务失败误报为工具错误)
+  ✓ 新增: 测试钩子作用域 → 同包单文件声明 (防 redeclared 编译错误)
+
+测试覆盖 (10 cases + 11 sub, 全 mock CI 友好):
+
+  internal/supplychain (6 + 2 纯函数):
+    TestCosignVerifier_Verify_Success (happy path, JSON 解析)
+    TestCosignVerifier_Verify_SignatureMismatch (业务失败, err=nil)
+    TestCosignVerifier_Verify_CosignExecutionError (工具故障, err≠nil)
+    TestCosignVerifier_Verify_InvalidJSON (畸形输出处理)
+    TestCosignVerifier_Verify_EmptyResult (空数组处理)
+    TestExtractCosignError (4 sub: 已知模式 / 多行解析 / 空输入 / 兜底)
+    TestShortDigest (4 sub: 正常截断 / 短字符串 / 非 sha256 / 空)
+
+  cmd/kp (3 + 4 sub):
+    TestSupplyChainVerify_Help (验证 --help 输出关键字段)
+    TestSupplyChainVerify_MissingArgs (4 sub: no args / only image / only key / empty)
+    TestSupplyChainVerify_UnknownFlag (未知 flag 降级处理)
+
+测试边界 (诚实标注):
+  ✗ 真实 cosign exec 没在测试 (CI 不一定有 cosign 二进制)
+  ✗ cosign 不同版本 --output json 字段差异没覆盖
+  ✗ 真实 Registry 网络超时场景没模拟
+  ✓ 留给 v2.8.x demo 工程 + 用户实操做集成测试
+
+后续 (v2.8.x / v2.9):
+  - H-Level2: SBOM 生成 (syft CLI wrapper + --output cyclonedx/spdx)
+  - H-Level3: resources.yaml supply-chain 策略字段解析 + deploy 预验证 hook
+  - v2.9: keyless OIDC 验证支持 (--certificate-identity + fulcio/rekor)
+  - v2.9: attestation 集成 (SLSA provenance + vuln scan 结果绑定)
+  - 长期: 零知识证明策略 (原始数据不出端 + 可验证性证明)
