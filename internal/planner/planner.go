@@ -3,7 +3,6 @@ package planner
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -298,16 +297,4 @@ func Downstream(layers []Layer, target string) []string {
 		result[i], result[j] = result[j], result[i]
 	}
 	return result
-}
-
-// 添加 parseKubeResource 解析 Plan.CPU/Memory string → int64
-func parseKubeResource(s string) (int64, error) {
-	// 简化: 处理 "500m" → 500, "1Gi" → 1073741824
-	// 实际: 复用 k8s.io/apimachinery/pkg/api/resource.Quantity
-	// Level1 先硬编码常见格式
-	if strings.HasSuffix(s, "m") {
-		return strconv.ParseInt(strings.TrimSuffix(s, "m"), 10, 64)
-	}
-	// ... 处理 Gi/Mi/Ki
-	return 0, fmt.Errorf("unsupported format: %s", s)
 }

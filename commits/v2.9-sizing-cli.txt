@@ -1,0 +1,124 @@
+feat(sizing): v2.9 B (B-Level1.1) — kp sizing recommend command integration
+
+ROADMAP §2.4 v2.9 节 资源优化引擎. B-Level1.1 命令集成最小可行交付.
+
+用户需要手动运行 `kp sizing recommend --pod=xxx` 获取资源建议 → 
+复制粘贴到 components.yaml → git commit → kp deploy.
+
+B-Level1.1 让 sizing 引擎可独立使用，为后续自动挂钩打底.
+
+变更:
+  cmd/kp/sizing.go                          新增 124 行   kp sizing recommend 命令实现 + 参数解析 + 采样封装
+  cmd/kp/main.go                            新增   2 行   case "sizing": runSizing 注册
+  internal/planner/planner.go               删除  12 行   移除未使用的 parseKubeResource 函数 (清理技术债务)
+
+合计: 114 行净增代码 (126 新增 - 12 删除)
+
+设计核心 (5 个对齐原则):
+
+  Q-B.8=A 命令注册模式: 对齐既有 switch-case 风格
+    cmd/kp/main.go: case "sizing": runSizing(os.Args[2:])
+    ✓ 与 deploy/scan/supply-chain 等命令风格 100% 一致
+    ✓ 用户心智统一: kp <command> <subcommand> --flag=value
+    
+  Q-B.9=A 参数解析: 复用 flag.NewFlagSet + ExitOnError
+    --pod (required), --namespace (default: default), --profile (web/batch/db/default)
+    --output (stdout/file), --samples (2-10), --interval (2s-10s)
+    ✓ 对齐 runDeploy/runScan 参数风格
+    ✓ 错误处理: fmt.Fprintf(os.Stderr) + osExitFunc(1)
+    
+  Q-B.10=A 输出风格: P.Start/Done/Fail + fmt.Fprintf(os.Stderr)
+    成功: P.Info("✓", "Sizing patch written to xxx") + 输出 patch YAML
+    失败: P.Fail("✗ ...") + fmt.Fprintf(os.Stderr, "  Details: %v\n", err)
+    ✓ 与既有命令终端体验一致
+    ✓ 避免再用不存在的 P.Warn/P.Error
+    
+  Q-B.11=A 资源解析: 新增 parseMemoryResource (不污染 planner.go)
+    支持: "512Mi" → 536870912, "1Gi" → 1073741824, "256Ki" → 262144
+    ✓ 复用 metrics.Quantity 解析逻辑，不复造轮子
+    ✓ 独立于 planner.go，避免交叉污染
+    
+  Q-B.12=A 采样封装: samplePodMetrics 内联 (Level1 最小化)
+    调用 metrics.MetricsClient.GetPodMetrics N 次，间隔可配
+    ✓ 避免跨包依赖复杂化，Level2 再提取到 internal/sizing/sample.go
+    ✓ 容忍单次采样失败，保证鲁棒性
+
+工程纪律亮点 (本次迭代的对齐实践):
+
+  ✊ Cross-check 先行，不凭记忆写代码:
+    - 写 sizing.go 前 grep 确认: 
+      • planner.Component 的 CPU/Memory 是 string 类型
+      • LoadComponents 解析 components.yaml 的 YAML tag
+      • cmd/kp/main.go 的命令注册模式是 switch-case
+      • metrics.MetricsClient.GetPodMetrics 的方法签名
+    - 多花 10 分钟 grep，省 30 分钟返工
+    
+  ✊ 无用代码立即删，不预置不囤积:
+    - parseKubeResource 未被调用 + 实现不完整 + 留 TODO 注释
+    - 确认无依赖后果断删除，保持代码库干净
+    - 未来 planner 需要时再加，或复用 k8s.io/apimachinery/pkg/api/resource
+    
+  ✊ 业务驱动测试，不为覆盖率写代码:
+    - sizing 核心算法已有 4 个最小必要测试 (dp_test.go)
+    - CLI 层集成测试可后续补，先让功能跑通
+    - 测试是保险丝 + 文档，不是数字游戏
+    
+  ✊ 最小必要原则，拒绝过度抽象:
+    - samplePodMetrics 先内联在 sizing.go，不提前拆包
+    - parseMemoryResource 独立函数，不复用不完整的老代码
+    - 输出 YAML 简化: limits=2x requests，不按 Profile 动态调整
+
+打脸预防 (基于本次迭代的教训):
+
+  ✓ 第 1 次: 假设 internal/controller/resource.go 存在 → 实际 Resource 在 planner.go
+    对策: grep 确认文件路径 + 结构定义，不凭目录结构猜测
+    
+  ✓ 第 2 次: 假设 parseKubeResource 已实现 Gi/Mi 解析 → 实际只有 "500m"
+    对策: sed 查看完整函数实现，不只看注释/签名
+    
+  ✓ 第 3 次: 假设 Progress 有 Warn/Error 方法 → 实际只有 Info/Fail/Done/Start
+    对策: grep "^func (.*\*Progress)" 确认可用方法列表
+
+测试覆盖 (集成验证，手动执行):
+
+  手动验证流程:
+    1. 编译: go build -o kp ./cmd/kp → 零警告
+    2. 帮助: kp sizing recommend --help → 参数说明完整
+    3. 采样: kp sizing recommend --pod=xxx --samples=3 --interval=1s → 收集指标
+    4. 计算: 输出 sizing-patch.yaml → 包含推荐值 + 置信度 + 节省率
+    5. 边界: --pod 为空 → 清晰错误提示 + 退出码 1
+    
+  自动化测试 (后续补):
+    [ ] cmd/kp/sizing_test.go: 参数解析 + 错误处理
+    [ ] mock MetricsClient: 验证采样逻辑
+    [ ] 端到端: 真实集群 + 测试 Pod 验证推荐值合理性
+
+测试边界 (诚实标注):
+
+  ✗ 真实集群的 metrics-server 连接没在 CI 测试
+  ✗ 大样本数 (--samples=10) 的采样耗时没压测
+  ✗ 网络超时/权限错误的错误处理没覆盖
+  ✗ 多 Pod 并发 sizing 的 CLI 性能没基准测试
+  ✓ 留给 B-Level1.2 集成测试 + 用户实操验证
+
+后续 (v2.9.x):
+
+  - B-Level1.2: deploy.go 集成 sizing 引擎 (sizing.mode=auto 部署前自动调用)
+  - B-Level1.2: components.yaml 加 sizing 字段解析 (profile/samples/interval)
+  - B-Level2: 集成 Prometheus 历史窗口查询 (替代瞬时采样)
+  - B-Level2: 支持 >8Gi / >4000m 的扩展离散化 (对数刻度)
+  - B-Level3: 全自动模式 (Confidence >0.9 + 自动 git commit + 灰度验证)
+
+🎯 本次迭代核心收获:
+
+  "越到后面设计对齐就越要 cross-check，
+   尽量获取全局信息之后再设计"
+   — qc 原话，刻进脑子
+
+  ✊ grep 确认真实结构 > 凭记忆假设
+  ✊ 无用代码立即删 > 预置囤积
+  ✊ 业务驱动测试 > 覆盖率数字
+  ✊ 最小必要抽象 > 过度设计
+
+B-Level1.1 命令集成闭环. sizing 引擎可独立使用.
+下一步: B-Level1.2 部署挂钩 (kp deploy 自动调用 sizing).
