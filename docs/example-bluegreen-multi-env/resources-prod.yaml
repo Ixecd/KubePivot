@@ -1,0 +1,51 @@
+# KubePivot v2.6.1 多环境 demo - prod 配置
+#
+# !! 关键: prod 自身也必须声明 traffic 字段 (Q12 fail-fast)
+#    kp sandbox start --from-env staging 不会"自动启用蓝绿",
+#    prod 必须明确支持蓝绿, 然后 staging 的 traffic 配置才能注入覆盖.
+#
+# 跟 staging 的 traffic 字段几乎一样, 关键差别:
+#   - namespace 不同 (kp-demo-bluegreen-prod)
+#   - routes 是占位值 (会被 --from-env 覆盖成 staging 实际状态)
+
+resources:
+  - kind: Deployment
+    name: whoami-blue
+    on-missing: auto-heal
+    max-retry: 3
+
+  - kind: Deployment
+    name: whoami-green
+    on-missing: auto-heal
+    max-retry: 3
+
+  - kind: Service
+    name: whoami-blue
+    on-missing: alert
+
+  - kind: Service
+    name: whoami-green
+    on-missing: alert
+
+  - kind: Ingress
+    name: whoami-ingress
+    on-missing: auto-heal
+
+# v2.6.0 流量层配置 (Q12 要求 prod 也要声明)
+traffic:
+  kind: Ingress
+  strategy: blue-green
+
+  refs:
+    name: whoami-ingress
+
+  # routes 是占位 - 实际值会被 --from-env 注入覆盖
+  # 占位值反映 "首次部署默认 blue=100" 的语义
+  routes:
+    - service: whoami-blue
+      weight: 100
+    - service: whoami-green
+      weight: 0
+
+  validation:
+    podReadyTimeoutSec: 60

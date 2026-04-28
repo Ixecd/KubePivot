@@ -1,0 +1,47 @@
+# KubePivot v2.6.1 多环境 demo - staging 配置
+#
+# staging env 部署的 resources.yaml. 跟 example-bluegreen/resources.yaml 一致,
+# 唯一区别是 namespace 是 kp-demo-bluegreen-staging.
+
+resources:
+  - kind: Deployment
+    name: whoami-blue
+    on-missing: auto-heal
+    max-retry: 3
+
+  - kind: Deployment
+    name: whoami-green
+    on-missing: auto-heal
+    max-retry: 3
+
+  - kind: Service
+    name: whoami-blue
+    on-missing: alert
+
+  - kind: Service
+    name: whoami-green
+    on-missing: alert
+
+  - kind: Ingress
+    name: whoami-ingress
+    on-missing: auto-heal
+
+# v2.6.0 流量层配置
+traffic:
+  kind: Ingress
+  strategy: blue-green
+
+  refs:
+    name: whoami-ingress
+
+  # 初始: 流量全到 blue
+  # kp sandbox start 时把 100/0 互换 → green
+  # 5min 稳态后, controller verifiedTrafficWriter 写出 ConfigMap
+  routes:
+    - service: whoami-blue
+      weight: 100
+    - service: whoami-green
+      weight: 0
+
+  validation:
+    podReadyTimeoutSec: 60

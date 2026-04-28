@@ -1,0 +1,23 @@
+# KubePivot v2.6 蓝绿示例 Helm values
+
+namespace: kp-demo-bluegreen
+
+# Whoami 镜像（带颜色标识，便于视觉验证蓝绿差异）
+image:
+  repository: traefik/whoami
+  tag: v1.10.1
+  pullPolicy: IfNotPresent
+
+# Ingress 配置
+ingress:
+  host: whoami.local
+  className: ""  # 留空使用集群默认
+
+# 资源限制
+resources:
+  requests:
+    cpu: 10m
+    memory: 16Mi
+  limits:
+    cpu: 100m
+    memory: 64Mi

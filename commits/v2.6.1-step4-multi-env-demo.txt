@@ -1,0 +1,65 @@
+docs(example): v2.6.1 Step 4 — multi-env 蓝绿传播 demo 工程
+
+v2.6.1 多环境流量传播实施 Step 4 (-impl-draft §8 验收用例).
+
+新建 docs/example-bluegreen-multi-env/, 在既有 docs/example-bluegreen/
+单 env 蓝绿基础上演示 v2.6.1 多环境传播链:
+
+  Staging Controller (生产者) → ConfigMap → kp 进程 (搬运工) → Prod Controller (消费者)
+
+变更:
+  docs/example-bluegreen-multi-env/  新建目录 (8 个文件)
+    README.md                  355 行  教程 (含 ASCII 三方协作链图)
+    Makefile                    75 行  双 env 命令封装
+    resources-staging.yaml      47 行  staging 蓝绿配置
+    resources-prod.yaml         51 行  prod 也声明 traffic (Q12 要求)
+    scripts/setup-staging.sh    71 行  staging 起步脚本
+    scripts/propagate-to-prod.sh 89 行  核心: kp sandbox start --from-env
+    scripts/verify-both.sh      65 行  对比两 env 验证传播链
+    scripts/cleanup.sh          43 行  清理两 env
+
+设计核心 (与 -impl-draft §8 一致):
+
+  双 namespace 演示传播链 (Q4=C 单集群多 ns 已验证 + 多集群路径预留):
+    staging: kp-demo-bluegreen-staging
+    prod:    kp-demo-bluegreen-prod
+  
+  完整时序 (~7min 含 5min 稳态等待):
+    T+0    setup-staging.sh  helm+enroll+sandbox start
+    T+5min Controller verifiedTrafficWriter 写出 ConfigMap (5 个 gate 全过)
+    T+5min propagate-to-prod.sh  prod 用 staging 配置部署
+    T+10min prod 也成为新传播源 (级联可任意延伸)
+  
+  失败场景演示 (3 个):
+    场景 1: prod 没声明 traffic + 用 --from-env → Q12 fail-fast
+    场景 2: staging 没稳定 5min → Q7 fail-fast (含排查命令)
+    场景 3: KPEnv staging 不存在 → Q3 fail-fast (复用 loadEnv hint)
+
+Chart 共享策略 (qc 拍板"复制一份"):
+  chart/ 目录不在 commit 范围, README 说明用户手动 cp:
+    cp -r docs/example-bluegreen/example-bluegreen/chart docs/example-bluegreen-multi-env/
+  避免 git 仓库内 chart 重复 (50+ 行 yaml × 2)
+  保持 demo 工程独立性 (用户 fork 改动不影响既有 demo)
+
+测试边界 (诚实标注):
+  ✓ Makefile help 输出正确
+  ✓ 4 个 bash 脚本 syntax check (bash -n) 全过
+  ✓ chmod +x 脚本可执行
+  ✗ e2e 真集群验证: 暂搁 (qc 拍板, 跟 Step 2/Step 3 一致)
+    脚本写真实命令但没有 CI 验证
+    完整 e2e 在 v2.6.1 release 阶段补 (commit ~444+)
+    本 commit 作为"能跑通的脚本骨架"先入库
+
+工程纪律亮点:
+  - 文档 + 代码 + 验证脚本一致 (3 个失败场景对应 -impl-draft 3 个 Q)
+  - chart 复制 vs 软链选择 (复制保独立性, qc 拍板)
+  - "scripts 真实命令 + 文档诚实标注前置条件" 取代"占位 demo"
+  - example-bluegreen / example-bluegreen-multi-env 关系表 (README 末尾)
+    清晰说明何时用哪个 demo
+
+下一步 Step 5: 文档收尾
+  - traffic-multi-env-impl-draft.md → 实施记录 (Step 0-4 完成 + 实施期校准 V6-V10)
+  - 新建 traffic-multi-env-impl-notes.md (impl-notes)
+  - HANDOFF.md / TODO.md / SNAPSHOT.md 更新到 v2.6.1
+  - CHANGELOG.md 加 v2.6.1 入口
+  ~半天
