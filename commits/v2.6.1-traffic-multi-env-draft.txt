@@ -1,0 +1,69 @@
+docs(design): v2.6.1 多环境流量传播实施草案
+
+新建 docs/design/traffic-multi-env-impl-draft.md (~1228 行)。
+
+v2.6.0 traffic-layer 的延续工作。把"已验证的流量配置"纳入
+K8s 原生的状态广播机制——不引入新基础设施，复用 ConfigMap +
+label 约定。
+
+核心论断：
+  "verified-traffic ConfigMap 是 K8s 原生的状态广播"
+  
+  kp deploy --env prod --from-env staging
+  不是简单的"配置拷贝"，是三方协作的事件传播链：
+    Staging Controller (生产者) - watch state → RUNNING + 5min
+                                 → write ConfigMap
+    kp 进程 (搬运工)             - 用户意图驱动的"主动拷贝"
+    Prod Controller (消费者)     - 接收 sandbox commit + 走完整状态机
+
+级联语义：
+  传播链可任意级联 (staging → prod → DR-cluster → ...)
+  任何 RUNNING + 5min 稳态的 env 都能作为传播源
+  这是单一职责解耦的直接推论：三方都不知道彼此
+
+16 个设计 Q 拍板：
+
+  原始 8 个 (qc 独立拍板):
+    Q1=ConfigMap+label    Q2=B 5min稳态     Q3=A 直连+KPEnv复用
+    Q4=C 单集群+预留      Q5=C 直接覆盖     Q6=A 走蓝绿切换
+    Q7=A fail-fast        Q8=A fail-fast
+  
+  cross-check 校准 3 项:
+    Q1.1=A 一ns一cm       Q2.1=B 不改schema    Q6.1=C 不动git
+  
+  实施期补 3 项:
+    Q9=A 进LOCKED之前读   Q10=A controller周期扫描   Q11=C 错误hint
+  
+  最后一档校准 4 项:
+    1. RunningSince 不排除回滚后 RUNNING (writer 写实际状态)
+    2. 是否更新判定: 对比 K8s 实际 vs ConfigMap data
+    3. 测试矩阵: 单集群多 ns 已验证 + 多集群"未验证"诚实标注
+    4. ConfigMap schema: traffic.yaml + source.yaml 双文件
+
+设计原则 (沿 v2.6.0 哲学):
+  - 不引入新基础设施 (复用 ConfigMap + label)
+  - 复用 KPEnv 机制 (不发明新 kubeconfig 加载层)
+  - 三方协作 / 单一职责
+  - fail-fast 默认 (Q7/Q8/Q11 联合)
+  - 不动 git (传播 ≠ GitOps 同步)
+
+工作量预估: ~3 天 (Step 1-5)
+  Step 1: state.RunningSince helper      ~半天
+  Step 2: verifiedTrafficWriter           ~1.5 天
+  Step 3: cmd/kp/deploy.go --from-env    ~半天
+  Step 4: example-blue-green-multi-env   ~半天
+  Step 5: 文档收尾                        ~半天
+
+工程教训应用 (v2.7 沉淀):
+  - 看清现状再设计: TODO.md 描述被打脸 3 次后才校准到正确路径
+    1. "codegen 多 const block" 不是 bug
+    2. "kp release 自动 push" 已实现
+    3. "traffic-layer.md §7 已写" → 实际在 -draft.md
+  - cross-check 与最后一档校准: 4 个潜在的实施级问题在写文档前
+    被先一档拦下, 避免章节级返工
+  - 函数变量注入 mock: verifiedTrafficWriter readActualTraffic
+    与 v2.7 readTokenFile / newInformerFunc / kubectl func 同模式
+
+下一步: Step 1 实施
+  internal/state/state.go: +RunningSinceFromHistory 函数
+  internal/state/state_test.go: 7 cases 覆盖 5 个语义场景
