@@ -28,7 +28,12 @@ func TestSupplyChainConfig_IsValid(t *testing.T) {
 				Signing: struct {
 					Enforce   bool   `yaml:"enforce" json:"enforce"`
 					CosignKey string `yaml:"cosign-key" json:"cosign_key"`
-				}{Enforce: true},
+					Keyless   *struct {
+						Identity string `yaml:"identity" json:"identity"`
+						Issuer   string `yaml:"issuer" json:"issuer"`
+						RegExp   bool   `yaml:"regexp,omitempty" json:"regexp"`
+					} `yaml:"keyless,omitempty" json:"keyless,omitempty"`
+				}{Enforce: true, Keyless: nil}, // ← 显式设置 Keyless: nil
 			},
 			wantErr: true,
 		},
@@ -58,6 +63,11 @@ func TestSupplyChainConfig_IsValid(t *testing.T) {
 				Signing: struct {
 					Enforce   bool   `yaml:"enforce" json:"enforce"`
 					CosignKey string `yaml:"cosign-key" json:"cosign_key"`
+					Keyless   *struct {
+						Identity string `yaml:"identity" json:"identity"`
+						Issuer   string `yaml:"issuer" json:"issuer"`
+						RegExp   bool   `yaml:"regexp,omitempty" json:"regexp"`
+					} `yaml:"keyless,omitempty" json:"keyless,omitempty"`
 				}{Enforce: true, CosignKey: "/path/to/key.pub"},
 				SBOM: struct {
 					Require bool   `yaml:"require" json:"require"`
@@ -92,7 +102,12 @@ func TestSupplyChainConfig_Merge(t *testing.T) {
 		Signing: struct {
 			Enforce   bool   `yaml:"enforce" json:"enforce"`
 			CosignKey string `yaml:"cosign-key" json:"cosign_key"`
-		}{CosignKey: "/base/key.pub"},
+			Keyless   *struct {
+				Identity string `yaml:"identity" json:"identity"`
+				Issuer   string `yaml:"issuer" json:"issuer"`
+				RegExp   bool   `yaml:"regexp,omitempty" json:"regexp"`
+			} `yaml:"keyless,omitempty" json:"keyless,omitempty"`
+		}{Enforce: true, CosignKey: "/base/key.pub"},
 	}
 
 	override := &SupplyChainConfig{
@@ -100,9 +115,15 @@ func TestSupplyChainConfig_Merge(t *testing.T) {
 			Allow []string `yaml:"allow" json:"allow"`
 			Deny  []string `yaml:"deny" json:"deny"`
 		}{Deny: []string{"docker.io"}},
+		
 		Signing: struct {
 			Enforce   bool   `yaml:"enforce" json:"enforce"`
 			CosignKey string `yaml:"cosign-key" json:"cosign_key"`
+			Keyless   *struct {
+				Identity string `yaml:"identity" json:"identity"`
+				Issuer   string `yaml:"issuer" json:"issuer"`
+				RegExp   bool `yaml:"regexp,omitempty" json:"regexp"`
+			} `yaml:"keyless,omitempty" json:"keyless,omitempty"`
 		}{Enforce: true, CosignKey: "/override/key.pub"},
 	}
 

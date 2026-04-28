@@ -172,6 +172,9 @@ func runSupplyChainSbom(args []string) {
 	var image, formatStr, outputPath string
 	formatStr = string(supplychain.CycloneDXJSON) // 默认
 
+	var pushSBOM, pushRequired bool
+	var uploadTarget, uploadAuth string
+
 	// 位置参数 <IMAGE>
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		image = args[0]
@@ -189,6 +192,21 @@ func runSupplyChainSbom(args []string) {
 		case "--output", "-o":
 			if i+1 < len(args) {
 				outputPath = args[i+1]
+				i++
+			}
+		case "--push":
+			pushSBOM = true
+		case "--push-required":
+			pushSBOM = true
+			pushRequired = true
+		case "--push-target":
+			if i+1 < len(args) {
+				uploadTarget = args[i+1]
+				i++
+			}
+		case "--push-auth":
+			if i+1 < len(args) {
+				uploadAuth = args[i+1]
 				i++
 			}
 		case "--help", "-h":
@@ -254,6 +272,42 @@ func runSupplyChainSbom(args []string) {
 		// stdout
 		fmt.Print(output)
 	}
+	// 6. 可选: 上传 SBOM 到 OCI registry
+if pushSBOM {
+	// 🔧 用匿名函数包裹上传逻辑，用 return 替代 goto
+	func() {
+		P.Start("📤", fmt.Sprintf("Uploading SBOM to %s", uploadTarget))
+
+		// 依赖检测
+		_, err := ensureOrasAvailable()
+		if err != nil {
+			msg := fmt.Sprintf("oras not found: %v", err)
+			if pushRequired {
+				P.Fail("✗ SBOM upload failed")
+				fmt.Fprintf(os.Stderr, "  Details: %v\n", msg)
+				fmt.Fprintf(os.Stderr, "  %sinstall: https://github.com/oras-project/oras/releases\n", strings.Repeat(" ", 18))
+				osExitFunc(2)
+			} else {
+				P.Info("⚠", msg+" (skipping upload)")
+				return // ✅ 用 return 替代 goto，在匿名函数内安全退出
+			}
+		}
+
+		// 执行上传
+		ctx := context.Background()
+		if err := supplychain.PushSBOM(ctx, image, result.Content, result.Format, uploadTarget, uploadAuth); err != nil {
+			if pushRequired {
+				P.Fail("✗ SBOM upload failed")
+				fmt.Fprintf(os.Stderr, "  Details: %v\n", err)
+				osExitFunc(2)
+			} else {
+				P.Info("⚠", fmt.Sprintf("SBOM upload failed: %v (continuing)", err))
+			}
+		} else {
+			P.Done(fmt.Sprintf("SBOM uploaded to %s", uploadTarget))
+		}
+	}() // ← 立即执行匿名函数
+}
 }
 
 // ensureSyftAvailable 检查 syft 是否可用 (对齐 ensureCosignAvailable)
@@ -319,4 +373,17 @@ Exit codes:
   0  SBOM generated successfully
   1  Invalid arguments or unsupported format
   2  Tool error (syft not found, network timeout, etc.)`)
+}
+
+// ensureOrasAvailable 检查 oras 是否可用 (对齐 ensureCosignAvailable)
+func ensureOrasAvailable() (string, error) {
+	path, err := exec.LookPath("oras")
+	if err != nil {
+		return "", fmt.Errorf("oras not found in PATH")
+	}
+	// 冒烟测试
+	if _, err := exec.Command(path, "version").Output(); err != nil {
+		return "", fmt.Errorf("oras found but not executable")
+	}
+	return path, nil
 }

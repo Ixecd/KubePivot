@@ -24,6 +24,11 @@ type SupplyChainConfig struct {
 	Signing struct {
 		Enforce   bool   `yaml:"enforce" json:"enforce"`       // 是否强制验证签名
 		CosignKey string `yaml:"cosign-key" json:"cosign_key"` // 公钥路径 (相对项目根目录)
+		Keyless *struct {
+			Identity string `yaml:"identity" json:"identity"`           // OIDC subject (如 ci@org.com)
+			Issuer   string `yaml:"issuer" json:"issuer"`               // OIDC issuer URL
+			RegExp   bool   `yaml:"regexp,omitempty" json:"regexp"`     // identity 是否为正则
+		} `yaml:"keyless,omitempty" json:"keyless,omitempty"`
 	} `yaml:"signing" json:"signing"`
 
 	// SBOM 物料清单策略

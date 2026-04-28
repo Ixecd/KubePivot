@@ -39,6 +39,7 @@ func runDoctor(args []string) {
 	results = append(results, checkHelmDiff())
 	results = append(results, checkK8sCluster())
 	results = append(results, checkCosign())
+	results = append(results, checkOras())
 
 	var env map[string]string
 
@@ -376,3 +377,17 @@ func checkHelmDiff() checkResult {
 	}
 }
 
+func checkOras() checkResult {
+	out, err := exec.Command("oras", "version").Output()
+	if err != nil {
+		return checkResult{
+			name:    "oras",
+			ok:      false,
+			isError: false, // 非阻断, SBOM 上传可选
+			detail:  "未安装，kp supply-chain sbom --push 不可用",
+			fix:     "install: https://github.com/oras-project/oras/releases",
+		}
+	}
+	version := strings.TrimSpace(strings.Split(string(out), "\n")[0])
+	return checkResult{name: "oras", ok: true, detail: version}
+}
