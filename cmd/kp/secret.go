@@ -32,6 +32,8 @@ func runSecret(args []string) {
 		runSecretSync(args[1:])
 	case "audit":
 		runSecretAudit(args[1:])
+	case "seal":
+		runSecretSeal(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "未知子命令: %s\n", args[0])
 		printSecretUsage()
@@ -44,6 +46,7 @@ func printSecretUsage() {
 	fmt.Println("  kp secret rotate  --secret <name> [--strategy graceful|immediate] [--namespace <ns>]")
 	fmt.Println("  kp secret cleanup --secret <name> [--namespace <ns>]")
 	fmt.Println("  kp secret audit   [--namespace <ns>]")
+	fmt.Println("  kp secret seal   <name> --from-literal=K=V [--from-file=K=PATH] [--namespace <ns>] [--scope <s>] [--cert <path>] [--output <path>]")
 }
 
 // ── secretKeyRef 引用记录 ─────────────────────────────────────────────────────
