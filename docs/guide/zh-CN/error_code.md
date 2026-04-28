@@ -28,4 +28,9 @@
 | ErrNotFound | 100004 | 404 | Not found |
 | ErrInternal | 100005 | 500 | Internal server error |
 | ErrDeadlineExceeded | 100006 | 408 | Deadline exceeded |
+| ErrRouteProviderNotAvailable | 110000 | 503 | Route provider is not available in current cluster |
+| ErrRouteResourceNotFound | 110001 | 404 | Traffic resource (Ingress or HTTPRoute) not found |
+| ErrRouteInvalid | 110002 | 400 | Route rule is invalid |
+| ErrRouteApplyFailed | 110003 | 500 | Apply route rules failed |
+| ErrRouteAutoDetectFailed | 110004 | 500 | Auto detect route provider failed |
 

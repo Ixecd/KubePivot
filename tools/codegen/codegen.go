@@ -150,12 +150,17 @@ func main() {
 	// Write to file.
 	outputName := *output
 	if outputName == "" {
+		ext := "_generated.go"
+		if *doc {
+			ext = "_generated.md"
+		}
 		absDir, _ := filepath.Abs(dir)
-		baseName := fmt.Sprintf("%s_generated.go", strings.ReplaceAll(filepath.Base(absDir), "-", "_"))
-		if len(flag.Args()) == 1 {
+		baseName := fmt.Sprintf("%s%s", strings.ReplaceAll(filepath.Base(absDir), "-", "_"), ext)
+		if len(flag.Args()) == 1 && !isDirectory(flag.Args()[0]) {
 			baseName = fmt.Sprintf(
-				"%s_generated.go",
+				"%s%s",
 				strings.ReplaceAll(filepath.Base(strings.TrimSuffix(flag.Args()[0], ".go")), "-", "_"),
+				ext,
 			)
 		}
 
