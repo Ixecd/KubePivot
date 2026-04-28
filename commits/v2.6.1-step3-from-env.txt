@@ -1,0 +1,127 @@
+feat(sandbox): v2.6.1 Step 3 — kp sandbox start --from-env (搬运工)
+
+v2.6.1 多环境流量传播实施 Step 3.
+--from-env flag 让 kp sandbox start 从指定 env (跨集群) 读取
+verified-traffic ConfigMap, 注入到 runBlueGreenSwitch 流程,
+完成"用 staging 已验证的 traffic 配置部署 prod"的传播闭环.
+
+变更:
+  cmd/kp/sandbox_from_env.go         新增 151 行
+  cmd/kp/sandbox_from_env_test.go    新增 324 行 (12 cases)
+  cmd/kp/sandbox.go                  +60 行 / 5 处 patch + context shadowing 清理
+
+设计核心:
+
+  三方协作链 (传播闭环):
+    Staging Controller (生产者)   verifiedTrafficWriter 周期写 ConfigMap
+                                   (Step 2 已实施)
+    kp 进程 (搬运工)               --from-env 主动读 + 注入 (本 commit)
+    Prod Controller (消费者)       sandbox commit 走完整状态机 + 蓝绿切换
+
+  -impl-draft §1.1 命令名校准 (V6 实施期校准):
+    旧: kp deploy --env prod --from-env staging
+    新: kp sandbox start --from-env staging
+    
+    理由:
+      1. v2.6.0 现实: kp deploy 不切流量, 切流量在 sandbox start 内 runBlueGreenSwitch
+      2. Q9=A "进 LOCKED 之前读" 直接落地 (在 LOCKED 之前加载, 失败立即 os.Exit)
+      3. 跟 runBlueGreenSwitch 注入点最近 (同文件)
+      4. 避免 kp deploy 命令语义膨胀
+
+  Q12 拍板 (本次新增, -impl-draft 16 个 Q 之外的第 17 个):
+    prod 自身没声明蓝绿但用户用了 --from-env → fail-fast
+    跟 Q7/Q8/Q11 fail-fast 系列对齐
+    用户写 --from-env 是明确意图, 配置不一致不该静默跳过
+
+  Fail-fast 链 (Q3/Q7/Q8/Q11/Q12 联合):
+    Q3=A: env 不存在 → loadEnv 既有错误 ("kp context add" hint)
+    Q8=A: cluster 不可达 → kubectl 失败 fail-fast
+    Q7=A: ConfigMap 不存在 → 显式说明前提条件 + 排查命令
+    Q11=C: 错误 hint 不探测 image tag, 只给排查命令
+    Q12: prod 自身没声明蓝绿 + 用了 --from-env → fail-fast
+
+  函数变量注入式 mock (与 v2.6.1 Step 2 / v2.7 readTokenFile 同模式):
+    - loadKPEnv         KPEnv 加载 (~/.kp/envs/)
+    - kubectlGetCM      kubectl get configmap
+  
+  Source 元数据降级:
+    source.yaml 解析失败不阻断 traffic 加载 (audit metadata 是 nice-to-have)
+    返回零值 source struct 而非 nil
+
+实施期校准 (5 处):
+
+  V6: 命令名调整 (kp deploy → kp sandbox start, 见上)
+  
+  V7: deployConfig 不动, runBlueGreenSwitch 加 override 参数
+    选项 A: 扩展 deployConfig 加 Traffic 字段
+    选项 B: runBlueGreenSwitch 加 override *controller.Traffic 参数
+    校准: 走 B (改动最小, 函数签名内置 override)
+  
+  V8: prod 没启用蓝绿时 --from-env 处理 (新拍 Q12, 见上)
+  
+  V9: source 元数据降级
+    -impl-draft §6 写"读 source.yaml 失败时 fail-fast"
+    校准: source 是 audit metadata, 缺失不应阻断主流程
+    实施改成"解析失败保留零值, 不阻断 traffic 加载"
+  
+  V10: context 包 shadowing (今天第 7 次打脸):
+    cmd/kp/sandbox.go runSandboxStart 函数有:
+      context := flags.String("context", "", "kubernetes context")
+    这遮蔽了 import 的 context 包. 
+    既有代码里所有 context.X 调用都在独立函数 (runBlueGreenSwitch /
+    waitDeploymentReady) 里, 没暴露问题. 但本 commit 的 patch 2 在
+    runSandboxStart 内部调 context.WithTimeout 触发编译错误.
+    校准: 重命名 context := → contextFlag :=, 顺手清掉 v2.6.0 潜在 shadowing
+    (这是工程纪律: 标准库包名不应做局部变量名)
+
+测试覆盖 (12 cases):
+
+  Happy path (1):
+    HappyPath  完整 traffic + source 解析
+
+  Fail-fast: KPEnv (2):
+    EnvNotFound          loadEnv 错误透传 (含 hint)
+    EmptyNamespace       KPEnv 没声明 namespace
+
+  Fail-fast: kubectl (3):
+    ClusterUnreachable   kubectl 失败保留底层错误
+    ConfigMapNotFound    --ignore-not-found 返回空 + 错误 hint 完整
+    TrafficYamlCorrupted yaml.Unmarshal 失败 + 修复 hint
+
+  Source 降级 (2):
+    SourceMissing_StillReturnsTraffic     source.yaml 缺失不阻断
+    SourceCorrupted_StillReturnsTraffic   source.yaml 损坏不阻断
+
+  辅助函数 (3):
+    ExtractServiceNames_BlueGreen / Canary / EmptyRoutes
+
+  JSON path 转义 (1):
+    DefaultKubectlGetCM_JSONPathEscaping  data.traffic.yaml → data.traffic\.yaml
+
+测试结果:
+  ✓ 12 cases 全 PASS
+  ✓ cmd/kp 既有测试不受影响
+  ✓ make dev 全绿
+  ✓ context shadowing 清理后既有代码行为不变
+
+测试边界 (诚实标注, qc 拍板):
+  ✓ 单元测试: 12 cases 覆盖所有 fail-fast 路径 + happy path + 降级
+  ✗ e2e 真集群验证: 暂搁
+    跨集群 KPEnv → kubectl get configmap → runBlueGreenSwitch override
+    需要双集群 + verifiedTrafficWriter 真跑通 (controller 部署到 staging)
+    本 commit 不做, 后续 release 补
+
+工程纪律亮点:
+  - 看清现状再设计 (V6 命令名校准: 跟 v2.6.0 现实对齐)
+  - 函数变量注入式 mock 跨包统一 (本 commit 第 5 处此模式)
+  - "改动最小"原则 (V7: 选 override 参数而非扩展 deployConfig)
+  - 标准库 shadowing 清理 (V10: 工程纪律, 不是 bug 修复)
+
+下一步 Step 4: example-blue-green-multi-env demo
+  双 ns 演示 staging → prod 传播链
+  ~半天
+
+下一步 Step 5: 文档收尾
+  -impl-draft → 实施记录 + impl-notes
+  HANDOFF / TODO / SNAPSHOT 更新
+  ~半天

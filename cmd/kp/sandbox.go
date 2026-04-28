@@ -51,9 +51,10 @@ func runSandbox(args []string) {
 func runSandboxStart(args []string) {
 	flags := flag.NewFlagSet("sandbox start", flag.ExitOnError)
 	namespace := flags.String("namespace", "", "kubernetes namespace")
-	context := flags.String("context", "", "kubernetes context")
+	contextFlag := flags.String("context", "", "kubernetes context")
 	kubeconfig := flags.String("kubeconfig", "", "kubeconfig 路径")
 	dryRun := flags.Bool("dry-run", false, "只打印执行计划，不实际执行")
+	fromEnv := flags.String("from-env", "", "从指定 env 读取已验证 traffic 配置 (v2.6.1)")
 	flags.Parse(args)
 
 	root, err := projectRoot()
@@ -65,7 +66,7 @@ func runSandboxStart(args []string) {
 	env, _ := readEnvFile(filepath.Join(root, "configs", "project.env"))
 	cfg := &deployConfig{
 		namespace:  *namespace,
-		context:    *context,
+		context:    *contextFlag,
 		kubeconfig: *kubeconfig,
 	}
 	resolveDeployConfig(cfg, env, root)
@@ -95,6 +96,25 @@ func runSandboxStart(args []string) {
 		Phase:     "LOCKED",
 		StartedAt: time.Now(),
 		TTL:       3600,
+	}
+
+	// v2.6.1 Step 3: --from-env 加载 (Q9=A 进 LOCKED 之前读)
+	var fromEnvTraffic *controller.Traffic
+	if *fromEnv != "" {
+		if *dryRun {
+			P.Info("📥", fmt.Sprintf("[dry-run] 将从 env %q 读取 verified-traffic", *fromEnv))
+		} else {
+			loadCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			traffic, source, err := loadVerifiedTrafficFromEnv(loadCtx, *fromEnv)
+			cancel()
+			if err != nil {
+				P.Fail(fmt.Sprintf("--from-env %s 加载失败: %v", *fromEnv, err))
+				os.Exit(1)
+			}
+			fromEnvTraffic = traffic
+			P.Info("📥", fmt.Sprintf("已从 env %q 加载 verified-traffic (running_since=%s, version=%s, services=%s)",
+				*fromEnv, source.RunningSince, source.Version, extractServiceNames(traffic.Routes)))
+		}
 	}
 
 	if *dryRun {
@@ -165,8 +185,8 @@ func runSandboxStart(args []string) {
 	}
 
 	// Step 4.5: 蓝绿流量切换 (v2.6.0 漏接, v2.6.1 Step 0 补)
-	// 没启用蓝绿 (resources.yaml 无 traffic 字段) 时 runBlueGreenSwitch 安静返回 nil
-	if err := runBlueGreenSwitch(cfg, root); err != nil {
+	// v2.6.1 Step 3: fromEnvTraffic != nil 时 (用户传了 --from-env) 覆盖本地 traffic
+	if err := runBlueGreenSwitch(cfg, root, fromEnvTraffic); err != nil {
 		P.Fail(fmt.Sprintf("流量切换失败，触发 RESTORING: %v", err))
 		sm.Transition(state.StateRestoring, "sandbox: 蓝绿切换失败")
 		runSandboxRestore(cfg, root, env, sandboxID)
@@ -528,9 +548,13 @@ func cleanSandboxSession(sandboxID, root string) {
 // 任何步骤失败都返回 error，由调用方触发 RESTORING。
 //
 // 不打印 "跳过" 日志——蓝绿不是必选项，不配置就静默放过。
-func runBlueGreenSwitch(cfg *deployConfig, root string) error {
+func runBlueGreenSwitch(cfg *deployConfig, root string, override *controller.Traffic) error {
 	resourcesPath := filepath.Join(root, "configs", "resources.yaml")
 	if _, err := os.Stat(resourcesPath); errors.Is(err, fs.ErrNotExist) {
+		// v2.6.1 Q12: --from-env 但项目无 resources.yaml → fail-fast
+		if override != nil {
+			return fmt.Errorf("项目无 resources.yaml, 不能用 --from-env (hint: kp init 或确认 configs/resources.yaml 存在)")
+		}
 		return nil // 没有 resources.yaml = 老项目，跳过
 	}
 	rc, err := controller.LoadResources(resourcesPath)
@@ -539,7 +563,18 @@ func runBlueGreenSwitch(cfg *deployConfig, root string) error {
 	}
 
 	if !rc.HasBlueGreen() {
+		// v2.6.1 Q12: --from-env 但项目自身没声明蓝绿 → fail-fast
+		if override != nil {
+			return fmt.Errorf("项目自身 resources.yaml 没声明蓝绿 traffic, 不能用 --from-env (hint: 先在 resources.yaml 声明 traffic 字段, 详见 docs/design/traffic-layer.md)")
+		}
 		return nil // 未启用，安静跳过
+	}
+
+	// v2.6.1 Step 3: --from-env 注入覆盖 (在 HasBlueGreen gate 之后, 保证 prod 自身也声明了 traffic)
+	if override != nil {
+		rc.Traffic = override
+		P.Info("📥", fmt.Sprintf("使用 --from-env 注入的 traffic (services: %s)",
+			extractServiceNames(override.Routes)))
 	}
 
 	ctx := context.Background()
