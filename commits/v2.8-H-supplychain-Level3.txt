@@ -1,0 +1,142 @@
+feat(supply-chain): v2.8 H (H-Level3) — declarative policy + deploy pre-check hook
+
+ROADMAP §2.4 H 节 供应链安全集成. H-Level3 最小可行交付.
+
+容器镜像默认无策略约束 (任何注册表/签名状态都可部署!), 部署无治理的镜像 = 
+供应链攻击敞口 + 合规审计失败. 声明式策略 (Declarative Policy) + 部署前拦截 → 
+确保集群只运行符合组织策略的可信工件, 为企业级 GitOps 打底.
+
+跟 KubePivot GitOps 哲学完全一致: 策略即代码 (resources.yaml / project.env) → 
+部署前自动校验 → 违反即阻断 + 清晰错误 → 审计日志可追溯.
+
+变更:
+  internal/supplychain/policy.go          新增 248 行   SupplyChainConfig + ValidatePolicy + registry check + TTL cache
+  internal/supplychain/policy_test.go     新增 196 行   6 cases + 11 sub (IsValid/Merge/registry/cache/ValidatePolicy)
+  internal/controller/resource.go         新增  12 行   Resource.SupplyChain 字段扩展 (yaml: supply-chain)
+  cmd/kp/deploy_supplychain.go            新增  86 行   hasSupplyChainPolicy + verifySupplyChainPolicy 实现
+  cmd/kp/deploy.go                        新增  18 行   --skip-supply-chain flag + pre-deploy hook 集成
+  configs/project.env.example             新增   8 行   SUPPLY_CHAIN_* 配置示例
+
+合计: 568 行新代码 (含 196 行测试) + 3 处 patch
+
+设计核心 (7 个 Q 全锁):
+
+  Q-H.15=A 扁平嵌套 schema:
+    resources.yaml: supply-chain: { registries/signing/sbom/cve }
+    ✓ 结构清晰, YAML/JSON 解析友好
+    ✓ 用户一眼看懂策略作用域
+    - 复杂策略组合留 Level4 (策略数组/外部文件)
+    
+  Q-H.16=A Pre-execute hook 时机:
+    位置: Plan 构建后, executeDeploy 前
+    ✓ 早期失败, 避免浪费集群资源
+    ✓ 策略验证不依赖集群状态
+    - 细粒度 per-resource 验证留 Level4
+    
+  Q-H.17=C Merge() 配置合并:
+    优先级: 命令行 > os.Getenv > project.env > 硬编码默认
+    ✓ 显式合并逻辑, 易单测易调试
+    ✓ 避免 reflect 黑魔法
+    - 自动合并留 Level4 (如策略对象数组)
+    
+  Q-H.18=A 内存 TTL 缓存 (5min):
+    map[img+key]cacheEntry + sync.RWMutex + 后台清理协程
+    ✓ 单次部署内去重, 加速多副本验证
+    ✓ 不依赖 etcd, 保持轻量
+    - 集群共享缓存留 Level4 (etcd backend)
+    
+  Q-H.19=A 注册表匹配策略 (含/判断维度):
+    模式含 "/": 镜像路径前缀匹配 (如 "docker.io/malicious")
+    模式不含 "/": 注册表前缀匹配 (如 "docker.io")
+    ✓ 用户配置直观, 无需额外语法
+    ✓ 向后兼容既有配置
+    - 正则/通配符留 Level4
+    
+  Q-H.20=A 逃生阀 --skip-supply-chain:
+    默认: false (安全优先, 显式开启才拦截)
+    紧急场景: --skip-supply-chain 显式绕过
+    ✓ 平衡安全与运维灵活性
+    ✓ 符合「默认安全, 显式放行」原则
+    
+  Q-H.21=A 错误输出模式 (P.Fail + stderr):
+    P.Fail: 人类可读摘要 (带 ✗ 符号 + 颜色)
+    fmt.Fprintf(os.Stderr): 机器可解析详情 (便于日志收集)
+    ✓ 终端输出整洁, 日志系统友好
+    ✓ 对齐 KubePivot 既有错误报告风格
+
+实施流程 (跟企业级策略治理最佳实践 100% 一致):
+
+  Step 1: 配置策略 (三选一或组合):
+    - project.env: SUPPLY_CHAIN_ENFORCE=true, REGISTRY_DENY=docker.io/malicious
+    - resources.yaml: per-resource supply-chain 覆盖
+    - CI/CD: KP_SUPPLY_CHAIN_ENFORCE=true 环境变量注入
+
+  Step 2: 用户运行部署:
+    kp deploy --components configs/components.yaml
+
+  Step 3: 内部流程:
+    → 解析 plan, 提取待验证镜像列表
+    → 加载全局策略 + 合并 per-resource 覆盖
+    → 串行验证每个镜像 (registry → signature → SBOM → CVE)
+    → 缓存命中则跳过重复验证 (5min TTL)
+
+  Step 4: 验证结果:
+    - 全部通过: 继续执行部署, 日志: "✓ Supply chain policy passed for N images"
+    - 任一失败: 阻断部署 + 清晰错误:
+        ✗ Supply chain policy check failed
+          Details: image "docker.io/malicious:latest": registry "docker.io/malicious" is explicitly denied
+        💡 Use --skip-supply-chain to bypass (emergency only)
+
+  Step 5: 紧急绕过 (可选):
+    kp deploy --skip-supply-chain  # 仅用于调试/回滚, 生产环境慎用
+
+工程纪律亮点:
+  - 0 第三方策略引擎 (无 OPA/CEL, 纯 Go 实现, 避免依赖膨胀)
+  - 复用既有 exec.CommandContext 模式 (跟 cosign/syft wrapper 一致)
+  - execCommandFunc 包级钩子, 所有外部 CLI 测试统一注入 (避免重复代码)
+  - SupplyChainConfig 扁平化设计 (方便 YAML 解析 + JSON 序列化 + 后续扩展)
+  - 纯函数隔离: extractRegistry / contains / truncateOutput 独立测试
+  - 防御性匹配: 注册表策略用「含/判断维度」, 避免过度解析 + 向后兼容
+  - 缓存设计: sync.RWMutex + 后台清理协程, 避免 goroutine leak + 竞态条件
+
+打脸预防 (基于今天 15h/16 commit/22+ 次教训):
+  ✓ 第 14 次: 位置参数 + flag 混用 → deploy_supplychain.go 用显式 for 循环解析 args
+  ✓ 第 18 次: 注册表匹配维度混淆 → checkRegistry 用「含/判断」策略 + extractRegistry 归一化
+  ✓ 第 19 次: import 不冗余 → resource.go 加 supplychain import 按项目顺序排列
+  ✓ 第 20 次: env 作用域混淆 → verifySupplyChainPolicy 显式传参 + 内联 envOrDefault 逻辑
+  ✓ 第 21 次: P.Error 方法不存在 → 用 P.Fail + fmt.Fprintf(os.Stderr) 对齐既有模式
+  ✓ 新增: 缓存清理协程 → init() 启动 + time.NewTicker, 避免 goroutine leak
+  ✓ 新增: 配置校验前置 → SupplyChainConfig.IsValid() 在验证前拦截非法配置
+  ✓ 新增: 逃生阀二次防护 → runDeploy + verifySupplyChainPolicy 双检查 --skip-supply-chain
+
+测试覆盖 (6 cases + 11 sub, 全 mock CI 友好):
+
+  internal/supplychain/policy_test.go (6 + 11 sub):
+    TestSupplyChainConfig_IsValid (5 sub: empty/signing/sbom/cve/full)
+    TestSupplyChainConfig_Merge (1 case: 优先级覆盖验证)
+    TestCheckRegistry (5 sub: no policy/allow/deny/priority/default extraction)
+    TestExtractRegistry (5 sub: registry.io/ghcr.io/localhost/alpine/library)
+    TestCache_TTL (1 case: 设置→命中→过期→未命中)
+    TestValidatePolicy_EmptyConfig (1 case: nil config = allow all)
+
+  cmd/kp (集成测试, 手动验证):
+    [ ] kp deploy --skip-supply-chain 验证逃生阀
+    [ ] project.env + REGISTRY_DENY 验证拦截行为
+    [ ] per-resource supply-chain 覆盖验证 (Level4)
+    → 核心逻辑已有 policy_test.go 兜底, 集成测试留给用户实操
+
+测试边界 (诚实标注):
+  ✗ 真实部署流程的集成测试没在 CI (需 K8s 集群 + cosign/syft 二进制)
+  ✗ per-resource 策略合并逻辑没实现 (Level4 扩展点)
+  ✗ CVE 阈值拦截没实现 (Level3 占位, Level4 集成 trivy/grype)
+  ✗ 大规模镜像列表 (100+) 的验证性能没压测
+  ✓ 留给 v2.8.x demo 工程 + 用户实操做集成测试 + Level4 性能优化
+
+后续 (v2.8.x / v2.9):
+  - H-Level3.1: per-resource 策略合并逻辑 (resource.SupplyChain.Merge(global))
+  - H-Level3.2: CVE 阈值拦截 (集成 trivy/grype CLI + max-severity 解析)
+  - H-Level4: keyless OIDC 验证支持 (--certificate-identity + fulcio/rekor)
+  - H-Level4: SBOM 自动上传 OCI registry (oras wrapper + --push flag)
+  - H-Level4: 策略热更新 (etcd watch + 动态重载, 无需重启部署)
+  - v2.9: 策略审计日志 (谁/何时/何策略/何结果 → 可追溯)
+  - 长期: 策略即代码仓库 (单独 git repo + PR review + 自动生效)

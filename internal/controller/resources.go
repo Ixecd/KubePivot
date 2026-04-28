@@ -10,6 +10,7 @@ import (
 
 	"github.com/Ixecd/kubepivot/internal/executor"
 	"github.com/Ixecd/kubepivot/internal/state"
+	"github.com/Ixecd/kubepivot/internal/supplychain"
 	"gopkg.in/yaml.v3"
 )
 
@@ -27,6 +28,10 @@ type Resource struct {
 	ForceSync    bool     `yaml:"force-sync"`
 	NoSyncFields []string `yaml:"no-sync-fields"`
 
+	// yaml tag 用 supply-chain 保持用户配置文件可读性
+	// json tag 用 supply_chain 保持 API 一致性
+	// 指针类型：nil = 不覆盖，使用全局默认策略
+	SupplyChain *supplychain.SupplyChainConfig `yaml:"supply-chain,omitempty" json:"supply_chain,omitempty"`
 	// 👇 豆包小姐专为 KubePivot 增加的运行时标签字段
 	Labels map[string]string `yaml:"-"`
 }

@@ -12,25 +12,26 @@ import (
 	"time"
 
 	"github.com/Ixecd/kubepivot/internal/audit"
-	"github.com/Ixecd/kubepivot/internal/rbac"
 	"github.com/Ixecd/kubepivot/internal/controller"
 	"github.com/Ixecd/kubepivot/internal/executor"
 	"github.com/Ixecd/kubepivot/internal/planner"
+	"github.com/Ixecd/kubepivot/internal/rbac"
 	"github.com/Ixecd/kubepivot/internal/state"
 )
 
 // deployConfig 部署参数
 type deployConfig struct {
-	components   string
-	namespace    string
-	context      string
-	kubeconfig   string
-	dryRun       bool
-	sign         bool
-	forceMigrate bool
-	parallelism  int  // 同层最大并发数，0 表示不限制
-	changedOnly  bool // 只部署有 git 变更的服务
-	preview      bool // 部署后生成 Header-based Preview 路由模板
+	components      string
+	namespace       string
+	context         string
+	kubeconfig      string
+	dryRun          bool
+	sign            bool
+	forceMigrate    bool
+	parallelism     int  // 同层最大并发数，0 表示不限制
+	changedOnly     bool // 只部署有 git 变更的服务
+	preview         bool // 部署后生成 Header-based Preview 路由模板
+	skipSupplyChain bool // 跳过供应链策略验证 (--skip-supply-chain)
 }
 
 func runDeploy(args []string) {
@@ -51,6 +52,8 @@ func runDeploy(args []string) {
 	flags.BoolVar(&cfg.preview, "preview", false, "部署后生成 Header-based Preview 路由模板（Istio/Nginx）")
 	flags.BoolVar(&cfg.changedOnly, "changed-only", false, "只部署有 git 变更的服务（基于 git diff HEAD~1 HEAD）")
 	flags.IntVar(&cfg.parallelism, "parallelism", 0, "同层最大并发部署数（0=不限制，建议大规模集群设为 4-8）")
+	flags.BoolVar(&cfg.skipSupplyChain, "skip-supply-chain", false, "跳过供应链策略验证（紧急回滚/调试）")
+
 	envName := flags.String("env", "", "指定部署环境（kp context add 配置）")
 
 	if err := flags.Parse(args); err != nil {
@@ -354,6 +357,29 @@ func executeDeploy(sm *state.Machine, cfg *deployConfig, env map[string]string, 
 	version := envOrDefault(env, "VERSION", "v0.1.0")
 	projectName := envOrDefault(env, "PROJECT_NAME", filepath.Base(root))
 
+	// 👇 H-Level3: 供应链策略预验证（部署前拦截）
+	// 位置: Plan 已构建，但尚未执行任何 kubectl/helm 操作
+	// 目的: 早期失败，避免浪费集群资源
+	// 逃生: --skip-supply-chain 显式绕过
+	// -----------------------------------------------------------------
+	// 1. 收集待验证镜像 + 策略 (简化: 先用全局配置，Level4 支持 per-resource)
+	//    实际项目: 遍历 plan 提取 image + 合并 resource.SupplyChain 配置
+	// -----------------------------------------------------------------
+	if !cfg.skipSupplyChain && hasSupplyChainPolicy(cfg, env) {
+		if err := verifySupplyChainPolicy(cfg, plan, root, env); err != nil {
+			P.Fail("✗ Supply chain policy check failed")
+			fmt.Fprintf(os.Stderr, "  Details: %v\n", err)
+			P.Info("💡", "Use --skip-supply-chain to bypass (emergency only)")
+			return fmt.Errorf("supply chain policy violated: %w", err)
+		}
+	}
+	// -----------------------------------------------------------------
+
+	// IDLE/RUNNING → INITIALIZING
+	if err := sm.Transition(state.StateInitializing, "开始部署 "+version); err != nil {
+		return err
+	}
+
 	// IDLE/RUNNING → INITIALIZING
 	if err := sm.Transition(state.StateInitializing, "开始部署 "+version); err != nil {
 		return err
@@ -494,7 +520,7 @@ validating:
 	}
 
 	P.Info("✅", fmt.Sprintf("部署完成，状态: RUNNING (version=%s)", version))
-	
+
 	// Phase 2.6: 如果项目已 enroll 到 global controller，顺带同步 resources.yaml
 	// 降级不阻断：失败只 warn，不影响部署结果
 	if err := autoSyncResourcesIfEnrolled(cfg); err != nil {
@@ -779,4 +805,3 @@ func autoSyncResourcesIfEnrolled(cfg *deployConfig) error {
 	P.Info("🔄", fmt.Sprintf("resources.yaml 已同步到 controller（sha256=%s...）", hash[:8]))
 	return nil
 }
-
