@@ -1,0 +1,122 @@
+feat(auth): v2.8 A — SSO 一锅端 (Dex + Google + GitHub)
+
+v2.8 企业治理实施 A 模块. 完整 OAuth/OIDC 客户端身份认证.
+为后续 B (RBAC) / G (加密) / H (供应链) 提供 UserInfo 数据源.
+
+变更:
+  internal/auth/sso.go            新增  91 行  AuthProvider 接口 + Token + UserInfo
+  internal/auth/oauth.go          新增 378 行  OAuth2 + PKCE + callback server + 浏览器
+  internal/auth/dex.go            新增 147 行  Dex / OIDC discovery
+  internal/auth/google.go         新增  83 行  Google (endpoints 写死)
+  internal/auth/github.go         新增 191 行  GitHub (非 OIDC + /user/emails)
+  internal/auth/credentials.go    新增 203 行  ~/.kp/credentials/ 文件管理
+  internal/auth/auth_test.go      新增 576 行  37 cases
+  cmd/kp/login.go                 新增 133 行  kp login 命令
+  cmd/kp/whoami.go                新增 138 行  kp whoami 命令
+  cmd/kp/main.go                  +4 行 (case "login" / case "whoami")
+
+合计: 1944 行 (代码 1368 + 测试 576)
+
+设计核心:
+
+  AuthProvider 接口 (与 KubePivot route.Provider / state.Store 同模式):
+    Name() / Login() / VerifyToken()
+    实现: DexProvider / GoogleProvider / GitHubProvider
+  
+  0 第三方依赖 (KubePivot 哲学一致):
+    - 不引入 golang.org/x/oauth2
+    - 标准库 net/http + crypto/sha256 + encoding/base64 自己实现 PKCE
+    - 跟 0 client-go 一脉相承
+
+  4 个 Q 拍板:
+    Q-A1=B  固定端口 18888 (kp 谐音, 不撞常用端口)
+    Q-A2=B  token 过期不自动 refresh, 直接 fail-fast 重 login
+    Q-A3=C  default.yaml 指向当前 provider, 支持多 provider 共存
+    Q-A4=A  whoami 不联网 (本地读 token + claims, 快速)
+  
+  V11 实施期校准 (今天第 11 个):
+    ROADMAP §2.1 写 ~/.kube/kubepivot/credentials.yaml
+    实际校准: ~/.kp/credentials/ (与既有 ~/.kp/envs/ 同模式)
+    理由: ~/.kube/ 是 kubectl 领地, KubePivot 不该污染
+  
+  Dex / Google / GitHub 三 provider 设计权衡:
+    Dex:    OIDC discovery 自动获取 endpoints (企业 OIDC 兜底)
+    Google: 标准 OIDC 但 endpoints 写死 (避免每次 discovery, 极稳定)
+    GitHub: 非 OIDC + /user 端点 + /user/emails fallback + 不支持 PKCE
+  
+  Credentials 持久化:
+    ~/.kp/credentials/
+    ├── default.yaml         指针文件, 指向当前 provider
+    ├── dex.yaml             Dex token + userinfo
+    ├── google.yaml          Google token + userinfo
+    └── github.yaml          GitHub token + userinfo
+    
+    文件权限 0600 (含敏感 token, 测试覆盖)
+
+OAuth2 流程实现细节:
+
+  PKCE (RFC 7636):
+    code_verifier  = base64url(32 random bytes)  → 43 字符
+    code_challenge = base64url(SHA256(verifier))
+  
+  Callback server:
+    起本地 HTTP server 监听 localhost:18888/callback
+    state 校验 (CSRF 防护)
+    成功返回友好 HTML 页 ("✅ 关闭此页回终端")
+    server 通过 ctx Shutdown 干净退出
+  
+  跨平台浏览器打开:
+    macOS:   open <url>
+    Linux:   xdg-open <url>
+    Windows: rundll32 url.dll,FileProtocolHandler
+
+测试覆盖 (37 cases):
+
+  Token (4):    Future / Past / NearExpiry / NilSafe
+  PKCE (3):     Format / Randomness / SHA256Mapping
+  state (2):    Format / Randomness
+  buildAuthURL (2): AllParams / NoPKCE
+  fetchUserInfo (2): StandardOIDC / HTTPError
+  OIDC Discovery (3): Standard / MissingFields / NotFound
+  Provider 构造 (5): Dex 2 + Google 2 + GitHub 2
+  Credentials (8): RoundTrip / NotFound / SetGet / NotSet / List Empty/Multi / Delete / Path
+  文件权限 (1): 0600 验证
+  Callback server (3): StateMismatch / Success / OAuthError
+  E2E (2): SaveLoadDefault / LoginErrorDoesNotPersist
+  路径 (1): CredentialsDir
+
+测试结果:
+  ✓ 37 cases 全 PASS
+  ✓ cmd/kp 既有测试不受影响
+  ✓ make dev 全绿
+  ✓ test/integration 不受影响
+
+测试边界 (诚实标注):
+  ✓ 单元测试: 37 cases 覆盖 PKCE/state/credentials/callback/E2E
+  ✓ httptest server mock OIDC userinfo + discovery 端点
+  ✗ 真 OAuth provider 集成: 暂搁
+    需要真实 Google / GitHub / Dex client_id 配置
+    本地浏览器流程跑通需要手动验证
+    后续 release 阶段补 (跟 v2.6.1 e2e 暂搁原则一致)
+  ✗ controller 端 token 验证: 留给 B RBAC
+    Q-A4=A 拍板下本模块只做客户端流程
+
+工程纪律亮点:
+  - 0 第三方依赖 (PKCE 自己实现, 复用标准库)
+  - ~/.kp/ 路径校准 (V11, 跟既有 envs/ 同模式)
+  - Q-A1 ~ Q-A4 四个拍板诚实记录
+  - 标准库 httptest server 做 mock (跟 v2.7 同模式)
+  - 文件权限 0600 (敏感数据保护, 测试覆盖)
+
+下一步:
+  v2.8 B (RBAC):
+    复用 UserInfo.Groups 字段
+    teams.yaml + Permission 接入 controller reconcile
+    工作量预估: ~半天
+  v2.8 G/H 独立模块, 与 A/B 无强依赖
+
+Note: 一处实施期 bug:
+  embed 脚本时换行符在 default case 错误处理被处理成真实换行
+  (Python triple-quoted 在某些处理流程中 escape 了 \\n)
+  → 修复为 \\n 字符
+  → 编译通过, 不影响功能
