@@ -1,0 +1,60 @@
+fix(sandbox): 补 v2.6.0 漏接的 runBlueGreenSwitch 调用
+
+v2.6.1 Step 0 - v2.6.0 工程债清理.
+
+v2.6.0 commit 401 message 描述 "runSandbox 主流程在 commitOK 后插入
+流量切换调用（9 行）", 但实际代码 runSandboxCommit 之后直接进 Step 5
+RUNNING, 跳过了流量切换. runBlueGreenSwitch 函数定义但从未被调用.
+
+工程债性质:
+  - v2.6.0 commit 401 设计正确, 实施时漏写
+  - 测试只验证函数本身 (HasBlueGreen 5 cases / route 27 cases) 全 PASS
+  - 但端到端流程没有任何测试覆盖
+  - example-blue-green demo (commit 402) 用 kubectl patch 模拟切换
+    没有真跑 kp sandbox start, 所以这个工程债没在 demo 验证里暴露
+  - HANDOFF 3.6 节 "真实集群验证不可跳" 原则在 v2.6.0 蓝绿这一项实际上跳过了
+
+变更:
+  cmd/kp/sandbox.go    +10 行 (9 行接入 + 1 行注释)
+
+修复内容:
+  在 Step 4 COMMITTING (runSandboxCommit) 之后, Step 5 RUNNING 之前
+  插入 runBlueGreenSwitch 调用. 失败处理跟 commitOK 失败一样, 走 RESTORING
+  恢复链 (RESTORING → runSandboxRestore → IDLE → cleanSandboxSession).
+
+修复后流程:
+  LOCKED → SNAPSHOTTING → SIMULATING → COMMITTING:
+    Step 4.0: runSandboxCommit  (helm + migrate)
+    Step 4.5: runBlueGreenSwitch ← 本次接入
+  → RUNNING / 任一失败 → RESTORING → IDLE
+
+设计原则核对 (跟 v2.6.0 commit 401 一致):
+  ✓ 不动状态机
+  ✓ 失败统一 RESTORING (复用 runSandboxRestore)
+  ✓ 默认沉默 (没启用蓝绿安静跳过, runBlueGreenSwitch 内部 HasBlueGreen gate)
+
+测试边界 (诚实标注):
+  ✓ 单元测试: route 包 27 cases / controller HasBlueGreen 5 cases 全 PASS
+  ✓ make dev: 全编译 + 既有测试不受影响
+  ✗ 端到端真实集群验证: 暂搁 (qc 拍板)
+    - example-blue-green demo 仍用 kubectl patch (commit 402 遗留状态)
+    - 完整 kp sandbox start 真跑通的验证在后续 release 中补
+    - 影响范围: v2.6.0 蓝绿用户没有 e2e 验证保障
+                但接入逻辑跟设计一致, 单元层面无 regression
+
+工程教训记录:
+  1. commit message 描述跟实施可能错位 (本次反向版: "已实施"实际没实施)
+     未来 critical-path 改动应该 cross-check commit diff
+  2. demo 工程不应该用 "简化版" 替代真实流程验证
+     commit 402 message "switch.sh 当前用 kubectl patch 简化版 (教学清晰)"
+     这是教学需要, 但不能替代 "真跑 kp sandbox start" 的端到端验证
+  3. HANDOFF 3.6 "真实集群验证不可跳" 是工程纪律, 不是建议
+
+不藏数据 (KubePivot 哲学):
+  - 这个 commit 公开承认 v2.6.0 蓝绿在 master 上死了 ~8 天 (commit 401 至本次)
+  - 任何 v2.6.0 用户跑 kp sandbox start 期望蓝绿切换都不会真生效
+  - 不写 "v2.6.0 蓝绿能力增强", 这就是 v2.6.0 漏接的事后补救
+
+下一步:
+  v2.6.1 Step 3 (cmd/kp/deploy.go --from-env) 在本 commit 基础上继续
+  v2.6.0 蓝绿 e2e 验证 / example-blue-green demo 升级 → 后续 release 补

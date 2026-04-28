@@ -164,6 +164,17 @@ func runSandboxStart(args []string) {
 		os.Exit(1)
 	}
 
+	// Step 4.5: 蓝绿流量切换 (v2.6.0 漏接, v2.6.1 Step 0 补)
+	// 没启用蓝绿 (resources.yaml 无 traffic 字段) 时 runBlueGreenSwitch 安静返回 nil
+	if err := runBlueGreenSwitch(cfg, root); err != nil {
+		P.Fail(fmt.Sprintf("流量切换失败，触发 RESTORING: %v", err))
+		sm.Transition(state.StateRestoring, "sandbox: 蓝绿切换失败")
+		runSandboxRestore(cfg, root, env, sandboxID)
+		sm.Transition(state.StateIdle, "sandbox: 已恢复")
+		cleanSandboxSession(sandboxID, root)
+		os.Exit(1)
+	}
+
 	// Step 5: RUNNING
 	sm.Transition(state.StateRunning, "sandbox: commit 成功")
 	P.Done("沙盒会话完成，状态: RUNNING")
