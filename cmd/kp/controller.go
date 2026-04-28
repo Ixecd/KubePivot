@@ -7,6 +7,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/Ixecd/kubepivot/internal/audit"
+	"github.com/Ixecd/kubepivot/internal/rbac"
 	"github.com/Ixecd/kubepivot/internal/controller_installer"
 )
 
@@ -65,6 +67,10 @@ func runControllerInstall(args []string) {
 		os.Exit(1)
 	}
 
+	// v2.8 B.7.2 + B.3 + B.7.3: controller install (PermControllerInstall)
+	// Q-B7.12=A: namespace 用 *namespace 诚实反映实际操作 ns
+	mustCheck(audit.ResolveActor(), *namespace, rbac.PermControllerInstall)
+
 	// 自动从 kpVersion 推导镜像
 	if *image == "" {
 		*image = fmt.Sprintf("qingchun22/kubepivot-controller:%s", kpVersion)
@@ -116,6 +122,9 @@ func runControllerUninstall(args []string) {
 	if err := flags.Parse(args); err != nil {
 		os.Exit(1)
 	}
+
+	// v2.8 B.7.2 + B.3 + B.7.3: controller uninstall (PermControllerUninstall)
+	mustCheck(audit.ResolveActor(), *namespace, rbac.PermControllerUninstall)
 
 	if !*force {
 		fmt.Printf("%s 即将卸载 KubePivot Controller（namespace=%s）\n",

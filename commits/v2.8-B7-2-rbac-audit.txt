@@ -1,0 +1,150 @@
+feat(rbac-audit): v2.8 B.7.2 + B.3 + B.7.3 — 7 critical 命令接入 RBAC + audit denied
+
+v2.8 企业治理三模块一锅端 (B.3 命令接入 / B.7.2 audit / B.7.3 denied audit).
+原 ROADMAP 三个独立子模块, 实施时合并为 1 commit (避免 7 个文件改 3 次).
+
+变更:
+  cmd/kp/rbac_helper.go         新增 160 行   mustCheck + getRBACChecker lazy + audit hook
+  cmd/kp/rbac_helper_test.go    新增 186 行   7 cases
+  cmd/kp/deploy.go              4 处 patch    import + runDeploy + runResume + runRollback
+  cmd/kp/sandbox.go             2 处 patch    import + runSandboxStart
+  cmd/kp/down.go                2 处 patch    import + runDown
+  cmd/kp/controller.go          3 处 patch    import + install + uninstall
+
+合计: 346 行新代码 + 11 处 patch (覆盖 7 个 critical 命令)
+
+设计核心:
+
+  1 行接入模式 (Q-B7.13=A 简化):
+    每个 run 函数加 1 行:
+      mustCheck(audit.ResolveActor(), <namespace>, rbac.<Permission>)
+    
+    拒绝 → mustCheck 内部:
+      1. audit.Record source=rbac action=rbac.denied actor outcome=denied reason
+      2. P.Fail + 错误提示 + 联系管理员 hint
+      3. os.Exit(1)
+    
+    通过 → 主逻辑继续, success audit 走既有状态机路径
+    
+    KISS 原则: 跨 7 个 run 函数零样板代码差异, 复用最大化
+
+  Q-B7.10=C 拍板 - rbac_helper.go 封装:
+    sync.Once lazy load (整个进程一次 teams.yaml 解析)
+    rbacChecker 单例缓存
+    ResetRBACCheckerForTest() 测试时重置 cache
+    
+  Q-B7.11=C 拍板 - 路径优先级:
+    1. <projectRoot>/configs/teams.yaml      项目级 (推荐)
+    2. ~/.kp/teams.yaml                      用户级 (本地测试)
+    3. 都没有 → empty checker (Q-B5 全权限, 向后兼容)
+    
+    跟 KPEnv 同模式 (configs/project.env + ~/.kp/envs/)
+
+  Q-B7.12=A 拍板 - controller namespace 字段:
+    runControllerInstall / runControllerUninstall 用 *namespace 字面值
+    诚实反映实际操作 ns ("kubepivot-system" 默认)
+    teams.yaml 可通过 exact / prefix 模式精准控制
+
+  Q-B7.13=A 拍板 (隐藏 Q, 实施期涌现) - success audit 跟踪策略:
+    选 A 简化方案: 不写 defer success audit, 只写 denied audit
+    理由:
+      1. denied 是治理核心 (qc 的 "老板想知道是谁点的" 洞察)
+      2. success audit 已通过既有状态机间接 (collectDeployAudit 从 etcd 读)
+      3. 避免每次 deploy 写一条 jsonl 日志噪音
+      4. 7 个 run 函数所有 return 点跟踪 outcome 复杂度高
+    
+    选 B 完整方案 scope 翻倍且大部分价值在 B.7.1 已通过状态机 actor 升级实现
+
+  Q-B7.9=A 拍板 - 严格 7 HIGH 接入:
+    HIGH 名单 (本期):
+      runDeploy             → PermDeploy
+      runResume             → PermDeploy   (跟 deploy 同权限)
+      runRollback           → PermRollback
+      runSandboxStart       → PermSandbox
+      runDown               → PermRollback (销毁性, 跟 rollback 同级)
+      runControllerInstall  → PermControllerInstall
+      runControllerUninstall → PermControllerUninstall
+    
+    MEDIUM (后续 v2.8.x 持续补):
+      runResume / runSandboxStatus / runSandboxUnlock /
+      runControllerStatus / runControllerEnroll / runControllerUnenroll
+    
+    LOW (本期不接入):
+      runStatus / runDiff / runDoctor* (只读) /
+      runMigrate* / runSecret* (复杂, 单独评估)
+
+3 入口模式适配:
+  
+  模式 1 (deploy / resume): 
+    cfg := &deployConfig{} + flags.StringVar(&cfg.namespace, ...)
+    patch 锚点: projectName 解析后 → mustCheck 用 cfg.namespace
+  
+  模式 2 (rollback / down / sandbox-start):
+    namespace := flags.String(...) + cfg := &deployConfig{namespace: *namespace}
+    patch 锚点: 同模式 1 (cfg.namespace 已可用)
+  
+  模式 3 (controller install/uninstall):
+    namespace := flags.String("namespace", "kubepivot-system", ...)
+    无 cfg / 无 projectName
+    patch 锚点: flags.Parse 后 → mustCheck 用 *namespace
+    audit resource 字段固定 "kubepivot-controller"
+
+测试覆盖 (7 cases):
+  
+  resolveTeamsConfigPath 路径优先级 (2):
+    NeitherExists / UserOnly
+  
+  getRBACChecker lazy 加载 (2):
+    NilSafe (无文件返回非 nil)
+    EmptyConfig_AllowsAll (Q-B5 fallback 验证)
+  
+  mustCheck 集成 (2):
+    NoConfig_DoesNotExit (Q-B5 通过, 不调 os.Exit)
+    ChecksUnderlyingChecker (验证完整 Q-B1.A + Q-B1.C 路径)
+  
+  ResetRBACCheckerForTest (1):
+    验证 sync.Once cache 可重置 (测试隔离)
+  
+  注: mustCheck 拒绝路径会 os.Exit(1), 不能在单测里直接调用
+      (会终止测试进程). 通过 getRBACChecker().Check() 间接验证拒绝逻辑.
+
+测试结果:
+  ✓ 7 cases 全 PASS
+  ✓ INFO 日志验证: "RBAC: teams.yaml 不存在,运行在向后兼容模式 (全权限)" + "teams 配置已加载"
+  ✓ make dev 全绿 (cmd/kp 87 cases 全部测试无 regression)
+  ✓ 既有 internal/audit / internal/rbac / internal/auth 测试不受影响
+
+测试边界 (诚实标注):
+  ✓ 单元测试: 7 cases 覆盖路径解析 / lazy load / mustCheck 通过路径
+  ✗ mustCheck 拒绝路径不能单测 (os.Exit 会终止进程)
+    → 通过底层 Checker.Check 间接验证拒绝逻辑
+  ✗ 7 个 critical 命令真实集群 e2e: 暂搁
+    → 跟 v2.8 A/B 真集群验证暂搁原则一致
+  ✗ teams.yaml ConfigMap 集群同步 + live reload: 留给 B.5 (controller 接入)
+
+工程纪律亮点:
+  - 0 第三方依赖 (跟 v2.8 A/B/B7.1 一致)
+  - 1 行接入设计 (Q-B7.13=A 涌现于实施期, 避免每个命令 6 行 defer 样板)
+  - lazy load + cache (Q-B7.10=C, sync.Once 一次解析)
+  - path 三档优先级 (Q-B7.11=C, 跟 KPEnv 模式对齐)
+  - Reset hook (ResetRBACCheckerForTest 仅供测试, 生产不用)
+  - 1 次 fake 测试本地拦下 patch bug (deploy.go fake "v0.1.0" vs 真实 version 变量)
+  
+  Master 仍 0 fix commit (今天累计 10 次本地拦下打脸)
+
+下一步 v2.8 模块:
+  
+  v2.8 B.4  (~半天):
+    cmd/kp/team.go - kp team add/remove/list/check 命令组
+    管理员管理 teams.yaml 的 CLI 入口
+  
+  v2.8 B.5  (~1 commit):
+    internal/controller/rbac_hook.go
+    controller reconcile 入口加权限校验
+    teams.yaml ConfigMap 监听 + Reload (live reload)
+  
+  v2.8 G    (~3-5 commits):
+    Sealed Secrets / SOPS / KMS 集成
+  
+  v2.8 H    (~3-5 commits):
+    cosign / syft / trivy 供应链

@@ -7,6 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/Ixecd/kubepivot/internal/audit"
+	"github.com/Ixecd/kubepivot/internal/rbac"
 )
 
 func runDown(args []string) {
@@ -35,6 +38,10 @@ func runDown(args []string) {
 	resolveDeployConfig(cfg, env, root)
 
 	projectName := envOrDefault(env, "PROJECT_NAME", filepath.Base(root))
+
+	// v2.8 B.7.2 + B.3 + B.7.3: down 销毁性操作 (跟 rollback 同权限 PermRollback)
+	mustCheck(audit.ResolveActor(), cfg.namespace, rbac.PermRollback)
+
 	stateFile := expandHome(fmt.Sprintf("~/.kp/state/%s/%s.json", projectName, cfg.namespace))
 
 	// 二次确认

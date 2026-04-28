@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/Ixecd/kubepivot/internal/audit"
+	"github.com/Ixecd/kubepivot/internal/rbac"
 	"github.com/Ixecd/kubepivot/internal/controller"
 	"github.com/Ixecd/kubepivot/internal/executor"
 	"github.com/Ixecd/kubepivot/internal/route"
@@ -75,6 +77,9 @@ func runSandboxStart(args []string) {
 	version := envOrDefault(env, "VERSION", "v0.1.0")
 
 	store := state.NewAutoStore(env["ETCD_ENDPOINTS"])
+	// v2.8 B.7.2 + B.3 + B.7.3: sandbox 操作 (PermSandbox)
+	mustCheck(audit.ResolveActor(), cfg.namespace, rbac.PermSandbox)
+
 	sm, err := state.New(store, projectName, cfg.namespace, version)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "加载状态失败:", err)

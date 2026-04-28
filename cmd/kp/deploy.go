@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Ixecd/kubepivot/internal/audit"
+	"github.com/Ixecd/kubepivot/internal/rbac"
 	"github.com/Ixecd/kubepivot/internal/controller"
 	"github.com/Ixecd/kubepivot/internal/executor"
 	"github.com/Ixecd/kubepivot/internal/planner"
@@ -67,6 +69,9 @@ func runDeploy(args []string) {
 	env, _ := readEnvFile(filepath.Join(root, "configs", "project.env"))
 
 	projectName := envOrDefault(env, "PROJECT_NAME", filepath.Base(root))
+
+	// v2.8 B.7.2 + B.3 + B.7.3: RBAC + audit denied 一锅端 (1 行接入)
+	mustCheck(audit.ResolveActor(), cfg.namespace, rbac.PermDeploy)
 
 	// --env 覆盖
 	if *envName != "" {
@@ -176,6 +181,9 @@ func runResume(args []string) {
 	store := state.NewAutoStore(env["ETCD_ENDPOINTS"])
 	projectName := envOrDefault(env, "PROJECT_NAME", filepath.Base(root))
 
+	// v2.8 B.7.2 + B.3 + B.7.3: resume 跟 deploy 同权限 (PermDeploy)
+	mustCheck(audit.ResolveActor(), cfg.namespace, rbac.PermDeploy)
+
 	sm, err := state.New(store, projectName, cfg.namespace, version)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "加载状态失败:", err)
@@ -257,6 +265,9 @@ func runRollback(args []string) {
 	version := envOrDefault(env, "VERSION", "v0.1.0")
 	store := state.NewAutoStore(env["ETCD_ENDPOINTS"])
 	projectName := envOrDefault(env, "PROJECT_NAME", filepath.Base(root))
+
+	// v2.8 B.7.2 + B.3 + B.7.3: rollback 操作 (PermRollback)
+	mustCheck(audit.ResolveActor(), cfg.namespace, rbac.PermRollback)
 
 	sm, err := state.New(store, projectName, cfg.namespace, version)
 	if err != nil {
