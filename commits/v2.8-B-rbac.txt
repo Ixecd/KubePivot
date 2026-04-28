@@ -1,0 +1,168 @@
+feat(rbac): v2.8 B.1+B.2 — RBAC checker + FileBasedChecker (黑名单绝对优先)
+
+v2.8 企业治理实施 B 模块第一阶段. 多团队 RBAC 权限校验核心.
+为后续 B.3 (cmd/kp 命令接入) / B.4 (kp team 命令组) / B.5
+(controller reconcile 接入) 提供基础设施.
+
+变更:
+  internal/rbac/types.go         新增 116 行  Permission/Team/TeamConfig
+  internal/rbac/checker.go       新增  84 行  Checker 接口 + UserContext + ErrPermissionDenied
+  internal/rbac/file_based.go    新增 311 行  FileBasedChecker + compiledTeam + nsMatcher
+  internal/rbac/rbac_test.go     新增 530 行  31 cases
+
+合计: 1041 行 (代码 511 + 测试 530)
+
+设计核心:
+
+  Checker 接口 (与 v2.8 A AuthProvider / state.Store 同模式):
+    Check(ctx, user, namespace, perm) error
+    Reload() error
+  
+  实现: FileBasedChecker (本期)
+  扩展点: EtcdChecker / DBChecker (留 hook)
+
+  7 个 Q 拍板 (5 个原 Q + 1 个补充 + 1 个 qc 神来之笔):
+    Q-B1.A  members 用 email
+    Q-B1.B  namespaces 用 shell glob (* / ?)
+    Q-B1.C  excluded 优先级高于 permissions (单 team 内)
+    Q-B2    Group 一锅端 (members 含 "group:<name>" 语法)
+    Q-B3    Permission enum 风格
+    Q-B4    Check 返回 error
+    Q-B5    teams.yaml 缺失 → 全权限 (向后兼容, ROADMAP 一致)
+    Q-B6=C  跨 team excluded 全局优先 (qc 神来之笔, 黑名单绝对优先完整实现)
+
+  qc 拍的 2 个工程优化点 (本期实现):
+    优化 1 - Glob 性能感知:
+      解析 teams.yaml 时预编译 namespace 模式
+      compileNsPattern 区分 exact / prefix / glob 三档
+      hot path 决策树:
+        exact   → ns == pattern        最快 (O(1) 比较)
+        prefix  → strings.HasPrefix    快   (~80% 实际场景)
+        glob    → path.Match           兜底 (慢但完整)
+      实测: "kp-backend-*" 这种常见模式不调 path.Match
+    
+    优化 2 - O(1) 查找:
+      compiledTeam.memberEmails / memberGroups / permissions / excluded
+      全部 map[string]bool, 替代线性扫描
+
+  Q-B6=C 实现 (跨 team excluded 全局优先 - 黑名单绝对优先):
+    Check 内三遍扫描:
+      1. 第一遍: 收集所有 (user 匹配 + ns 匹配) 的 team
+      2. 第二遍: 任一匹配 team 把 perm 列入 excluded → 拒绝
+      3. 第三遍: 任一匹配 team 在 permissions 含 perm 或 "*" → 允许
+    
+    错误信息含完整上下文:
+      "用户 alice@x.com 无 controller-uninstall 权限于 namespace kp-backend-prod
+       (原因: excluded-by-team:backend-team)"
+    
+    即使 ops-team permissions: ["*"], backend-team 的 excluded 仍优先
+
+  Q-B5 向后兼容 (defensive):
+    NewFileBasedChecker(path) 文件不存在 → 不报错, 返回空 teams checker
+    Check 内 len(teams)==0 → return nil (允许)
+    路径: configs/teams.yaml 用户级或集群 ConfigMap 注入
+
+  线程安全设计:
+    atomic.Pointer[[]compiledTeam] - Check 无锁读
+    sync.Mutex (reloadMu) - Reload 串行化, 防并发覆盖
+    Reload 失败保留旧配置 (不污染当前服务)
+
+设计哲学贯穿 (与 v2.6/v2.8 A 一致):
+  - 0 第三方 RBAC 库 (不引入 Casbin / OPA)
+  - 标准库 + KubePivot 既有 yaml.v3
+  - Checker 接口隔离实现, 测试通过 fixture mock 注入
+  - 错误透传 (返回 *ErrPermissionDenied 含完整上下文)
+
+测试覆盖 (31 cases):
+
+  Permission 类型 (1):
+    TestPermission_IsValid
+
+  Q-B5 配置缺失/空 (2):
+    TestCheck_NoConfig_AllowsAll        nonexistent 路径
+    TestCheck_EmptyTeams_AllowsAll      teams: []
+
+  Q-B1.A email member (2):
+    TestCheck_EmailMember_Allowed
+    TestCheck_NonMember_Denied
+
+  Q-B2 group member (3):
+    TestCheck_GroupMember_Allowed       group:dev-team 匹配
+    TestCheck_GroupMismatch_Denied
+    TestCheck_MultipleGroups_AnyMatchAllowed  用户多 group 任一命中
+
+  Q-B1.B namespace 4 类匹配 (5):
+    TestCheck_NamespacePrefix_Match     kp-backend-* 匹配多 ns
+    TestCheck_NamespaceExact_Match      kp-shared 完整匹配
+    TestCheck_NamespaceMismatch_Denied
+    TestCheck_NamespaceGlob_QuestionMark kp-?-prod
+    TestCheck_NamespaceWildcardStar     "*" 匹配任意
+
+  Q-B1.C 单 team excluded (2):
+    TestCheck_Excluded_BeatsPermissions
+    TestCheck_Excluded_BeatsWildcard    permissions: ["*"] 也挡
+
+  Q-B6=C 跨 team excluded 全局优先 (2):
+    TestCheck_CrossTeam_ExcludedGlobal  ops-team * 仍被 backend-team excluded 挡
+    TestCheck_CrossTeam_AnyAllowSucceed 任一允许即放行
+
+  Q-B3 perm wildcard (1):
+    TestCheck_PermWildcard_AllowsAll
+
+  防御性 (2):
+    TestCheck_NilUser_Denied
+    TestCheck_EmptyEmail_Denied
+
+  Reload (2):
+    TestReload_PicksUpChanges           live reload 拾取变更
+    TestReload_BadYAML_KeepsOldConfig   失败保留旧配置
+
+  compileNsPattern 优化 (5):
+    TestCompileNsPattern_Exact
+    TestCompileNsPattern_Prefix
+    TestCompileNsPattern_Glob_QuestionMark
+    TestCompileNsPattern_Glob_MultiStar
+    TestCompileNsPattern_SingleStar     单 * → prefix("") 等价
+
+  IsPermissionDenied 工具 (1)
+
+  yaml 解析错误 (3):
+    TestNewFileBasedChecker_BadYAML
+    TestNewFileBasedChecker_EmptyTeamName
+    TestNewFileBasedChecker_EmptyGroupSyntax
+
+测试结果:
+  ✓ 31 cases 全 PASS
+  ✓ make dev 全绿
+  ✓ 既有 internal/auth (v2.8 A) 测试不受影响
+  ✓ 既有 cmd/kp / controller 不受影响 (本 commit 不接入命令路径)
+
+测试边界 (诚实标注):
+  ✓ 单元测试: 31 cases 覆盖 7 Q + 优化 + 错误路径
+  ✗ 命令路径接入: 留给 B.3 (cmd/kp 接入)
+  ✗ controller reconcile 接入: 留给 B.5
+  ✗ kp team 命令组: 留给 B.4
+  ✗ auth.UserInfo → rbac.UserContext 桥接: 跟随 B.3 接入时一起加
+    (避免 internal/rbac → internal/auth 单向依赖, 本 commit 故意解耦)
+
+工程纪律亮点:
+  - 0 第三方依赖 (跟 v2.8 A 同哲学)
+  - 设计先行 + 实施期 0 校准 (本 commit 0 V 校准)
+  - 性能优化前置 (qc 拍的 2 个优化点解析时落地, 非事后补)
+  - Q-B6=C "黑名单绝对优先" 完整实现 (单 team + 跨 team)
+  - 接口与实现分离 (留 hook 给 EtcdChecker / DBChecker)
+  - Reload 失败保留旧配置 (defensive, 守住可用性底线)
+
+下一步 B.3 ~ B.5 (后续独立 commit):
+  B.3  cmd/kp 命令接入 (~1-2 commit)
+       - 新建 cmd/kp/rbac_helper.go (auth.UserInfo → rbac.UserContext 桥接)
+       - deploy / sandbox / controller-uninstall 三个 critical 命令加 Checker.Check()
+       - 其他命令逐步加 (低风险扩展)
+  
+  B.4  kp team 命令组 (~半天)
+       - kp team add / remove / list / check / show
+  
+  B.5  controller reconcile 接入 (~1 commit)
+       - internal/controller/rbac_hook.go
+       - reconcile 入口加权限校验
+       - ConfigMap 监听 → Reload (live reload 落地)
