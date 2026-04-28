@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Ixecd/kubepivot/internal/audit"
 	"github.com/Ixecd/kubepivot/internal/executor"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
@@ -195,9 +196,11 @@ func isKubepivotOwnedKey(key string) bool {
 
 // writeDriftAuditLog 写漂移审计日志到 etcd（降级到 slog）
 func writeDriftAuditLog(resource, namespace string, diffs []string) {
-	entry := fmt.Sprintf(`{"resource":"%s","namespace":"%s","diffs":%q,"ts":"%s"}`,
+	// v2.8 B.7.1: 加 actor 字段 (controller 端固定 kubepivot-controller@<pod>)
+	entry := fmt.Sprintf(`{"resource":"%s","namespace":"%s","diffs":%q,"actor":"%s","ts":"%s"}`,
 		resource, namespace,
 		strings.Join(diffs, "; "),
+		audit.ResolveControllerActor(),
 		time.Now().Format(time.RFC3339),
 	)
 

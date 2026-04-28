@@ -1,0 +1,178 @@
+feat(audit): v2.8 B.7.1 — Audit Actor 标准化 (SSO email > USER@host > anonymous@host)
+
+v2.8 企业治理 B.7 模块第一阶段 (你提的"老板想知道到底是谁点的").
+解决既有 audit 模块的核心缺陷: Actor 字段全部 hardcode "kp-cli" / 
+"kubepivot-controller", v2.8 SSO 之后必须升级到具体 email 级.
+
+变更:
+  internal/audit/audit.go               新增  81 行  AuditEvent + Outcome 常量 + NewEvent
+  internal/audit/actor.go               新增 141 行  ResolveActor 三档 + ResolveControllerActor
+  internal/audit/writer.go              新增 153 行  Write/Record/RecordEvent 不阻断写入
+  internal/audit/audit_test.go          新增 501 行  28 cases
+  cmd/kp/audit.go                       2 处 patch  读取端 actor 兼容 (raw 优先 + 旧值 fallback)
+  cmd/kp/secret.go                      3 处 patch  import + rotate event + sync event
+  internal/controller/drift_sync.go     2 处 patch  import + entry actor 字段
+
+合计: 876 行新代码 + ~10 处 patch
+
+设计核心:
+
+  ResolveActor 三档降级 (Q-B7.1=A):
+    1. SSO email      读 ~/.kp/credentials/default.yaml → <provider>.yaml → email
+    2. USER@host      os.Getenv("USER") + "@" + hostname  
+    3. anonymous@host
+    
+    永不返回空字符串 (audit Actor 必须有值)
+    永不 panic (audit 是侧支, 不能因解析失败影响主命令)
+    文件 I/O 失败静默降级 (静默 = 不 slog, 不污染日志)
+    
+    ResolveControllerActor: controller 端固定标识符
+      kubepivot-controller@<POD_NAME 或 hostname>
+
+  Record 不阻断主流程 (Q-B7.2=B):
+    Record(source, action, actor, resource, ns, outcome, reason)
+    内部调 Write, 失败只 slog.Warn, 永不返回 error
+    调用方典型 defer 模式, 无需 if err != nil
+    
+    设计权衡: 可用性 > 可观测性
+    审计是侧支流程, 不能因 disk full / permission denied 阻断 deploy
+
+  按 source 分文件 (Q-B7.3=A):
+    ~/.kp/audit/deploy.jsonl
+    ~/.kp/audit/sandbox.jsonl
+    ~/.kp/audit/secret.jsonl     (跟既有保持一致)
+    ~/.kp/audit/drift.jsonl
+    ~/.kp/audit/controller.jsonl
+    ~/.kp/audit/rollback.jsonl
+    
+    优势: kp audit --source 极速过滤 + 字段 schema 可独立演进
+
+  本期不做 (Q-B7.5=A KISS):
+    - 文件 rotation (用 logrotate 标准方案)
+    - immutable WORM 存储 (ROADMAP F 排除)
+    - 远程聚合 (Loki/ES)
+
+8 个 Q 拍板:
+  Q-B7.1=A  Actor 优先级 SSO > USER > Anonymous (柔性降级)
+  Q-B7.2=B  写入失败不阻断 (可用性优先)
+  Q-B7.3=A  按 source 分文件 (跟 secret.jsonl 既有约定)
+  Q-B7.4=B  本期 6+1 critical 命令接入 (留给 B.7.2)
+  Q-B7.5=A  本期不做 rotation (KISS)
+  Q-B7.6=A  state.History 加 Actor 字段留给 B.7.2 (本期不动)
+
+  + 实施期补充 2 个隐藏 Q (代码评审过程涌现):
+  Q-B7.7    读取端旧数据兼容: collectSecret/DriftAudit 优先读 raw["actor"]
+            没有则 fallback 到既有 hardcoded ("kp-cli" / "kubepivot-controller")
+            理由: ~/.kp/audit/secret.jsonl 历史数据没 actor 字段, 不能让旧数据消失
+  Q-B7.8    写入端字段名一致性: secret.jsonl 用 "ts" / drift etcd 用 "ts"
+            AuditEvent 用 "timestamp" — 三个命名不统一是历史债, 本期不修
+            (改造影响面太大, 留 v2.8.x 文档化)
+
+V12 实施期校准 (今天第 12 个):
+  ROADMAP §1 v2.8 排除清单:
+    F: 审计日志 immutable
+  
+  原读法: "v2.8 不做审计日志"
+  
+  实际重读: F 排除的是 *immutable* (区块链/WORM), 普通 audit 没明确排除
+  
+  既有 KubePivot 实际状况:
+    cmd/kp/audit.go 已存在 (查询命令, 3 数据源)
+    ~/.kp/audit/secret.jsonl 已存在 (写入)
+    internal/controller/drift_sync.go 已写 etcd (controller 端)
+    
+  所以 v2.8 audit 不是从零做, 是补 SSO identity 缺口.
+  本 commit 是这个发现后的精确修复, 不是新建模块.
+
+Patch 设计细节:
+
+  cmd/kp/audit.go (2 处读取端兼容):
+    collectSecretAudit: actor, _ := raw["actor"].(string); if "" { = "kp-cli" }
+    collectDriftAudit:  actor := raw["actor"];             if "" { = "kubepivot-controller" }
+    
+    旧 hardcoded 改成 fallback - 旧 jsonl 数据仍能展示, 新数据带真实 actor
+  
+  cmd/kp/secret.go (3 处写入端):
+    import +1: internal/audit (插入 import 块尾, 跟标准库空行分隔)
+    rotate event +1 行: "actor": audit.ResolveActor()
+    sync event +1 行:   "actor": audit.ResolveActor()
+  
+  internal/controller/drift_sync.go (2 处写入端):
+    import +1: internal/audit
+    entry fmt.Sprintf 加 "actor":"%s" 字段, 用 audit.ResolveControllerActor()
+
+测试覆盖 (28 cases):
+
+  AuditEvent / NewEvent (3):
+    AllFieldsSet / JSONRoundTrip / OutcomeConstants
+  
+  ResolveActor 三档 (8):
+    Tier1 SSOEmail
+    Tier2 USERAtHost
+    Tier3 AnonymousAtHost
+    NeverEmpty (永不返回空)
+    SSOWithBadCredFile (损坏 yaml 静默降级)
+    SSOMissingProvider (default.yaml 缺字段)
+    SSOEmptyEmailField (email 为空字符串)
+    ResolveControllerActor (POD_NAME / fallback hostname) - 2 cases
+  
+  Write 写入 (5):
+    NewFile_CreateAndAppend
+    AppendExisting (3 次写入 3 行)
+    DifferentSources_DifferentFiles (Q-B7.3 验证)
+    NilEvent_Error / EmptySource_Error (防御)
+    FilePermission0644 (跟既有约定一致)
+  
+  Record 不阻断 (5):
+    Success_DoesNotPanic
+    WriteSuccess_PersistsEvent
+    WriteFailsBecauseDirIsFile_DoesNotPanic (Q-B7.2=B 核心保证)
+    RecordEvent_NilEvent_DoesNotPanic
+    RecordEvent_AutoTimestampIfMissing
+    RecordEvent_WithAllOptionalFields
+  
+  nowFunc Mockable (1): 测试可控时间
+  
+  并发安全 (1): 50 goroutine 并发 Write 无丢失
+  
+  E2E (2): SSO Actor 闭环 / USER Fallback 闭环
+
+测试结果:
+  ✓ 28 cases 全 PASS
+  ✓ TestRecord_WriteFailsBecauseDirIsFile_DoesNotPanic 验证 Q-B7.2=B 核心
+  ✓ make dev 全绿 (cmd/kp + internal/controller 都重新编译过)
+  ✓ 既有 internal/auth (v2.8 A) / internal/rbac (v2.8 B) 测试不受影响
+  ✓ test/integration 不受影响
+
+测试边界 (诚实标注):
+  ✓ 单元测试: 28 cases 覆盖 8 Q + 防御性 + 并发 + E2E
+  ✗ 真实 ~/.kp/audit/secret.jsonl 历史数据兼容: 暂搁
+    现实只有 128 字节旧数据 (3月3日), 兼容性靠 fallback 保证
+    后续如有问题再补
+  ✗ controller 端真实 etcd 写入验证: 暂搁
+    drift_sync.go 改了 entry 但没真实集群 e2e
+    单元测试覆盖不到 etcd Put 调用 (跟 v2.8 A 真 OAuth 暂搁同原则)
+  ✗ 7 critical 命令 audit.Record 接入: 留给 B.7.2
+  ✗ RBAC 决策 audit (allowed/denied 记录): 留给 B.7.3
+
+工程纪律亮点:
+  - 0 第三方依赖 (跟 v2.8 A/B 一致)
+  - V12 校准 (ROADMAP F 项重读, 发现 audit 不在排除清单)
+  - 两次 fake 测试本地拦下 patch bug (sec retname 指针 / 纯标准库 import)
+  - Patch 模板 surgical precision (字符串完整匹配, 不用行号)
+  - 失败回滚 + .bak 备份 (跟 v2.6.1 step 系列同模式)
+  - 读取端兼容旧数据 (Q-B7.7 涌现, 防止历史数据展示破损)
+
+下一步 B.7.2 / B.7.3 (后续独立 commit):
+  B.7.2 命令接入 (~半天)
+    7 critical 命令 defer audit.Record() 接入:
+      kp deploy / kp sandbox start / kp sandbox commit /
+      kp sandbox start --from-env / kp rollback (kp down) /
+      kp controller install / kp controller uninstall
+    
+    + 类型统一: cmd/kp/audit.go AuditEvent → internal/audit.AuditEvent
+
+  B.7.3 RBAC 决策 audit (~1-2 commit)
+    Checker.Check 失败 → audit.Record(source="rbac", outcome=denied, reason=...)
+    跟 B.3 cmd/kp 命令接入 RBAC 一起做
+    最终目标: kp audit --source rbac 看完整拒绝列表

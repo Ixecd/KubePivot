@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Ixecd/kubepivot/internal/audit"
 )
 
 // ── 主入口 ────────────────────────────────────────────────────────────────────
@@ -463,6 +465,7 @@ func writeAuditLog(secretName, action string, refs []SecretRef) {
 	event := map[string]interface{}{
 		"ts":       time.Now().Format(time.RFC3339),
 		"action":   action,
+		"actor":    audit.ResolveActor(), // v2.8 B.7.1: SSO email > USER@host > anonymous@host
 		"resource": secretName,
 		"services": services,
 	}
@@ -597,6 +600,7 @@ func runSecretSync(args []string) {
 		auditData, _ := json.Marshal(map[string]string{
 			"action": "sync/vault", "resource": *secretName,
 			"namespace": cfg.namespace, "ts": time.Now().Format(time.RFC3339),
+			"actor": audit.ResolveActor(), // v2.8 B.7.1
 		})
 		af.Write(append(auditData, '\n'))
 		af.Close()

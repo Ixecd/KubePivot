@@ -192,12 +192,17 @@ func collectSecretAudit() []AuditEvent {
 		action, _ := raw["action"].(string)
 		resource, _ := raw["resource"].(string)
 		ns, _ := raw["namespace"].(string)
+		// v2.8 B.7.1: 优先读 raw["actor"] (新数据), fallback "kp-cli" (旧数据兼容)
+		actor, _ := raw["actor"].(string)
+		if actor == "" {
+			actor = "kp-cli"
+		}
 
 		events = append(events, AuditEvent{
 			Timestamp: ts,
 			Source:    "secret",
 			Action:    "secret." + action,
-			Actor:     "kp-cli",
+			Actor:     actor,
 			Resource:  resource,
 			Namespace: ns,
 			Outcome:   "success",
@@ -240,12 +245,17 @@ func collectDriftAudit(project, namespace string, env map[string]string) []Audit
 		ts := raw["ts"]
 		resource := raw["resource"]
 		diffs := raw["diffs"]
+		// v2.8 B.7.1: 优先读 raw["actor"] (新数据), fallback (旧数据兼容)
+		actor := raw["actor"]
+		if actor == "" {
+			actor = "kubepivot-controller"
+		}
 
 		events = append(events, AuditEvent{
 			Timestamp: ts,
 			Source:    "drift",
 			Action:    "drift.force-sync",
-			Actor:     "kubepivot-controller",
+			Actor:     actor,
 			Resource:  resource,
 			Namespace: namespace,
 			Reason:    diffs,
