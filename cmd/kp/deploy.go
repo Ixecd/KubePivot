@@ -38,6 +38,9 @@ type deployConfig struct {
 	sizingProfile   string // --sizing-profile: web/batch/db/default (默认: default)
 	sizingForce     bool   // --sizing-force: 自动应用建议，不等待用户确认
 	prometheusURL   string // --prometheus-url: Prometheus 地址
+	prometheusWindow time.Duration // --prometheus-window
+	prometheusStep   time.Duration // --prometheus-step
+	sizingThreshold  float64       // --sizing-threshold
 }
 
 func runDeploy(args []string) {
@@ -65,6 +68,9 @@ func runDeploy(args []string) {
 	flags.StringVar(&cfg.sizingProfile, "sizing-profile", "default", "业务模板: web / batch / db / default")
 	flags.BoolVar(&cfg.sizingForce, "sizing-force", false, "自动应用 sizing 建议，不等待 git diff 确认 (慎用)")
 	flags.StringVar(&cfg.prometheusURL, "prometheus-url", "", "Prometheus API base URL (e.g., http://prometheus:9090)")
+	flags.DurationVar(&cfg.prometheusWindow, "prometheus-window", 0, "Prometheus query window (e.g., 7d, 30d; default: 7d)")
+	flags.DurationVar(&cfg.prometheusStep, "prometheus-step", 0, "Prometheus query step (e.g., 5m, 15m; default: 15m)")
+	flags.Float64Var(&cfg.sizingThreshold, "sizing-threshold", 0, "Confidence threshold for auto-apply (0.0-1.0; default: 0.7)")
 
 	envName := flags.String("env", "", "指定部署环境（kp context add 配置）")
 

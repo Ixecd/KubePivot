@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -45,6 +46,15 @@ type SizingConfig struct {
 	Samples *int `yaml:"samples,omitempty" json:"samples,omitempty"`
 	// Interval: 采样间隔，默认 2s
 	Interval *string `yaml:"interval,omitempty" json:"interval,omitempty"` // "2s", "500ms", etc.
+	// Window: Prometheus 查询时间窗口，默认 "7d"
+	// 格式: duration string (e.g., "1h", "7d", "30d")
+	Window *string `yaml:"window,omitempty" json:"window,omitempty"`
+	// Step: Prometheus 查询步长，默认 "15m"
+	// 格式: duration string (e.g., "1m", "5m", "15m")
+	Step *string `yaml:"step,omitempty" json:"step,omitempty"`
+	// Threshold: 置信度阈值，默认 0.7
+	// 范围: 0.0-1.0, 低于此值不自动应用建议
+	Threshold *float64 `yaml:"threshold,omitempty" json:"threshold,omitempty"`
 }
 
 // Plan 单个组件的部署计划
@@ -65,7 +75,7 @@ type Plan struct {
 	APIVersion  string
 	Namespace   string
 	CrossNsDeps []string
-	Sizing *SizingConfig `yaml:"-" json:"-"` // 不序列化，仅内存传递
+	Sizing      *SizingConfig `yaml:"-" json:"-"` // 不序列化，仅内存传递
 }
 
 // Layer 拓扑排序后的一层（同层可并行部署）
@@ -318,4 +328,54 @@ func Downstream(layers []Layer, target string) []string {
 		result[i], result[j] = result[j], result[i]
 	}
 	return result
+}
+
+// resolveSizingParams 解析 SizingConfig 参数，返回可用值 + 错误
+// 优先级: YAML 字段 > 命令行 flag > 硬编码默认
+// 返回值: (window, step time.Duration), (threshold float64), error
+func resolveSizingParams(cfg *SizingConfig, flagWindow, flagStep time.Duration, flagThreshold float64) (time.Duration, time.Duration, float64, error) {
+	// 默认值 (硬编码兜底)
+	defaultWindow := 7 * 24 * time.Hour // 7d
+	defaultStep := 15 * time.Minute     // 15m
+	defaultThreshold := 0.7             // 70% 置信度
+
+	// 解析 Window
+	window := defaultWindow
+	if cfg != nil && cfg.Window != nil {
+		if d, err := time.ParseDuration(*cfg.Window); err == nil {
+			window = d
+		}
+	}
+	if flagWindow > 0 {
+		window = flagWindow // 命令行覆盖 YAML
+	}
+
+	// 解析 Step
+	step := defaultStep
+	if cfg != nil && cfg.Step != nil {
+		if d, err := time.ParseDuration(*cfg.Step); err == nil {
+			step = d
+		}
+	}
+	if flagStep > 0 {
+		step = flagStep
+	}
+
+	// 解析 Threshold
+	threshold := defaultThreshold
+	if cfg != nil && cfg.Threshold != nil {
+		if *cfg.Threshold >= 0.0 && *cfg.Threshold <= 1.0 {
+			threshold = *cfg.Threshold
+		}
+	}
+	if flagThreshold > 0.0 {
+		threshold = flagThreshold
+	}
+
+	// 校验: window >= step
+	if window < step {
+		return 0, 0, 0, fmt.Errorf("window (%v) must be >= step (%v)", window, step)
+	}
+
+	return window, step, threshold, nil
 }

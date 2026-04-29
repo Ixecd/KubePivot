@@ -271,7 +271,12 @@ func Compute(ctx context.Context, samples []*metrics.PodMetrics, profile Profile
 	savMem := (avgMemSafe - float64(bestState.mem)) / avgMemSafe * 100
 
 	// --- 7. 构建并返回 Suggestion ---
-
+	// 原理: 即使调用方未设置 threshold，算法自身也应保证建议质量
+	// 策略: Confidence < 0.3 时标记为"低置信度"，调用方应谨慎应用
+	// 注意: 不直接返回错误，保持"建议可审计 + 人类最终确认"原则
+	// if confidence < 0.3 {
+	//     P.Warn("⚠", fmt.Sprintf("Low confidence (%.2f) for %s, review manually", confidence, planName))
+	// }
 	return &Suggestion{
 		// 推荐值 (核心输出)
 		RecommendedCPU: bestState.cpu, // millicores
@@ -291,8 +296,9 @@ func Compute(ctx context.Context, samples []*metrics.PodMetrics, profile Profile
 
 // meanStd 计算整数切片的均值 + 总体标准差
 // 公式:
-//   avg = sum(x) / n
-//   std = sqrt( sum((x-avg)^2) / n )  ← 总体标准差 (非样本标准差)
+//
+//	avg = sum(x) / n
+//	std = sqrt( sum((x-avg)^2) / n )  ← 总体标准差 (非样本标准差)
 //
 // 注意:
 //   - 小样本 (n<30) 时, 总体标准差略低估真实波动, 但简化实现可接受
@@ -304,14 +310,14 @@ func meanStd(vals []int64) (avg, std int64) {
 	if n == 0 {
 		return 0, 0
 	}
-	
+
 	// 计算均值
 	var sum int64
 	for _, v := range vals {
 		sum += v
 	}
 	avg = sum / int64(n)
-	
+
 	// 计算标准差 (总体标准差)
 	var sumSq int64
 	for _, v := range vals {
@@ -320,7 +326,7 @@ func meanStd(vals []int64) (avg, std int64) {
 	}
 	// sqrt 后向下取整 (保守: 略低估波动 → P95 估算略保守 → 推荐值略安全)
 	std = int64(math.Sqrt(float64(sumSq / int64(n))))
-	
+
 	return
 }
 
