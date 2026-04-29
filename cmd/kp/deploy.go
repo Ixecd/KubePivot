@@ -23,21 +23,21 @@ import (
 
 // deployConfig 部署参数
 type deployConfig struct {
-	components      string
-	namespace       string
-	context         string
-	kubeconfig      string
-	dryRun          bool
-	sign            bool
-	forceMigrate    bool
-	parallelism     int    // 同层最大并发数，0 表示不限制
-	changedOnly     bool   // 只部署有 git 变更的服务
-	preview         bool   // 部署后生成 Header-based Preview 路由模板
-	skipSupplyChain bool   // 跳过供应链策略验证 (--skip-supply-chain)
-	sizingMode      string // --sizing-mode: auto/manual (默认: manual)
-	sizingProfile   string // --sizing-profile: web/batch/db/default (默认: default)
-	sizingForce     bool   // --sizing-force: 自动应用建议，不等待用户确认
-	prometheusURL   string // --prometheus-url: Prometheus 地址
+	components       string
+	namespace        string
+	context          string
+	kubeconfig       string
+	dryRun           bool
+	sign             bool
+	forceMigrate     bool
+	parallelism      int           // 同层最大并发数，0 表示不限制
+	changedOnly      bool          // 只部署有 git 变更的服务
+	preview          bool          // 部署后生成 Header-based Preview 路由模板
+	skipSupplyChain  bool          // 跳过供应链策略验证 (--skip-supply-chain)
+	sizingMode       string        // --sizing-mode: auto/manual (默认: manual)
+	sizingProfile    string        // --sizing-profile: web/batch/db/default (默认: default)
+	sizingForce      bool          // --sizing-force: 自动应用建议，不等待用户确认
+	prometheusURL    string        // --prometheus-url: Prometheus 地址
 	prometheusWindow time.Duration // --prometheus-window
 	prometheusStep   time.Duration // --prometheus-step
 	sizingThreshold  float64       // --sizing-threshold
@@ -730,9 +730,14 @@ func ensureSecret(cfg *deployConfig, env map[string]string, projectName string) 
 		ctx := context.Background()
 
 		// 构造 kubectl 参数
-		args := kubectlBaseArgs(cfg.kubeconfig, cfg.context, "")
+		var args []string
+		if cfg.kubeconfig != "" {
+			args = append(args, "--kubeconfig", cfg.kubeconfig)
+		}
+		if cfg.context != "" {
+			args = append(args, "--context", cfg.context)
+		}
 		args = append(args, "apply", "-f", "-")
-
 		cmd := execer.CmdKubectl(ctx, cfg.kubeconfig, args...)
 		cmd.Stdin = strings.NewReader(string(nsYaml))
 		// 执行并获取输出
