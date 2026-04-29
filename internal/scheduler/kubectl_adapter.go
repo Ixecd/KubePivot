@@ -159,6 +159,8 @@ func parseMemory(raw string) (int64, error) {
 	if raw == "" {
 		return 0, fmt.Errorf("empty memory value")
 	}
+
+	// 二进制单位 (IEC)
 	if len(raw) >= 2 && raw[len(raw)-2:] == "Ki" {
 		var v int64
 		_, err := fmt.Sscanf(raw, "%dKi", &v)
@@ -174,6 +176,30 @@ func parseMemory(raw string) (int64, error) {
 		_, err := fmt.Sscanf(raw, "%dGi", &v)
 		return v * 1024 * 1024 * 1024, err
 	}
+	if len(raw) >= 2 && raw[len(raw)-2:] == "Ti" {
+		var v int64
+		_, err := fmt.Sscanf(raw, "%dTi", &v)
+		return v * 1024 * 1024 * 1024 * 1024, err
+	}
+
+	// 十进制单位 (SI) — K8s 中不常用但合法
+	if raw[len(raw)-1] == 'k' || raw[len(raw)-1] == 'K' {
+		var v float64
+		_, err := fmt.Sscanf(raw, "%fK", &v)
+		return int64(v * 1000), err
+	}
+	if raw[len(raw)-1] == 'M' && (len(raw) < 2 || raw[len(raw)-2] != 'i') {
+		var v float64
+		_, err := fmt.Sscanf(raw, "%fM", &v)
+		return int64(v * 1000 * 1000), err
+	}
+	if raw[len(raw)-1] == 'G' && (len(raw) < 2 || raw[len(raw)-2] != 'i') {
+		var v float64
+		_, err := fmt.Sscanf(raw, "%fG", &v)
+		return int64(v * 1000 * 1000 * 1000), err
+	}
+
+	// 纯数字，默认单位为字节
 	var v int64
 	_, err := fmt.Sscanf(raw, "%d", &v)
 	return v, err

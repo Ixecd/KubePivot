@@ -22,6 +22,9 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
+	"math"
 	"time"
 
 	"github.com/Ixecd/kubepivot/internal/metrics"
@@ -36,8 +39,8 @@ import (
 // 字段仅包含 bin packing 需要的容量信息，
 // 不引入 K8s 完整 Node 对象。
 type NodeInfo struct {
-	Name             string
-	AllocatableCPU   int64 // 毫核 (millicores)
+	Name              string
+	AllocatableCPU    int64 // 毫核 (millicores)
 	AllocatableMemory int64 // 字节 (bytes)
 }
 
@@ -125,4 +128,73 @@ type PlanWriter interface {
 	// path 是 configs/resources.yaml 的完整路径。
 	// assignments 是 "namespace/name" → "nodeName" 的映射。
 	WriteAssignments(path string, assignments map[string]string) error
+}
+
+// AssignPod 为单个 Pod 实时分配节点。
+// 采用贪心 Best Fit 策略：在所有节点中，找到能满足 Pod 所有容器请求
+// 且剩余资源最少的节点（即“兜底”最紧凑的节点），最小化碎片。
+// 如果 Pod 资源请求为零（未声明 requests），返回错误。
+// 如果没有任何节点能装下，返回错误。
+func (s *Scheduler) AssignPod(ctx context.Context, pod *PodInfo) (string, error) {
+	if pod.Requests.CPU == 0 && pod.Requests.Memory == 0 {
+		return "", fmt.Errorf("pod %s/%s: requests not specified", pod.Namespace, pod.Name)
+	}
+
+	nodes, err := s.nodes.ListAllNodes(ctx)
+	if err != nil {
+		return "", fmt.Errorf("list nodes: %w", err)
+	}
+	if len(nodes) == 0 {
+		return "", fmt.Errorf("no nodes available")
+	}
+
+	// 获取当前集群中所有 Pod 的占用情况（用于计算节点剩余容量）
+	allPods, err := s.pods.ListAllPods(ctx)
+	if err != nil {
+		return "", fmt.Errorf("list pods: %w", err)
+	}
+
+	// 计算每个节点已分配资源总量
+	nodeAlloc := make(map[string]ResourceRequest)
+	for _, p := range allPods {
+		if p.Phase == "Running" && p.NodeName != "" {
+			alloc := nodeAlloc[p.NodeName]
+			alloc.CPU += p.Requests.CPU
+			alloc.Memory += p.Requests.Memory
+			nodeAlloc[p.NodeName] = alloc
+		}
+	}
+
+	// Best Fit：找剩余资源最紧凑满足 Pod 的节点
+	bestNode := ""
+	bestRemaining := int64(math.MaxInt64) // 用剩余 CPU + 内存作为紧凑度度量
+
+	for _, node := range nodes {
+		used := nodeAlloc[node.Name]
+		remainCPU := node.AllocatableCPU - used.CPU
+		remainMem := node.AllocatableMemory - used.Memory
+
+		if pod.Requests.CPU > remainCPU || pod.Requests.Memory > remainMem {
+			continue // 装不下
+		}
+
+		// 紧凑度：剩余资源越小越好（但要能装下）
+		remaining := remainCPU + remainMem
+		if remaining < bestRemaining {
+			bestRemaining = remaining
+			bestNode = node.Name
+		}
+	}
+
+	if bestNode == "" {
+		return "", fmt.Errorf("no node can fit pod %s/%s (cpu=%dm, mem=%d)",
+			pod.Namespace, pod.Name, pod.Requests.CPU, pod.Requests.Memory)
+	}
+
+	slog.Debug("assigner: Best Fit 分配",
+		"pod", pod.Namespace+"/"+pod.Name,
+		"node", bestNode,
+		"remaining", bestRemaining,
+	)
+	return bestNode, nil
 }

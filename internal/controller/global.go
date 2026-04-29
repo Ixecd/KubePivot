@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Ixecd/kubepivot/internal/executor"
+	"github.com/Ixecd/kubepivot/internal/scheduler"
 	"github.com/Ixecd/kubepivot/internal/sharding"
 )
 
@@ -143,6 +144,31 @@ func StartGlobal(ctx context.Context) {
 	go func() {
 		defer wg.Done()
 		runVerifiedTrafficWriter(ctx, gs, shardMgr, totalShards, kubeconfig)
+	}()
+
+	// ── 初始化乾枢调度器（用于 Webhook 实时分配）──
+	kubeAdapter := scheduler.NewKubectlAdapter(kubeconfig)
+	sched := scheduler.NewScheduler(kubeAdapter, kubeAdapter, nil, nil, nil)
+
+	// ── 启动乾枢 Webhook 服务器 ──
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		certFile := "/etc/kubepivot/tls.crt"
+		keyFile := "/etc/kubepivot/tls.key"
+		webhookServer := scheduler.NewWebhookServer(sched, ":443", certFile, keyFile)
+		errCh := webhookServer.Start(ctx)
+		select {
+		case err := <-errCh:
+			if err != nil {
+				slog.Error("Webhook 服务器异常退出", "err", err)
+			}
+		case <-ctx.Done():
+			slog.Info("Webhook 服务器收到退出信号")
+		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		webhookServer.Stop(shutdownCtx)
 	}()
 
 	// ── Leader 选举（仅为 sweeper）──────────────────────────────────────────────
