@@ -1527,6 +1527,32 @@ v3.0 完成时再回头看 KubePivot 的真实定位 + 用户群体，
 依据数据决定。
 ```
 
+## v3.x+ — AI Workload Sizing & Scheduling (预研)
+
+## 核心挑战 (对比 v2.9 通用业务)
+
+| 维度 | 通用业务 (v2.9) | AI 训练 (v3.x) | 设计影响 |
+|------|----------------|---------------|----------|
+| **资源粒度** | CPU: millicores, Mem: bytes | GPU: 整数卡 / MIG 0.1 卡 | 离散化策略需支持混合粒度 |
+| **状态空间** | `dp[c][m]` 2D | `dp[c][m][g]` 3D+ | DP 矩阵膨胀，需稀疏优化 + 剪枝 |
+| **浪费惩罚** | CPU/Mem 权重均衡 | GPU 权重 >> CPU/Mem | cost 函数需动态权重 (profile=training) |
+| **拓扑敏感** | 无 (只看资源够不够) | NVLink/PCIe/RDMA 带宽敏感 | score 函数增加 `topology_bonus` |
+| **调度原子性** | 单 Pod 独立调度 | Gang Scheduling (All-or-Nothing) | 引入 PodGroup + 原子决策 |
+| **资源曲线** | 流量周期性抖动 | 阶段性强波动 (预处理→计算) | business-template: training + 动态 headroom |
+| **失败代价** | 重启秒级恢复 | 训练中断 = 小时级算力浪费 | 显存 OOM 预测 + 提前扩容/迁移 |
+
+## 关键设计点 (已对齐当前架构扩展点)
+
+### 1. 状态空间升维 (2D → 3D)
+```go
+// internal/sizing/dp.go — v3.x 预研
+// 当前: dp[cpuLevel][memLevel]float64
+// 演进: 
+type state3D struct {
+    cpu, mem, gpu int // gpu: 0=无, 1=0.1 卡, 2=0.2 卡... 10=1 整卡 (MIG 粒度)
+}
+// 优化: 稀疏存储 + 剪枝 (GPU 昂贵，只枚举合理组合)
+
 ---
 
 ## 时间线与依赖
