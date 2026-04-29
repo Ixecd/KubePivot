@@ -37,6 +37,7 @@ type deployConfig struct {
 	sizingMode      string // --sizing-mode: auto/manual (默认: manual)
 	sizingProfile   string // --sizing-profile: web/batch/db/default (默认: default)
 	sizingForce     bool   // --sizing-force: 自动应用建议，不等待用户确认
+	prometheusURL   string // --prometheus-url: Prometheus 地址
 }
 
 func runDeploy(args []string) {
@@ -63,6 +64,7 @@ func runDeploy(args []string) {
 	flags.StringVar(&cfg.sizingMode, "sizing-mode", "manual", "资源优化模式: auto (计算建议) / manual (默认)")
 	flags.StringVar(&cfg.sizingProfile, "sizing-profile", "default", "业务模板: web / batch / db / default")
 	flags.BoolVar(&cfg.sizingForce, "sizing-force", false, "自动应用 sizing 建议，不等待 git diff 确认 (慎用)")
+	flags.StringVar(&cfg.prometheusURL, "prometheus-url", "", "Prometheus API base URL (e.g., http://prometheus:9090)")
 
 	envName := flags.String("env", "", "指定部署环境（kp context add 配置）")
 

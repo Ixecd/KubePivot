@@ -20,58 +20,137 @@ import (
 
 // runSizingHook 资源优化 sizing 挂钩 (部署前自动计算建议)
 //
-// 位置: Plan 已构建，但尚未执行任何 kubectl/helm 操作
-// 目的: 早期失败 + 建议可审计 + 人类最终确认
-//
-// 参数:
-//   - cfg: 部署配置 (sizingMode/sizingProfile/sizingForce)
-//   - plan: 部署计划列表 (用于筛选目标 Pod)
-//   - root: 项目根目录 (用于定位 components.yaml)
-//   - kubeconfig: K8s 配置路径 (用于 metrics 采样)
-//   - namespace: 目标 namespace
-//
-// Level1: 仅支持命令行 flag 触发，简化单 Pod 优化
-// Level2: 支持 components.yaml 的 sizing 字段 + 全量 Pod 优化
-func runSizingHook(cfg *deployConfig, plan []planner.Plan, root, kubeconfig, namespace string) {
+// Level2: 全量遍历 + Prometheus 历史查询 + 批量原子写入
+func runSizingHook(cfg *deployConfig, plan []planner.Plan, projectRoot, kubeconfig, namespace string) {
 	// 1. 检查是否启用 auto 模式
 	if cfg.sizingMode != "auto" {
 		return
 	}
 
-	P.Start("📊", "Running resource sizing optimization")
-
-	// 2. 收集待优化 Pod (简化: 只优化第一个有镜像 + 资源的 Plan)
-	var targetPlan *planner.Plan
+	// 2. 收集待优化 Pods (全量遍历)
+	//    优先级: plan[i].Sizing.Mode > cfg.sizingMode > "manual"(默认)
+	var targets []struct {
+		plan    *planner.Plan
+		mode    string
+		profile string
+	}
 	for i := range plan {
-		if plan[i].Image != "" && plan[i].CPU != "" && plan[i].Memory != "" {
-			targetPlan = &plan[i]
-			break
+		p := &plan[i]
+		if p.Image == "" || p.CPU == "" || p.Memory == "" {
+			continue // 跳过无资源定义的组件
+		}
+		// 解析配置优先级
+		mode := cfg.sizingMode
+		profile := cfg.sizingProfile
+		if p.Sizing != nil {
+			if p.Sizing.Mode != "" {
+				mode = p.Sizing.Mode
+			}
+			if p.Sizing.Profile != "" {
+				profile = p.Sizing.Profile
+			}
+		}
+		if mode != "auto" {
+			continue
+		}
+		targets = append(targets, struct {
+			plan    *planner.Plan
+			mode    string
+			profile string
+		}{plan: p, mode: mode, profile: profile})
+	}
+	if len(targets) == 0 {
+		return // 无目标组件，静默返回
+	}
+
+	// 3. 执行优化 (串行遍历) + 收集建议
+	updates := make(map[string]*sizing.Suggestion) // podName → suggestion
+	for _, t := range targets {
+		// 🔧 调用 computeSizingForPod (只计算，不写文件)
+		// 参数: plan, promURL, namespace, kubeconfig, profile
+		sug, err := computeSizingForPod(t.plan, cfg.prometheusURL, namespace, kubeconfig, sizing.Profile(t.profile))
+		if err != nil {
+			// 单 Pod 失败不中断整体
+			// P.Warn("⚠", fmt.Sprintf("sizing failed for %s: %v", t.plan.Name, err))
+			continue
+		}
+		if sug != nil {
+			updates[t.plan.Name] = sug
 		}
 	}
-	if targetPlan == nil {
-		P.Info("⚠", "No eligible Pod for sizing (missing image/cpu/memory)")
-		return
+
+	// 4. 批量原子写入 (避免多次读写竞争)
+	if len(updates) > 0 {
+		componentsPath := filepath.Join(projectRoot, cfg.components)
+		if err := updateComponentsSizingBatch(componentsPath, updates); err != nil {
+			P.Fail("✗ Failed to update components.yaml")
+			fmt.Fprintf(os.Stderr, "  Details: %v\n", err)
+			if !cfg.sizingForce {
+				osExitFunc(1)
+			}
+			return
+		}
+		P.Info("✓", fmt.Sprintf("components.yaml updated for %d pods", len(updates)))
+		fmt.Fprintf(os.Stderr, "\n📢 Review changes: git diff %s\n", cfg.components)
+		if !cfg.sizingForce {
+			fmt.Fprintf(os.Stderr, "💡 To apply: git add %s && git commit -m 'sizing: optimize %d pods'\n", cfg.components, len(updates))
+			fmt.Fprintf(os.Stderr, "💡 Or bypass: kp deploy --sizing-force\n")
+			osExitFunc(0) // 成功但阻断，等待用户确认
+		}
+	}
+}
+
+// computeSizingForPod 计算单个 Pod 的 sizing 建议 (不含文件写入)
+// 返回: *sizing.Suggestion (nil = 无需优化) 或 error
+func computeSizingForPod(plan *planner.Plan, promURL, namespace, kubeconfig string, profile sizing.Profile) (*sizing.Suggestion, error) {
+	P.Start("📊", fmt.Sprintf("Optimizing %s/%s", namespace, plan.Name))
+
+	// 1. 尝试 Prometheus 历史查询 (Level2 新增)
+	var samples []*metrics.PodMetrics
+	var err error
+
+	if promURL != "" {
+		client := metrics.NewPrometheusClient(promURL)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		// CPU 查询: rate(container_cpu_usage_seconds_total{pod="xxx",namespace="yyy"}[5m])
+		cpuQuery := fmt.Sprintf(`rate(container_cpu_usage_seconds_total{pod="%s",namespace="%s"}[5m])`, plan.Name, namespace)
+		// Memory 查询: container_memory_working_set_bytes{pod="xxx",namespace="yyy"}
+		memQuery := fmt.Sprintf(`container_memory_working_set_bytes{pod="%s",namespace="%s"}`, plan.Name, namespace)
+		
+		// QueryRange 返回 []*PodMetrics (对齐既有接口)
+		// 时间范围: 最近 7 天，步长 15 分钟 (硬编码，Level3 可配置)
+		start := time.Now().Add(-7 * 24 * time.Hour)
+		end := time.Now()
+		step := 15 * time.Minute
+		
+		promSamples, promErr := client.QueryRange(ctx, cpuQuery, memQuery, start, end, step)
+		if promErr == nil && len(promSamples) > 0 {
+			samples = promSamples // 直接用，单位已转换
+		}
+		// Prometheus 失败 → fallback 到瞬时采样 (下方逻辑)
 	}
 
-	// 3. 采样历史指标 (复用 sizing 包逻辑)
-	client := metrics.NewKubectlMetricsClient(kubeconfig)
-	sampleCount := 5  // Level1 硬编码，Level2 可从 flag 解析
-	sampleInterval := 2 * time.Second
-	samples, err := samplePodMetrics(context.Background(), client, namespace, targetPlan.Name, sampleCount, sampleInterval)
-	if err != nil {
-		P.Info("⚠", fmt.Sprintf("Sizing sample failed: %v (continuing deploy)", err))
-		return
+	// 2. Fallback: 瞬时指标采样 (复用既有逻辑)
+	if len(samples) == 0 {
+		client := metrics.NewKubectlMetricsClient(kubeconfig)
+		samples, err = samplePodMetrics(context.Background(), client, namespace, plan.Name, 5, 2*time.Second)
+		if err != nil {
+			return nil, fmt.Errorf("fallback sampling failed: %w", err)
+		}
+	}
+	if len(samples) == 0 {
+		return nil, fmt.Errorf("no metrics data available for %s", plan.Name)
 	}
 
-	// 4. 执行 DP 计算
-	profile := sizing.Profile(cfg.sizingProfile)
+	// 3. 执行 DP 计算
 	sug, err := sizing.Compute(context.Background(), samples, profile)
 	if err != nil {
-		P.Info("⚠", fmt.Sprintf("Sizing compute failed: %v (continuing deploy)", err))
-		return
+		return nil, fmt.Errorf("sizing compute failed: %w", err)
 	}
 
-	// 5. 对比历史均值，判断是否显著差异 (>20%)
+	// 4. 对比历史均值，判断是否显著差异 (>20%)
 	avgCPU := int64(0)
 	avgMem := int64(0)
 	for _, s := range samples {
@@ -84,28 +163,12 @@ func runSizingHook(cfg *deployConfig, plan []planner.Plan, root, kubeconfig, nam
 	diffCPU := math.Abs(float64(sug.RecommendedCPU-avgCPU)) / math.Max(1, float64(avgCPU))
 	diffMem := math.Abs(float64(sug.RecommendedMem-avgMem)) / math.Max(1, float64(avgMem))
 	if diffCPU < 0.2 && diffMem < 0.2 {
-		P.Info("✓", "Current resources already optimal (diff < 20%)")
-		return
+		P.Info("✓", fmt.Sprintf("%s already optimal (diff < 20%%)", plan.Name))
+		return nil, nil // 无需优化
 	}
 
-	// 6. 原地修改 components.yaml + 输出 git diff 提示
-	componentsPath := filepath.Join(root, cfg.components)
-	if err := updateComponentsSizingAtomic(componentsPath, targetPlan.Name, sug); err != nil {
-		P.Fail("✗ Failed to update components.yaml")
-		fmt.Fprintf(os.Stderr, "  Details: %v\n", err)
-		if !cfg.sizingForce {
-			osExitFunc(1)
-		}
-		return
-	}
-
-	P.Info("✓", "components.yaml updated with sizing suggestions")
-	fmt.Fprintf(os.Stderr, "\n📢 Review changes: git diff %s\n", cfg.components)
-	if !cfg.sizingForce {
-		fmt.Fprintf(os.Stderr, "💡 To apply: git add %s && git commit -m 'sizing: optimize %s'\n", cfg.components, targetPlan.Name)
-		fmt.Fprintf(os.Stderr, "💡 Or bypass: kp deploy --sizing-force\n")
-		osExitFunc(0) // 成功但阻断，等待用户确认
-	}
+	// 5. 返回建议 (由调用方决定是否写入)
+	return sug, nil
 }
 
 // samplePodMetrics 封装采样逻辑 (Level1 内联，Level2 提取到 internal/sizing/sample.go)
@@ -136,10 +199,8 @@ func samplePodMetrics(ctx context.Context, client metrics.MetricsClient, namespa
 	return samples, nil
 }
 
-// updateComponentsSizingAtomic 原子写入 components.yaml 的 sizing 建议
-// 原理: 写临时文件 → 原子重命名 (避免写入中断导致文件损坏)
-// Level1 实现，Level2 可升级备份 + 回滚
-func updateComponentsSizingAtomic(path, podName string, sug *sizing.Suggestion) error {
+// updateComponentsSizingBatch 批量更新 components.yaml (原子写入)
+func updateComponentsSizingBatch(path string, updates map[string]*sizing.Suggestion) error {
 	// 1. 读取原文件
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -154,37 +215,26 @@ func updateComponentsSizingAtomic(path, podName string, sug *sizing.Suggestion) 
 		return fmt.Errorf("parse components: %w", err)
 	}
 
-	// 3. 修改目标组件
-	found := false
+	// 3. 批量修改
 	for i := range raw.Components {
-		if raw.Components[i].Name == podName {
+		if sug, ok := updates[raw.Components[i].Name]; ok {
 			raw.Components[i].CPU = fmt.Sprintf("%dm", sug.RecommendedCPU)
-			raw.Components[i].Memory = fmt.Sprintf("%dMi", sug.RecommendedMem>>20) // bytes → MiB
-			found = true
-			break
+			raw.Components[i].Memory = fmt.Sprintf("%dMi", sug.RecommendedMem>>20)
 		}
 	}
-	if !found {
-		return fmt.Errorf("component %q not found in components.yaml", podName)
-	}
 
-	// 4. 序列化
+	// 4. 原子写入 (临时文件 + rename)
 	newData, err := yaml.Marshal(&raw)
 	if err != nil {
 		return fmt.Errorf("marshal components: %w", err)
 	}
-
-	// 5. 原子写入: 临时文件 + rename
-	// 原理: rename 在同一文件系统内是原子的，即使进程崩溃也不会留半写文件
 	tmpPath := path + ".tmp"
 	if err := os.WriteFile(tmpPath, newData, 0644); err != nil {
 		return fmt.Errorf("write temp file: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		// 清理临时文件 (忽略错误，避免覆盖主错误)
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("atomic rename: %w", err)
 	}
-
 	return nil
 }

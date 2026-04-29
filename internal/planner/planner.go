@@ -65,6 +65,7 @@ type Plan struct {
 	APIVersion  string
 	Namespace   string
 	CrossNsDeps []string
+	Sizing *SizingConfig `yaml:"-" json:"-"` // 不序列化，仅内存传递
 }
 
 // Layer 拓扑排序后的一层（同层可并行部署）
@@ -200,6 +201,7 @@ func BuildLayers(path string) ([]Layer, error) {
 			APIVersion:  c.APIVersion,
 			Namespace:   c.Namespace,
 			CrossNsDeps: c.CrossNsDeps,
+			Sizing:      c.Sizing,
 		}
 	}
 

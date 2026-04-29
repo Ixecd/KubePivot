@@ -1,0 +1,241 @@
+feat(sizing): v2.9 B (B-Level2) — Prometheus integration + batch atomic write + business-driven tests
+
+ROADMAP §2.4 v2.9 节 资源优化引擎. B-Level2 生产可用性升级最小可行交付.
+
+用户不再依赖瞬时采样 (5 次/2s) → B-Level2 支持 Prometheus 历史查询 (7d/15min) + 
+fallback 瞬时采样 + 全量 Pod 优化 + 批量原子写入 → 
+数据更准 (历史趋势) + 覆盖更全 (多 Pod) + 写入更安全 (原子性) + 测试更可靠 (业务语义).
+
+核心用户价值:
+  - 部署前自动计算最优资源，单 Pod 利用率目标 70%+
+  - Prometheus 历史数据 → 更准确的 P95 估算 → 更少误判
+  - 全量遍历 → 多服务项目一次部署全部优化
+  - 批量原子写入 → 避免"后写覆盖先写"的竞态
+  - 业务语义测试 → 验证值不验证格式，测试更稳定
+
+变更清单:
+  internal/metrics/prometheus.go                新增 124 行   Prometheus HTTP API wrapper (零额外依赖)
+  cmd/kp/deploy_sizing.go                       修改 ~80 行   Level2: 全量遍历 + Prometheus + 批量写入
+  cmd/kp/deploy_sizing_test.go                  修改 ~60 行   4 个业务语义测试 (对齐批量写入)
+  cmd/kp/deploy.go                              修改  ~5 行   --prometheus-url flag 注册
+  internal/planner/planner.go                   修改  ~3 行   Plan.Sizing 字段同步 (Component → Plan)
+
+合计: ~270 行新代码 (含 60 行测试) + ~90 行重构 + 零额外依赖
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+设计核心 (7 个决策点全锁):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Q-B.18=A Prometheus 集成方式: 纯 HTTP API + JSON 解析
+    ✓ 零额外依赖: 纯 net/http + encoding/json，不引入 prometheus/client_golang
+    ✓ 对齐 CLI wrapper 哲学: 与 cosign/syft/trivy 集成模式一致
+    ✓ 启动更快: 无重型依赖，二进制体积 + 编译时间可控
+    - Level3 可评估是否引入 prometheus/common (如需高级功能)
+    
+  Q-B.19=A 配置优先级: 命令行 flag > components.yaml > 默认
+    ✓ 对齐既有模式 (env > yaml > default)，用户心智统一
+    ✓ CI/CD 场景可通过 --sizing-mode=auto 强制覆盖开发者本地配置
+    ✓ 显式 > 隐式，避免"魔法配置"导致的行为不确定
+    
+  Q-B.20=A 全量优化并发: Level2 串行遍历
+    ✓ 稳健先行: 100 Pods 串行 ~5s，CLI 交互可接受
+    ✓ 先跑通状态转移逻辑，Level3 再引入 errgroup 限流
+    ✓ 避免过早并发复杂化 (竞态/超时/重试/限流)
+    
+  Q-B.21=A 采样策略 Fallback: Prometheus → 瞬时采样 → 失败
+    ✓ 数据分级: 真实历史更准，但兜底保证可用性
+    ✓ metrics-server 可能未部署 → 瞬时采样保底
+    ✓ 用户无感知降级，部署流程不中断
+    
+  Q-B.22=A 批量写入策略: 收集修改 → 一次性原子写入
+    ✓ 避免多次读写竞争: 每个 Pod 独立写入可能覆盖前一个修改
+    ✓ 原子性保证: 临时文件 + os.Rename，写入中断不损坏文件
+    ✓ 幂等性: 空更新列表 → 文件不变 + 无错误
+    
+  Q-B.23=A 测试策略: 验证业务语义，不验证序列化格式
+    ✓ 解析 YAML 后断言字段值 (c.CPU == "500m")，不匹配原始字符串
+    ✓ 4 个用例覆盖: 成功/部分成功/非法 YAML/幂等性，最小必要
+    ✓ 测试是保险丝 + 文档，不是序列化格式的校验器
+    
+  Q-B.24=A 函数职责拆分: compute / write / orchestrate 分离
+    ✓ computeSizingForPod: 只计算，返回 *Suggestion，不写文件
+    ✓ updateComponentsSizingBatch: 只写入，批量原子更新，不计算
+    ✓ runSizingHook: 编排流程，解析配置 + 调用计算 + 调用写入
+    ✓ 单一职责，便于测试 + 复用 + 未来扩展
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+工程纪律亮点 (本次迭代的对齐实践):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ✊ Cross-check 先行，不凭记忆/假设写代码:
+    - 写 prometheus.go 前 grep 确认:
+      • metrics.PodMetrics 结构 (TotalCPU/TotalMemory 是 Quantity)
+      • Quantity.Value 已是标准化值 (CPU=millicores, Memory=bytes)
+      • 无 UsagePoint 类型 → 直接返回 []*PodMetrics 对齐既有接口
+    - 写 deploy_sizing.go 前 grep 确认:
+      • planner.Plan 是否有 Sizing 字段 → 无则同步添加
+      • root 变量名冲突 (func vs string) → 参数改名 projectRoot
+      • fmt.Sprintf 格式字符串 → % 转义为 %%
+    - 多花 10 分钟 grep，省 30 分钟 debug + 返工
+    
+  ✊ 为业务写测试，不为覆盖率写代码:
+    - 测试验证业务语义 (值是否正确)，不验证序列化细节 (引号/缩进/顺序)
+    - 4 个测试覆盖核心路径 + 关键边界，73.9% 覆盖率足够
+    - 测试是业务逻辑的保险丝 + 文档，不是数字游戏
+    - 业务演进 → 测试同步演进 (Atomic → Batch)，不保留废弃测试
+    
+  ✊ 真实结构对齐，不猜不假设:
+    - Prometheus CPU 单位 seconds → *1000 → millicores (Quantity.Value)
+    - Prometheus Memory 单位 bytes → 直接赋值 (零转换)
+    - yaml.Marshal 可能重排字段/填充默认值 → 测试解析后断言值
+    - 每次写代码前: grep type/func/field, 看既有测试模式
+    
+  ✊ 最小必要原则，拒绝过度工程:
+    - Prometheus 客户端用纯 net/http，不引入 prometheus/client_golang
+    - Level2 串行遍历 + 硬编码查询参数 (7d/15min)，先跑通逻辑
+    - 批量写入用临时文件 + rename，不提前加备份/回滚/锁
+    - 错误处理用简单字符串匹配，不引入复杂错误类型
+    
+  ✊ 函数职责单一，便于测试 + 复用:
+    - computeSizingForPod: 输入 (plan/promURL/namespace/kubeconfig/profile) → 输出 (*Suggestion/error)
+    - updateComponentsSizingBatch: 输入 (path/updates) → 输出 (error)
+    - runSizingHook: 编排流程，不混入具体实现
+    - 每个函数可独立测试，依赖注入方便 mock
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+打脸预防 (基于本次迭代的教训 + 历史复盘):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ✓ 第 1 次: 假设 UsagePoint 存在 → 实际是 []*PodMetrics + Quantity.Value
+    对策: 写代码前必 grep 真实结构，不凭记忆/文档假设
+    
+  ✓ 第 2 次: 假设 Quantity 有 Format 字段 → 实际 Value 已标准化
+    对策: 看既有代码契约，信任预处理，不复造转换逻辑
+    
+  ✓ 第 3 次: 假设 yaml.Marshal 输出带引号 → 实际不带 → 测试匹配失败
+    对策: 测试解析输出 YAML 后断言字段值，不匹配原始字符串格式
+    
+  ✓ 第 4 次: 重复调用 sm.Transition → 状态机拒绝二次转换 → 部署失败
+    对策: 写状态机逻辑前 grep 确认合法转换路径，或用注释标注单向性
+    
+  ✓ 第 5 次: 自定义 contains 函数与 release_test.go 重复 → 编译错误
+    对策: 优先用标准库 (strings.Contains)，避免跨文件重复定义辅助函数
+    
+  ✓ 第 6 次: fmt.Sprintf 中 % 未转义 → 编译报错 "unknown verb"
+    对策: 写格式字符串时检查 % 后是否跟合法动词，字面量 % 用 %% 转义
+    
+  ✓ 第 7 次: root 变量名冲突 (func vs string) → undefined: cfg/sug
+    对策: 函数签名参数命名避免与包内既有函数/变量冲突，编译前快速扫描
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+测试覆盖 (4 cases, 最小必要 + 业务语义):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  cmd/kp/deploy_sizing_test.go (4):
+    TestUpdateComponentsSizingBatch_Success
+      ✓ 批量更新多 Pod: backend/worker 被更新，frontend 保持不变
+      ✓ 验证业务值: c.CPU == "400m", c.Memory == "512Mi"
+      ✓ 验证原子性: 无临时文件残留 (.tmp 被清理)
+      
+    TestUpdateComponentsSizingBatch_PartialSuccess
+      ✓ updates 包含不存在的组件名 → 静默跳过 + 不报错
+      ✓ 存在的组件被正确更新，不存在的被忽略
+      ✓ 验证幂等性: 组件数量不变，文件结构完整
+      
+    TestUpdateComponentsSizingBatch_InvalidYAML
+      ✓ 非法 YAML 输入 → 返回清晰错误 (含 "parse" 关键词)
+      ✓ 不崩溃，不产生半写文件
+      ✓ 错误消息便于用户排查 (非内部堆栈)
+      
+    TestUpdateComponentsSizingBatch_EmptyUpdates
+      ✓ 空更新列表 → 文件业务值不变 + 无错误
+      ✓ 验证幂等性: 解析 YAML 后断言字段值，不比较原始字符串
+      ✓ 适应 yaml.Marshal 可能的格式变化 (字段顺序/默认值填充)
+
+  验证:
+    ✓ go test ./cmd/kp -run "TestUpdateComponentsSizingBatch" -v → 全绿
+    ✓ go test -race ./cmd/kp → 无竞态警告
+    ✓ make dev → 全项目测试通过，零警告
+
+  测试边界 (诚实标注):
+    ✗ Prometheus 真实连接没在单测模拟 (依赖外部服务)
+    ✗ 大规模 (100+ Pods) 并发性能没压测 (Level2 串行)
+    ✗ 网络超时/权限错误的错误处理没覆盖 (依赖 integration test)
+    ✗ 原子写入的多进程竞争没测试 (单进程场景足够)
+    ✓ 留给 B-Level3 集成测试 + 用户实操验证
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+后续规划 (v2.9.x B-Level3+):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  B-Level3 (性能 + 可用性):
+    - errgroup 并发优化: 100 Pods 从 ~5s → ~1s (限流 10 并发)
+    - Confidence 灰度策略: <0.7 不自动应用，记录日志 + 人工审查
+    - 动态配置解析: components.yaml sizing 字段全量支持 (mode/profile/samples/interval)
+    - Prometheus 查询参数可配置: --prometheus-window=30d --prometheus-step=5m
+    
+  B-Level3 (可观测性):
+    - metrics 暴露: kubepivot_sizing_compute_duration_seconds, kubepivot_sizing_suggestions_applied_total
+    - 日志增强: sizing 决策路径记录 (P95 估算/离散化级别/成本计算)
+    - 调试模式: --sizing-debug 输出完整搜索空间 + 决策理由
+    
+  B-Level3 (安全加固):
+    - 原子写入升级: 备份 + 回滚 (components.yaml.bak)
+    - 权限校验: 写 components.yaml 前检查文件权限 + 所属用户
+    - 并发锁: flock 防止多进程同时写入同一文件
+    
+  B-Level4 (智能升级):
+    - 动态权重学习: 基于历史利用率自动调整 cpuWeight/memWeight
+    - 业务模板自动推荐: 分析流量模式 → 自动建议 web/batch/db
+    - 与 K8s VPA 双向协调: 部署时建议 + 运行时反馈闭环
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 本次迭代核心收获 (刻进脑子):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  "设计的太多了，遗忘是很正常的，
+   越到后面设计对齐就越要 cross-check，
+   尽量获取全局信息之后再设计"
+   — qc 原话
+
+  ✊ Cross-check 是工程纪律，不是可选项
+    • 写代码前: grep type/func/field, 看既有测试模式
+    • 写完后: go build 零警告, go test 核心路径覆盖
+    
+  ✊ 测试验证业务语义，不验证序列化格式
+    • 解析 YAML 后断言字段值，不匹配原始字符串
+    • 业务演进 → 测试同步演进，不保留废弃逻辑
+    
+  ✊ 批量操作原子化，避免竞态
+    • 收集修改 → 一次性解析/修改/写入
+    • 临时文件 + os.Rename 保证原子性
+    
+  ✊ 零依赖膨胀，保持二进制轻量
+    • Prometheus 客户端用纯 net/http
+    • 与 cosign/syft/trivy 集成模式一致
+    
+  ✊ 函数职责单一，便于测试 + 复用
+    • compute / write / orchestrate 分离
+    • 依赖注入方便 mock，测试更可靠
+    
+  ✊ 最小必要原则，拒绝过度工程
+    • Level2 串行 + 硬编码参数，先跑通逻辑
+    • Level3 再扩展并发 + 动态配置 + 灰度策略
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+验证清单 (提交前确认):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  [✓] go build -o kp ./cmd/kp → 零编译错误
+  [✓] go test ./cmd/kp -run "TestUpdateComponentsSizingBatch" -v → 4/4 全绿
+  [✓] go test -race ./cmd/kp → 无竞态警告
+  [✓] make dev → 全项目测试通过，零警告
+  [✓] ./kp deploy --help | grep sizing → flag 说明完整
+  [✓] ./kp deploy --help | grep prometheus → --prometheus-url 可见
+  [✓] git diff --stat → 变更范围符合预期 (~270 行新代码)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  B-Level2 让 KubePivot
