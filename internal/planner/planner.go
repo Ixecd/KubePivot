@@ -55,6 +55,12 @@ type SizingConfig struct {
 	// Threshold: 置信度阈值，默认 0.7
 	// 范围: 0.0-1.0, 低于此值不自动应用建议
 	Threshold *float64 `yaml:"threshold,omitempty" json:"threshold,omitempty"`
+	// AutoProfile: 是否自动推荐业务模板 (基于资源使用模式分析)
+	// 默认: false (保持向后兼容，用户需显式开启)
+	AutoProfile *bool `yaml:"auto_profile,omitempty" json:"auto_profile,omitempty"`
+	// WeightLearning: 是否启用自适应权重学习 (基于历史利用率 CV)
+	// 默认: false (保持向后兼容)
+	WeightLearning *bool `yaml:"weight_learning,omitempty" json:"weight_learning,omitempty"`
 }
 
 // Plan 单个组件的部署计划

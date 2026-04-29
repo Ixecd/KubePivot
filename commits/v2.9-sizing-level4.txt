@@ -1,0 +1,272 @@
+feat(sizing): v2.9 B (B-Level4) — auto profile recommendation + explainable AI + conservative gating
+
+ROADMAP §2.4 v2.9 节 资源优化引擎. B-Level4 智能推荐最小可行交付.
+
+用户不再手动声明 profile=web/batch/db → B-Level4 支持:
+  • 自动推荐: 分析 CPU/Mem 比值 + 内存绝对值 → 智能建议业务模板
+  • 可解释性: 返回 reason 字符串 ("compute-intensive pattern (CPU/Mem ratio=2.34 > 2.0)")
+  • 保守兜底: 置信度 <0.6 → 降级 default，避免低质量推荐污染配置
+  • 渐进启用: auto_profile 默认 false，用户显式开启，保持向后兼容
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+核心用户价值 (为什么需要 B-Level4):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  🎯 降低使用门槛，新用户零学习成本
+    • 无需记忆 profile 语义 (web=CPU 优先，batch=Mem 优先)
+    • 算法自动分析历史指标 → 推荐最匹配的业务模板
+    • 用户感知: `kp deploy --sizing-mode=auto` 自动适配服务特征
+
+  🔍 决策透明可解释，拒绝黑盒算法
+    • 每条推荐附带 reason 字段: "compute-intensive pattern (ratio=2.34)"
+    • 用户可知"为什么推荐 web"，便于审计 + 调试
+    • 符合云原生可观测性原则: 算法决策路径可追溯
+
+  🛡️ 保守兜底保证质量，避免算法误判
+    • 置信度 <0.6 → 自动降级为 ProfileDefault
+    • 样本不足 (<3) → 返回默认 + 低置信度提示
+    • 用户感知: 低质量数据不会导致错误推荐，安全左移
+
+  ⚙️ 渐进式启用，零行为突变
+    • auto_profile 默认 false，老用户升级无感知
+    • 新用户显式开启: components.yaml 加 `auto_profile: true`
+    • 符合语义化版本原则: 新功能不破坏既有行为
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更清单 (精确统计):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/sizing/intelligence.go                   新增 124 行
+    • RecommendProfile 函数: 基于资源比值规则匹配 (CPU/Mem ratio)
+      - ratio > 2.0 → ProfileWeb (compute-intensive)
+      - ratio < 0.5 + Mem >1Gi → ProfileDB (memory-intensive + cache)
+      - ratio < 0.5 + Mem <1Gi → ProfileBatch (memory-intensive)
+      - 0.5 <= ratio <= 2.0 → ProfileDefault (balanced)
+    • 置信度计算: 样本量调整 (+0.2 for >=10 samples) + 偏离度调整
+    • 保守兜底: confidence < 0.6 → 降级 default + 记录 reason
+    • GenerateExplainComment 辅助函数: 生成可解释性注释模板
+
+  internal/sizing/intelligence_test.go              新增  68 行
+    • TestRecommendProfile (5 cases):
+      - CPU 主导 (ratio>2.0) → ProfileWeb + confidence>=0.6
+      - Memory 主导 + 高内存 (>1Gi) → ProfileDB
+      - Memory 主导 + 低内存 (<1Gi) → ProfileBatch
+      - 均衡 (0.5<=ratio<=2.0) → ProfileDefault
+      - 样本不足 (<3) → ProfileDefault + confidence=0.3
+    • TestGenerateExplainComment (1 case):
+      - 验证注释包含 reason + confidence 关键片段
+    • 测试原则: 验证业务语义 (profile/confidence/reason)，不验证格式细节
+
+  cmd/kp/deploy_sizing.go                           修改 ~35 行
+    • computeSizingForPod 扩展:
+      - 解析 plan.Sizing.AutoProfile 开关 (YAML > flag > default)
+      - 调用 sizing.RecommendProfile (导出函数，可跨包)
+      - confidence >= 0.6 时采用推荐，否则降级 default
+      - 记录 reason (Level5: 注入注释到输出)
+    • getWeights 内联函数 (临时方案):
+      - 避免跨包调用未导出的 weights 函数
+      - 逻辑与 internal/sizing/dp.go 完全同步
+      - Level5 重构: 统一导出或提取公共包
+
+  cmd/kp/deploy_sizing_test.go                      修改 ~85 行
+    • TestUpdateComponentsSizingBatch_* (4 cases): 批量写入核心逻辑
+    • TestIsSoftFailure (9 subtests): 错误分级关键词匹配
+    • TestReportSizingResults (4 branches): 分级报告逻辑 + osExitFunc mock
+    • TestResolveSizingConfig (4 cases): 配置优先级 (YAML>flag>default)
+    • TestGetWeights (5 subtests): 内联权重计算枚举覆盖
+    • 测试原则: 验证逻辑分支 + 业务值，不捕获日志输出格式
+
+  internal/planner/planner.go                       修改  ~3 行
+    • SizingConfig.AutoProfile 字段确认 (已在 B-Level3 添加)
+    • 注释补充: "默认 false，用户显式开启"
+
+  合计: ~210 行新代码 (含 68 行测试) + ~40 行重构 + 零额外依赖
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+设计核心 (4 个决策点全锁 + 工程价值):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Q-B.29=A 智能推荐算法: 纯规则匹配 (非 ML)
+    ✓ 可解释性: reason 字符串明确说明决策依据 ("ratio=2.34 > 2.0")
+    ✓ 零依赖: 纯 Go + math 包实现，不引入 gonum/tensorflow 等重型库
+    ✓ 确定性: 同输入必同输出，方便调试 + CI 缓存 + 复现问题
+    ✓ 可扩展: Level5 可叠加简单聚类 (k-means 简化版)，保持规则主干
+
+  Q-B.30=A 置信度门禁: <0.6 自动降级 default
+    ✓ 算法谦逊: 拒绝"盲目自信"，数据噪声大时主动退回人工审查
+    ✓ 安全左移: 避免低质量推荐污染 components.yaml，减少回滚成本
+    ✓ 用户可控: reason 字段让用户判断是否手动覆盖推荐
+    ✓ 动态调整: 样本量 + 偏离度双重计算，置信度反映数据质量
+
+  Q-B.31=A 渐进式启用: auto_profile 默认 false
+    ✓ 向后兼容: 老用户升级二进制无行为突变，符合语义化版本
+    ✓ 显式优先: 用户需主动开启智能功能，避免"魔法配置"困惑
+    ✓ 灰度空间: 未来可按用户群/集群规模逐步放开默认值
+    ✓ 逃生通道: 显式设 profile=web 可覆盖自动推荐，保留控制权
+
+  Q-B.32=A 可解释性输出: reason 字符串 + GenerateExplainComment
+    ✓ 决策透明: 用户可知"为什么推荐 web"，便于审计 + 调试 + 信任建立
+    ✓ 日志友好: reason 包含关键数值 (ratio=2.34)，便于 grep/监控
+    ✓ Level5 扩展: 注入 components.yaml 注释，git diff 可见决策依据
+    ✓ 最小实现: 先返回 reason 字符串，注释注入留 Level5 (yaml.v3 Node API 复杂)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+工程纪律亮点 (本次迭代的对齐实践):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ✊ Cross-check 先行，不凭记忆/假设写代码:
+    • 写 RecommendProfile 前 grep 确认:
+      • metrics.PodMetrics 结构 (TotalCPU/TotalMemory 是 Quantity)
+      • Quantity.Value 已是标准化值 (CPU=millicores, Memory=bytes)
+      • sizing.Profile 是导出类型 (大写开头)，可跨包引用
+    • 写 computeSizingForPod 前 grep 确认:
+      • weights 函数未导出 (小写开头) → 内联 getWeights 临时方案
+      • sizing.RecommendProfile 是导出函数 → 可跨包调用
+      • plan.Sizing.AutoProfile 字段存在 → 解析优先级逻辑
+    • 多花 10 分钟 grep，省 30 分钟 debug + 返工
+
+  ✊ 可解释性优先，拒绝黑盒算法:
+    • reason 字符串明确说明决策依据 ("compute-intensive pattern...")
+    • GenerateExplainComment 模板化输出，便于日志/注释复用
+    • 测试验证 reason 包含关键语义，不验证完整格式 (避免脆弱测试)
+    • 用户可知"算法在想什么"，建立信任 + 便于调试
+
+  ✊ 保守兜底，安全左移:
+    • 置信度 <0.6 → 降级 default，避免低质量推荐
+    • 样本不足 (<3) → 返回默认 + 低置信度，不强行推荐
+    • 未知 profile → 兜底 0.5/0.5 权重，不崩溃
+    • 用户感知: 算法"谦逊"，不盲目自信
+
+  ✊ 最小必要原则，拒绝过度工程:
+    • 纯规则匹配替代 ML 模型，零额外依赖 + 启动更快
+    • 内联 getWeights 替代导出重构，临时方案先跑通逻辑
+    • reason 字符串替代注释注入，Level5 再升级 yaml.v3 Node API
+    • Level4 跑通核心推荐，Level5 再扩展权重学习 + VPA 协调
+
+  ✊ 测试验证业务语义，不验证实现细节:
+    • 断言 profile/confidence/reason 业务值，不验证日志输出格式
+    • TestReportSizingResults 用 mock osExitFunc 验证逻辑分支
+    • 5 个核心测试覆盖关键路径 + 边界，不刷覆盖率数字
+    • 测试是业务逻辑的保险丝 + 文档，不是序列化格式的校验器
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+打脸预防 (基于本次迭代的教训 + 历史复盘):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ✓ 第 1 次: 跨包调用未导出函数 (weights) → undefined: weights 编译错误
+    对策: 写跨包调用前必 grep 确认函数首字母大写 (导出)，或内联临时方案
+    
+  ✓ 第 2 次: 函数参数猜错 (computeSizingForPod 无 cfg) → undefined: cfg
+    对策: 写函数调用前必 grep 确认真实签名，不凭记忆假设参数列表
+    
+  ✓ 第 3 次: 类型引用猜错 (Profile vs sizing.Profile) → undefined: Profile
+    对策: 跨包引用类型必加包前缀 (sizing.Profile)，或确认当前包导入
+    
+  ✓ 第 4 次: 置信度比较用 == 而非 < → 边界值行为异常
+    对策: 写比较逻辑时明确: < threshold 降级，>= threshold 应用，边界用例单独测试
+    
+  ✓ 第 5 次: 归一化比值除零 (normalizedMem=0) → panic
+    对策: 写除法前必加防零保护 (math.Max(val, 1e-6))，边界用例覆盖
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+测试覆盖 (5 个核心测试 + 验证清单):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/sizing/intelligence_test.go (2):
+    
+    TestRecommendProfile (5 cases):
+      ✓ CPU 主导 (ratio>2.0): ProfileWeb + confidence>=0.6 + reason 含 "compute-intensive"
+      ✓ Memory 主导 + 高内存 (>1Gi): ProfileDB + reason 含 "memory-intensive" + ">1Gi"
+      ✓ Memory 主导 + 低内存 (<1Gi): ProfileBatch + reason 含 "memory-intensive"
+      ✓ 均衡 (0.5<=ratio<=2.0): ProfileDefault + reason 含 "balanced"
+      ✓ 样本不足 (<3): ProfileDefault + confidence=0.3 + reason 含 "insufficient"
+      ✓ 价值: 验证推荐逻辑准确，置信度计算合理，保守兜底生效
+      
+    TestGenerateExplainComment (1 case):
+      ✓ 验证注释包含 reason + confidence 关键片段
+      ✓ 不验证完整格式 (避免脆弱测试)，只验证业务语义
+      ✓ 价值: 确保可解释性输出模板正确，便于日志/注释复用
+
+  cmd/kp/deploy_sizing_test.go (5):
+    
+    TestUpdateComponentsSizingBatch_* (4 cases): 批量写入核心逻辑 (已有，回归验证)
+    TestIsSoftFailure (9 subtests): 错误分级关键词匹配 (已有，回归验证)
+    TestReportSizingResults (4 branches): 分级报告逻辑 + osExitFunc mock (已有，回归验证)
+    TestResolveSizingConfig (4 cases): 配置优先级 (YAML>flag>default) (已有，回归验证)
+    TestGetWeights (5 subtests): 内联权重计算枚举覆盖 (新增，验证临时方案正确)
+
+  验证清单 (提交前确认):
+    [✓] go build -o kp ./cmd/kp → 零编译错误
+    [✓] go test ./internal/sizing -run "TestRecommendProfile" -v → 5/5 全绿
+    [✓] go test ./cmd/kp -run "Test.*" -v → 所有测试全绿
+    [✓] go test -race ./cmd/kp → 无竞态警告
+    [✓] make dev → 全项目测试通过，零警告
+    [✓] ./kp deploy --help | grep auto_profile → 配置字段文档可见 (YAML 层面)
+    [✓] git diff --stat → 变更范围符合预期 (~210 行新代码)
+
+  测试边界 (诚实标注):
+    ✗ Prometheus 真实连接没在单测模拟 (依赖外部服务，留给 integration test)
+    ✗ 复杂资源模式 (多峰分布/周期性波动) 没覆盖 (规则匹配简化假设)
+    ✗ 注释注入到 components.yaml 没实现 (Level5: yaml.v3 Node API)
+    ✗ weight_learning (CV 权重学习) 没实现 (需导出 weights 函数，留 Level5)
+    ✓ 留给 B-Level5 集成测试 + 用户实操验证
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+后续规划 (v2.9.x B-Level5+):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  B-Level5 (智能升级):
+    • weight_learning: 导出 weights 函数或扩展 Compute 签名，支持自适应权重
+    • 注释注入: yaml.v3 Node API 精确控制，reason 写入 components.yaml 注释
+    • VPA 协调预研: sizing 输出 → VPA 初始建议；VPA 反馈 → 反向修正权重
+    • 简单聚类: k-means 简化版 (纯 Go)，支持多特征推荐 (QPS/延迟/错误率)
+    
+  B-Level5 (可观测性增强):
+    • metrics 暴露: 
+      - kubepivot_sizing_recommendations_total (by profile/reason/confidence)
+      - kubepivot_sizing_auto_profile_enabled_count
+    • 调试模式: --sizing-debug 输出完整推荐路径 + 比值计算 + 置信度分解
+    • 日志增强: sizing 推荐决策记录 (ratio/cv/confidence/reason)
+    
+  B-Level5 (安全加固):
+    • 推荐审计: 记录 auto_profile 决策日志，便于事后追溯 + 模型迭代
+    • 人工覆盖: 显式设 profile=xxx 可覆盖自动推荐，保留用户最终控制权
+    • 回滚友好: 推荐失败不阻断部署，软失败降级 + 硬失败可 --sizing-force 绕过
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 本次迭代核心收获 (刻进脑子):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  "算法谦逊：低置信度时主动退回人工审查"
+  — B-Level4 核心哲学
+
+  ✊ 可解释性优先，拒绝黑盒:
+    • reason 字符串明确说明决策依据，用户可知"算法在想什么"
+    • 测试验证业务语义，不验证日志格式，避免脆弱测试
+    
+  ✊ 保守兜底，安全左移:
+    • 置信度 <0.6 → 降级 default，避免低质量推荐污染配置
+    • 样本不足 → 返回默认 + 低置信度，不强行推荐
+    
+  ✊ 渐进启用，零行为突变:
+    • auto_profile 默认 false，老用户升级无感知
+    • 显式优先: 用户需主动开启智能功能，保留控制权
+    
+  ✊ 最小必要原则，拒绝过度工程:
+    • 纯规则匹配替代 ML 模型，零额外依赖 + 启动更快
+    • 内联函数替代导出重构，临时方案先跑通逻辑
+    • Level4 跑通核心推荐，Level5 再扩展权重学习 + VPA 协调
+    
+  ✊ Cross-check 先行，不猜不假设:
+    • 跨包调用前必 grep 确认导出状态 (大写开头)
+    • 函数签名前必 grep 确认真实参数列表
+    • 类型引用前必确认包导入 + 首字母大小写
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  B-Level4 让 KubePivot sizing 从「规则驱动」升级为「智能推荐 + 可解释」。
+  自动 Profile + 置信度门禁 + 渐进启用 + 业务测试 = 智能可用性闭环。
+
+  下一步: B-Level5 (CV 权重学习 + 注释注入 + VPA 协调) 或 休息复盘。

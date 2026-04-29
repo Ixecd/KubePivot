@@ -4,15 +4,19 @@
 package main
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Ixecd/kubepivot/internal/planner"
 	"github.com/Ixecd/kubepivot/internal/sizing"
 	"gopkg.in/yaml.v3"
 )
+
+// =============================================================================
+// updateComponentsSizingBatch 测试 (核心文件操作)
+// =============================================================================
 
 // TestUpdateComponentsSizingBatch_Success 验证批量原子写入的核心业务语义
 // 业务场景: 多 Pod 同时优化 → 一次性解析/修改/写入，避免多次读写竞争
@@ -104,16 +108,14 @@ func TestUpdateComponentsSizingBatch_Success(t *testing.T) {
 		t.Error("frontend component not found in output")
 	}
 
-	// worker: 应被更新
+	// worker: 应被更新 (注意: 1024Mi 可能被 yaml.Marshal 简化为 1Gi)
 	if c, ok := components["worker"]; ok {
 		if c.CPU != "800m" {
 			t.Errorf("worker: expected CPU=800m, got %q", c.CPU)
 		}
-		if c.Memory != "1Gi" { // 1024Mi = 1Gi，yaml.Marshal 可能简化单位
-			// 兼容两种格式: "1024Mi" 或 "1Gi"
-			if c.Memory != "1024Mi" && c.Memory != "1Gi" {
-				t.Errorf("worker: expected Memory=1024Mi/1Gi, got %q", c.Memory)
-			}
+		// 兼容两种格式: "1024Mi" 或 "1Gi"
+		if c.Memory != "1024Mi" && c.Memory != "1Gi" {
+			t.Errorf("worker: expected Memory=1024Mi/1Gi, got %q", c.Memory)
 		}
 	} else {
 		t.Error("worker component not found in output")
@@ -206,7 +208,7 @@ func TestUpdateComponentsSizingBatch_InvalidYAML(t *testing.T) {
 		t.Error("expected error for invalid YAML")
 	}
 	// 只验证错误包含关键信息，不匹配完整消息 (避免依赖具体实现)
-	if err != nil && !containsError(err, "parse") {
+	if err != nil && !strings.Contains(err.Error(), "parse") {
 		t.Errorf("expected 'parse' in error message, got: %v", err)
 	}
 }
@@ -267,21 +269,9 @@ func TestUpdateComponentsSizingBatch_EmptyUpdates(t *testing.T) {
 	// 其他字段 (Type/Image/Port 等) 可能被 yaml.Marshal 填充默认值，不验证
 }
 
-// containsError 辅助函数：验证错误消息包含关键语义（不匹配完整字符串）
-// 设计原则: 测试业务语义，不测试错误消息的具体格式
-func containsError(err error, substr string) bool {
-	if err == nil || substr == "" {
-		return false
-	}
-	msg := err.Error()
-	// 简单子串匹配，不依赖 strings 包 (避免跨文件重复)
-	for i := 0; i <= len(msg)-len(substr); i++ {
-		if msg[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
+// =============================================================================
+// isSoftFailure 测试 (错误分级逻辑)
+// =============================================================================
 
 // TestIsSoftFailure 验证错误分级逻辑
 // 业务场景: 区分"可降级"的软失败和"必须阻断"的硬失败
@@ -293,16 +283,16 @@ func TestIsSoftFailure(t *testing.T) {
 		expected bool
 	}{
 		// 软失败案例
-		{"no data", errors.New("no data returned for query"), true},
-		{"timeout", errors.New("query timeout after 30s"), true},
-		{"fallback", errors.New("fallback sampling failed: connection refused"), true},
-		{"no metrics", errors.New("no metrics data available for myapp"), true},
-		{"initial sample", errors.New("initial sample failed: pod not found"), true},
+		{"no data", &mockError{"no data returned for query"}, true},
+		{"timeout", &mockError{"query timeout after 30s"}, true},
+		{"fallback", &mockError{"fallback sampling failed: connection refused"}, true},
+		{"no metrics", &mockError{"no metrics data available for myapp"}, true},
+		{"initial sample", &mockError{"initial sample failed: pod not found"}, true},
 
 		// 硬失败案例
-		{"auth error", errors.New("unauthorized: invalid token"), false},
-		{"parse error", errors.New("parse components: yaml: line 3: did not find expected key"), false},
-		{"permission", errors.New("permission denied: cannot read components.yaml"), false},
+		{"auth error", &mockError{"unauthorized: invalid token"}, false},
+		{"parse error", &mockError{"parse components: yaml: line 3: did not find expected key"}, false},
+		{"permission", &mockError{"permission denied: cannot read components.yaml"}, false},
 		{"nil error", nil, false},
 	}
 
@@ -316,35 +306,63 @@ func TestIsSoftFailure(t *testing.T) {
 	}
 }
 
-// TestReportSizingResults 验证分级报告输出 (不测试具体格式，只验证逻辑)
+// mockError 用于测试的简单 error 实现
+type mockError struct {
+	msg string
+}
+
+func (e *mockError) Error() string { return e.msg }
+
+// =============================================================================
+// reportSizingResults 测试 (分级报告逻辑)
+// =============================================================================
+
+// TestReportSizingResults 验证分级报告输出逻辑 (不测试具体格式，只验证分支)
 // 业务场景: 成功/软失败/硬失败的不同处理策略
 // 测试重点: 硬失败 + !force → osExitFunc(1) 被调用 (用 mock 验证)
 func TestReportSizingResults(t *testing.T) {
 	// 简化: 只验证逻辑分支，不捕获 P.Info/P.Warn/P.Fail 输出
 	// 实际: 可注入 mock logger 验证输出内容
 
+	// 保存原始 osExitFunc，测试后恢复
+	originalExit := osExitFunc
+	defer func() { osExitFunc = originalExit }()
+
 	// Case 1: 纯成功 → 无退出
-	// 注意: osExitFunc 是全局变量，测试中不宜直接调用
-	// 这里只验证函数不 panic + 逻辑正确
+	// 注意: 无法直接验证 P.Info 调用，用编译通过 + 无 panic 作为基本验证
 	reportSizingResults(10, 10, nil, nil, false)
 
 	// Case 2: 软失败 → warn + 不退出
-	// 注意: 无法直接验证 P.Warn 调用，用 slog.Debug 输出可被测试捕获
-	// 简化: 只验证函数执行不报错
 	softErrs := []string{"pod1: low confidence", "pod2: no data"}
 	reportSizingResults(10, 8, softErrs, nil, false)
 
 	// Case 3: 硬失败 + !force → 应调用 osExitFunc(1)
-	// 注意: 测试中替换 osExitFunc 为 mock，验证是否被调用
-	// 简化: 跳过实际退出，只验证逻辑
-	// 实际项目: 可用测试钩子注入 mock osExitFunc
+	// 用 mock 验证是否被调用
+	exitCalled := false
+	osExitFunc = func(code int) {
+		exitCalled = true
+	}
 	hardErrs := []string{"pod3: auth failed"}
-	// reportSizingResults(10, 7, nil, hardErrs, false) // 会调用 osExitFunc(1)，测试中跳过
+	reportSizingResults(10, 7, nil, hardErrs, false)
+	if !exitCalled {
+		t.Error("expected osExitFunc(1) to be called for hard failures + !force")
+	}
 
 	// Case 4: 硬失败 + force → 不退出
 	// 验证: force=true 时，即使有硬失败也不调用 osExitFunc
+	exitCalled = false
+	osExitFunc = func(code int) {
+		exitCalled = true
+	}
 	reportSizingResults(10, 7, nil, hardErrs, true)
+	if exitCalled {
+		t.Error("expected osExitFunc NOT to be called when force=true")
+	}
 }
+
+// =============================================================================
+// resolveSizingConfig 测试 (配置优先级)
+// =============================================================================
 
 // TestResolveSizingConfig 验证配置优先级 (YAML > flag > default)
 // 业务场景: 用户可通过 components.yaml 或命令行覆盖默认行为
@@ -387,5 +405,50 @@ func TestResolveSizingConfig(t *testing.T) {
 	mode, profile = resolveSizingConfig(cfg, plan3)
 	if mode != "auto" || profile != "default" {
 		t.Errorf("expected (auto, default), got (%s, %s)", mode, profile)
+	}
+
+	// Case 4: YAML 显式设空字符串 → 仍用命令行默认 (空字符串不覆盖)
+	plan4 := &planner.Plan{
+		Name: "app4", Image: "x", CPU: "100m", Memory: "128Mi",
+		Sizing: &planner.SizingConfig{
+			Mode:    "",      // 空字符串 → 不覆盖
+			Profile: "batch", // 非空 → 覆盖
+		},
+	}
+	mode, profile = resolveSizingConfig(cfg, plan4)
+	if mode != "manual" || profile != "batch" {
+		t.Errorf("expected (manual, batch), got (%s, %s)", mode, profile)
+	}
+}
+
+// =============================================================================
+// 辅助函数测试 (内联权重计算)
+// =============================================================================
+
+// TestGetWeights 验证内联权重计算逻辑 (与 internal/sizing/dp.go 的 weights 同步)
+// 业务场景: 不同 Profile 返回不同权重，驱动成本函数
+// 测试重点: 枚举覆盖 + 默认值兜底
+func TestGetWeights(t *testing.T) {
+	tests := []struct {
+		name         string
+		profile      sizing.Profile
+		expectedCPUW float64
+		expectedMemW float64
+	}{
+		{"web", sizing.ProfileWeb, 0.7, 0.3},
+		{"batch", sizing.ProfileBatch, 0.3, 0.7},
+		{"db", sizing.ProfileDB, 0.3, 0.7},
+		{"default", sizing.ProfileDefault, 0.5, 0.5},
+		{"unknown", sizing.Profile("unknown"), 0.5, 0.5}, // 兜底
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cpuW, memW := getWeights(tt.profile)
+			if cpuW != tt.expectedCPUW || memW != tt.expectedMemW {
+				t.Errorf("getWeights(%s) = (%.1f, %.1f), expected (%.1f, %.1f)",
+					tt.profile, cpuW, memW, tt.expectedCPUW, tt.expectedMemW)
+			}
+		})
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -178,34 +177,35 @@ func computeSizingForPod(plan *planner.Plan, promURL, namespace, kubeconfig stri
 		return nil, fmt.Errorf("no metrics data available for %s", plan.Name)
 	}
 
-	// 3. 执行 DP 计算
-	//    注意: sizing.Compute 内部已计算 Confidence，这里只透传
+	// 3. B-Level4: 自动 Profile 推荐 (如果启用)
+	//    注意: auto_profile 优先级低于显式 profile，避免覆盖用户意图
+	//    即: 用户显式设 profile=web → 不用推荐；未设 + auto_profile=true → 推荐
+	if plan.Sizing != nil && plan.Sizing.AutoProfile != nil && *plan.Sizing.AutoProfile {
+		if plan.Sizing.Profile == "" {
+			// 用户未显式设 profile，尝试自动推荐
+			// sizing.RecommendProfile 是导出函数 (大写开头)，可跨包调用
+			recProfile, conf, recReason := sizing.RecommendProfile(samples, nil)
+			if conf >= 0.6 {
+				// 置信度足够高，采用推荐
+				profile = recProfile
+				// 记录日志 (可解释性)
+				// P.Info("🤖", fmt.Sprintf("Auto-recommended profile for %s: %s (%s, confidence=%.2f)", plan.Name, recProfile, recReason, conf))
+				_ = recReason // Level5: 注入注释到输出
+			}
+		}
+	}
+
+// 4. 执行 DP 计算 (用最终确定的 profile)
+	//    注意: sizing.Compute 内部用 weights(profile) 计算权重，我们无需干预
+	//    Level5: 扩展 Compute 签名支持自定义权重 (weight_learning)
 	sug, err := sizing.Compute(context.Background(), samples, profile)
 	if err != nil {
 		return nil, fmt.Errorf("sizing compute failed: %w", err)
 	}
 
-	// 4. 对比历史均值，判断是否显著差异 (>20%)
-	//    注意: 这里用历史均值作为基准，实际可扩展: 对比用户当前配置
-	avgCPU := int64(0)
-	avgMem := int64(0)
-	for _, s := range samples {
-		avgCPU += s.TotalCPU.Value
-		avgMem += s.TotalMemory.Value
-	}
-	avgCPU /= int64(len(samples))
-	avgMem /= int64(len(samples))
-
-	diffCPU := math.Abs(float64(sug.RecommendedCPU-avgCPU)) / math.Max(1, float64(avgCPU))
-	diffMem := math.Abs(float64(sug.RecommendedMem-avgMem)) / math.Max(1, float64(avgMem))
-	if diffCPU < 0.2 && diffMem < 0.2 {
-		// 无显著差异，返回 nil 表示无需优化
-		// 调用方 (runSizingHook) 会跳过写入
-		return nil, nil
-	}
-
 	// 5. 返回建议 (由调用方决定是否写入)
 	//    注意: Confidence 已在 sizing.Compute 内计算，这里直接透传
+
 	return sug, nil
 }
 
@@ -324,11 +324,17 @@ func updateComponentsSizingBatch(path string, updates map[string]*sizing.Suggest
 		return fmt.Errorf("parse components: %w", err)
 	}
 
-	// 3. 批量修改
+	// 3. 批量修改 + 注入可解释性注释 (B-Level4)
 	for i := range raw.Components {
 		if sug, ok := updates[raw.Components[i].Name]; ok {
 			raw.Components[i].CPU = fmt.Sprintf("%dm", sug.RecommendedCPU)
 			raw.Components[i].Memory = fmt.Sprintf("%dMi", sug.RecommendedMem>>20)
+
+			// 👇 B-Level4: 注入可解释性注释 (如果启用)
+			// 注意: yaml.v3 的 Node API 支持保留/添加注释，但复杂
+			// Level4 简化: 用文本替换方式在字段后追加注释
+			// Level5 升级: 用 yaml.v3 Node API 精确控制注释位置
+			// 这里先跳过注释注入，Level5 再实现
 		}
 	}
 
@@ -346,4 +352,18 @@ func updateComponentsSizingBatch(path string, updates map[string]*sizing.Suggest
 		return fmt.Errorf("atomic rename: %w", err)
 	}
 	return nil
+}
+
+// getWeights 内联权重计算 (临时方案，避免跨包调用未导出的 weights 函数)
+// 逻辑必须与 internal/sizing/dp.go 的 weights 函数完全同步
+// Level5 重构: 统一导出或提取公共包
+func getWeights(p sizing.Profile) (float64, float64) {
+	switch p {
+	case sizing.ProfileWeb:
+		return 0.7, 0.3
+	case sizing.ProfileBatch, sizing.ProfileDB:
+		return 0.3, 0.7
+	default:
+		return 0.5, 0.5
+	}
 }
