@@ -111,34 +111,34 @@ func runSizingRecommend(args []string) {
 	}
 }
 
-// samplePodMetrics 封装采样逻辑 (复用 internal/sizing/dp.go 的私有函数)
-// 注意: 实际应提取到 internal/sizing/sample.go 供 dp.go + sizing.go 共用
-// Level1 先内联，避免跨包依赖复杂化
-func samplePodMetrics(ctx context.Context, client metrics.MetricsClient, namespace, name string, count int, interval time.Duration) ([]*metrics.PodMetrics, error) {
-	var samples []*metrics.PodMetrics
-	for i := 0; i < count; i++ {
-		m, err := client.GetPodMetrics(ctx, namespace, name)
-		if err != nil {
-			if len(samples) == 0 {
-				return nil, fmt.Errorf("initial sample failed: %w", err)
-			}
-			// 已有样本则容忍单次失败
-			// P.Warn("⚠", fmt.Sprintf("sample %d/%d failed: %v", i+1, count, err))
-			break
-		}
-		samples = append(samples, m)
-		if i < count-1 {
-			select {
-			case <-time.After(interval):
-			case <-ctx.Done():
-				return samples, ctx.Err()
-			}
-		}
-	}
-	// 按时间排序
-	// sort.Slice(samples, func(i, j int) bool { return samples[i].Timestamp.Before(samples[j].Timestamp) })
-	return samples, nil
-}
+// // samplePodMetrics 封装采样逻辑 (复用 internal/sizing/dp.go 的私有函数)
+// // 注意: 实际应提取到 internal/sizing/sample.go 供 dp.go + sizing.go 共用
+// // Level1 先内联，避免跨包依赖复杂化
+// func samplePodMetrics(ctx context.Context, client metrics.MetricsClient, namespace, name string, count int, interval time.Duration) ([]*metrics.PodMetrics, error) {
+// 	var samples []*metrics.PodMetrics
+// 	for i := 0; i < count; i++ {
+// 		m, err := client.GetPodMetrics(ctx, namespace, name)
+// 		if err != nil {
+// 			if len(samples) == 0 {
+// 				return nil, fmt.Errorf("initial sample failed: %w", err)
+// 			}
+// 			// 已有样本则容忍单次失败
+// 			// P.Warn("⚠", fmt.Sprintf("sample %d/%d failed: %v", i+1, count, err))
+// 			break
+// 		}
+// 		samples = append(samples, m)
+// 		if i < count-1 {
+// 			select {
+// 			case <-time.After(interval):
+// 			case <-ctx.Done():
+// 				return samples, ctx.Err()
+// 			}
+// 		}
+// 	}
+// 	// 按时间排序
+// 	// sort.Slice(samples, func(i, j int) bool { return samples[i].Timestamp.Before(samples[j].Timestamp) })
+// 	return samples, nil
+// }
 
 // parseMemoryResource 解析 Plan.Memory string → bytes (int64)
 // 复用 metrics.Quantity 解析逻辑，避免重复造轮子

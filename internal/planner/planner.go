@@ -26,6 +26,25 @@ type Component struct {
 	APIVersion  string // 服务对外 API 版本，用于 kp compat 依赖检查
 	Namespace   string
 	CrossNsDeps []string // 跨 namespace 依赖，格式 "other-ns/svc-name"
+
+	// YAML tag 用 sizing 保持配置文件可读性
+	// 指针类型：nil = 不启用，使用默认行为 (mode=manual)
+	Sizing *SizingConfig `yaml:"sizing,omitempty" json:"sizing,omitempty"`
+}
+
+// SizingConfig 定义资源优化策略
+type SizingConfig struct {
+	// Mode: auto (部署前自动计算并建议) / manual (用户手动配置，默认)
+	Mode string `yaml:"mode,omitempty" json:"mode,omitempty"` // "auto" | "manual"
+	// Profile: 业务模板，驱动得分权重 (web / batch / db / default)
+	Profile string `yaml:"profile,omitempty" json:"profile,omitempty"`
+	// Force: 是否自动应用建议 (不等待用户 git diff 确认)
+	// ⚠️ 生产环境慎用，默认 false
+	Force bool `yaml:"force,omitempty" json:"force,omitempty"`
+	// Samples: 采样次数 (2-10)，默认 5
+	Samples *int `yaml:"samples,omitempty" json:"samples,omitempty"`
+	// Interval: 采样间隔，默认 2s
+	Interval *string `yaml:"interval,omitempty" json:"interval,omitempty"` // "2s", "500ms", etc.
 }
 
 // Plan 单个组件的部署计划

@@ -16,7 +16,9 @@ import (
 	"github.com/Ixecd/kubepivot/internal/executor"
 	"github.com/Ixecd/kubepivot/internal/planner"
 	"github.com/Ixecd/kubepivot/internal/rbac"
+	"github.com/Ixecd/kubepivot/internal/sizing"
 	"github.com/Ixecd/kubepivot/internal/state"
+	"gopkg.in/yaml.v3"
 )
 
 // deployConfig 部署参数
@@ -28,10 +30,13 @@ type deployConfig struct {
 	dryRun          bool
 	sign            bool
 	forceMigrate    bool
-	parallelism     int  // 同层最大并发数，0 表示不限制
-	changedOnly     bool // 只部署有 git 变更的服务
-	preview         bool // 部署后生成 Header-based Preview 路由模板
-	skipSupplyChain bool // 跳过供应链策略验证 (--skip-supply-chain)
+	parallelism     int    // 同层最大并发数，0 表示不限制
+	changedOnly     bool   // 只部署有 git 变更的服务
+	preview         bool   // 部署后生成 Header-based Preview 路由模板
+	skipSupplyChain bool   // 跳过供应链策略验证 (--skip-supply-chain)
+	sizingMode      string // --sizing-mode: auto/manual (默认: manual)
+	sizingProfile   string // --sizing-profile: web/batch/db/default (默认: default)
+	sizingForce     bool   // --sizing-force: 自动应用建议，不等待用户确认
 }
 
 func runDeploy(args []string) {
@@ -53,6 +58,11 @@ func runDeploy(args []string) {
 	flags.BoolVar(&cfg.changedOnly, "changed-only", false, "只部署有 git 变更的服务（基于 git diff HEAD~1 HEAD）")
 	flags.IntVar(&cfg.parallelism, "parallelism", 0, "同层最大并发部署数（0=不限制，建议大规模集群设为 4-8）")
 	flags.BoolVar(&cfg.skipSupplyChain, "skip-supply-chain", false, "跳过供应链策略验证（紧急回滚/调试）")
+
+	// 👇 v2.9: sizing 策略 flag
+	flags.StringVar(&cfg.sizingMode, "sizing-mode", "manual", "资源优化模式: auto (计算建议) / manual (默认)")
+	flags.StringVar(&cfg.sizingProfile, "sizing-profile", "default", "业务模板: web / batch / db / default")
+	flags.BoolVar(&cfg.sizingForce, "sizing-force", false, "自动应用 sizing 建议，不等待 git diff 确认 (慎用)")
 
 	envName := flags.String("env", "", "指定部署环境（kp context add 配置）")
 
@@ -148,6 +158,10 @@ func runDeploy(args []string) {
 		os.Exit(1)
 	}
 
+	runSizingHook(cfg, plan, root, cfg.kubeconfig, cfg.namespace)
+
+	// -----------------------------------------------------------------
+
 	if err := executeDeploy(sm, cfg, env, plan, root); err != nil {
 		fmt.Fprintln(os.Stderr, "部署失败:", err)
 		os.Exit(1)
@@ -157,7 +171,7 @@ func runDeploy(args []string) {
 func runResume(args []string) {
 	flags := flag.NewFlagSet("resume", flag.ExitOnError)
 	namespace := flags.String("namespace", "", "kubernetes namespace")
-	context := flags.String("context", "", "kubernetes context")
+	contextFlag := flags.String("context", "", "kubernetes context")
 	kubeconfig := flags.String("kubeconfig", "", "kubeconfig 文件路径")
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "解析参数失败:", err)
@@ -175,7 +189,7 @@ func runResume(args []string) {
 	cfg := &deployConfig{
 		components: "configs/components.yaml",
 		namespace:  *namespace,
-		context:    *context,
+		context:    *contextFlag,
 		kubeconfig: *kubeconfig,
 	}
 	resolveDeployConfig(cfg, env, root)
@@ -230,6 +244,11 @@ func runResume(args []string) {
 			fmt.Fprintln(os.Stderr, "重置状态失败:", err)
 			os.Exit(1)
 		}
+
+		runSizingHook(cfg, plan, root, cfg.kubeconfig, cfg.namespace)
+
+		// -----------------------------------------------------------------
+
 		if err := executeDeploy(sm, cfg, env, plan, root); err != nil {
 			fmt.Fprintln(os.Stderr, "重新部署失败:", err)
 			os.Exit(1)
@@ -374,11 +393,6 @@ func executeDeploy(sm *state.Machine, cfg *deployConfig, env map[string]string, 
 		}
 	}
 	// -----------------------------------------------------------------
-
-	// IDLE/RUNNING → INITIALIZING
-	if err := sm.Transition(state.StateInitializing, "开始部署 "+version); err != nil {
-		return err
-	}
 
 	// IDLE/RUNNING → INITIALIZING
 	if err := sm.Transition(state.StateInitializing, "开始部署 "+version); err != nil {
@@ -803,5 +817,52 @@ func autoSyncResourcesIfEnrolled(cfg *deployConfig) error {
 	}
 
 	P.Info("🔄", fmt.Sprintf("resources.yaml 已同步到 controller（sha256=%s...）", hash[:8]))
+	return nil
+}
+
+// updateComponentsSizing 原地修改 components.yaml 的 sizing 建议
+// Level1 实现: 解析 → 修改内存结构 → yaml.Marshal → os.WriteFile
+// 注意: 普通 Marshal 会丢失原始 YAML 注释，Level2 可升级 yaml.v3 Node API
+func updateComponentsSizing(path, podName string, sug *sizing.Suggestion) error {
+	// 1. 读取文件
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read components: %w", err)
+	}
+
+	// 2. 解析 YAML (复用 planner 既有模式)
+	var raw struct {
+		Components []planner.Component `yaml:"components"`
+	}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("parse components: %w", err)
+	}
+
+	// 3. 修改目标组件的 CPU / Memory
+	//    注意: Suggestion 返回的是 int64 (millicores/bytes)，需转回 string 格式
+	found := false
+	for i := range raw.Components {
+		if raw.Components[i].Name == podName {
+			// 转回 K8s 资源格式: "500m" / "512Mi"
+			raw.Components[i].CPU = fmt.Sprintf("%dm", sug.RecommendedCPU)
+			raw.Components[i].Memory = fmt.Sprintf("%dMi", sug.RecommendedMem>>20) // bytes → MiB
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("component %q not found in components.yaml", podName)
+	}
+
+	// 4. 序列化 + 写回 (简化: 直接覆盖，Level2 升级原子写入)
+	//    注意: yaml.v3 Marshal 默认不保留注释，但结构正确性优先
+	newData, err := yaml.Marshal(&raw)
+	if err != nil {
+		return fmt.Errorf("marshal components: %w", err)
+	}
+	if err := os.WriteFile(path, newData, 0644); err != nil {
+		return fmt.Errorf("write components: %w", err)
+	}
+
 	return nil
 }

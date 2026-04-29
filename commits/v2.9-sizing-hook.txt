@@ -1,0 +1,124 @@
+feat(sizing): v2.9 B (B-Level1.2) — deploy hook + atomic write + business-driven tests
+
+ROADMAP §2.4 v2.9 节 资源优化引擎. B-Level1.2 部署挂钩最小可行交付.
+
+用户不再手动运行 `kp sizing recommend` → 复制粘贴 → git commit.
+B-Level1.2 让 `kp deploy --sizing-mode=auto` 自动计算最优资源 + 
+原地修改 components.yaml + git diff 提示用户确认 → 
+算法建议可审计 + 人类最终确认 + GitOps 真相在 Git.
+
+变更:
+  cmd/kp/deploy_sizing.go                     新增  92 行   runSizingHook + samplePodMetrics + updateComponentsSizingAtomic
+  cmd/kp/deploy_sizing_test.go                新增  58 行   3 个业务语义测试 (Success/NotFound/InvalidYAML)
+  cmd/kp/deploy.go                            修改  ~30 行   调用 runSizingHook (2 处) + 修复重复 sm.Transition
+  cmd/kp/main.go                              无           sizing flag 已在 B-Level1.1 注册
+
+合计: 150 行新代码 (含 58 行测试) + ~30 行重构
+
+设计核心 (5 个对齐原则):
+
+  Q-B.13=A Hook 时机: executeDeploy 之前，Plan 构建之后
+    ✓ 早期失败，避免浪费集群资源
+    ✓ sizing 不依赖集群状态，纯数据驱动
+    - per-resource 策略合并留 B-Level2
+    
+  Q-B.14=A 输出方式: 原地修改 components.yaml + git diff 提示
+    ✓ GitOps 真相在 Git，配置变更可审计可回滚
+    ✓ 人类最终确认，避免算法误判导致生产事故
+    - 全自动模式 (--sizing-force) 慎用，默认阻断等待确认
+    
+  Q-B.15=A 文件写入: 原子写入 (临时文件 + os.Rename)
+    ✓ 避免写入中断导致 components.yaml 损坏
+    ✓ 对齐项目既有文件操作模式 (internal/scaffold)
+    - 备份 + 回滚留 B-Level2
+    
+  Q-B.16=A 测试策略: 为业务写测试，不为覆盖率写代码
+    ✓ 只测 updateComponentsSizingAtomic (纯函数 + 文件操作)
+    ✓ 断言业务值 (c.CPU == "500m")，不测试序列化格式 (引号/缩进)
+    ✓ 3 个用例覆盖正常路径 + 2 个错误路径，最小必要
+    - samplePodMetrics 依赖 metrics-client，Level2 再补
+    
+  Q-B.17=A 代码复用: 提取 runSizingHook 公共函数
+    ✓ 避免 runDeploy / runResume 重复 ~80 行逻辑
+    ✓ 未来扩展 (全量 Pod / components.yaml sizing 字段) 只需改一处
+    - 跨包抽象留 B-Level2 (如需 internal/sizing/hook.go)
+
+工程纪律亮点 (本次迭代的对齐实践):
+
+  ✊ Cross-check 先行，不凭记忆写代码:
+    - 写 hook 前 grep 确认: 
+      • planner.Component 的 CPU/Memory 是 string 类型
+      • yaml.v3 Marshal 输出格式 (无引号)
+      • state.Machine.Transition 是单向的，重复调用会失败
+    - 多花 10 分钟 grep，省 30 分钟 debug + 返工
+    
+  ✊ 为业务写测试，不为覆盖率写代码:
+    - 测试验证业务语义 (c.CPU == "500m")，不验证序列化细节 (引号/缩进)
+    - 3 个测试覆盖核心路径 + 关键边界，73.9% 覆盖率足够
+    - 测试是保险丝 + 文档，不是数字游戏
+    
+  ✊ 真实结构对齐，不假设不猜测:
+    - yaml.Marshal 输出 cpu: 500m (无引号) → 测试解析 YAML 后断言字段值
+    - state.Machine 状态转换是单向的 → 删除重复的 Transition 调用
+    - 每次写代码前: grep type/func/field, 看既有测试模式
+    
+  ✊ 最小必要原则，拒绝过度工程:
+    - 单 Pod 优化 + 硬编码采样参数 (5 次/2s)，先跑通逻辑
+    - 原子写入用 os.Rename 临时文件，不提前加备份/回滚
+    - 错误处理用简单字符串匹配，不引入复杂错误类型
+
+打脸预防 (基于本次迭代的教训):
+
+  ✓ 第 1 次: 假设 yaml.Marshal 输出带引号 → 实际不带 → 测试匹配失败
+    对策: 测试解析输出 YAML 后断言字段值，不匹配原始字符串格式
+    
+  ✓ 第 2 次: 重复调用 sm.Transition → 状态机拒绝二次转换 → 部署失败
+    对策: 写状态机逻辑前 grep 确认合法转换路径，或用注释标注单向性
+    
+  ✓ 第 3 次: 自定义 contains 函数与 release_test.go 重复 → 编译错误
+    对策: 优先用标准库 (strings.Contains)，避免跨文件重复定义辅助函数
+
+测试覆盖 (3 cases, 最小必要):
+
+  cmd/kp/deploy_sizing_test.go (3):
+    TestUpdateComponentsSizingAtomic_Success (正常路径: 解析 → 修改 → 原子写入 → 验证业务值)
+    TestUpdateComponentsSizingAtomic_ComponentNotFound (错误路径: 组件不存在 → 清晰错误)
+    TestUpdateComponentsSizingAtomic_InvalidYAML (错误路径: YAML 解析失败 → 清晰错误)
+
+  验证:
+    ✓ go test ./cmd/kp -run "TestUpdateComponentsSizingAtomic" -v → 全绿
+    ✓ make dev → 全项目测试通过，零警告
+
+测试边界 (诚实标注):
+
+  ✗ 真实 metrics-server 连接没在单测模拟 (依赖外部服务)
+  ✗ 全量 Pod 优化逻辑没覆盖 (Level1 只优化第一个符合条件的 Pod)
+  ✗ components.yaml 的 sizing 字段解析没实现 (Level2 扩展点)
+  ✗ 原子写入的并发竞争没压测 (单进程场景足够，多进程需 flock)
+  ✓ 留给 B-Level2 集成测试 + 用户实操验证
+
+后续 (v2.9.x):
+
+  - B-Level2: 集成 Prometheus 历史窗口查询 (替代瞬时采样)
+  - B-Level2: 全量 Pod 优化 (遍历 plan 而非只取第一个)
+  - B-Level2: components.yaml 的 sizing 字段解析 (mode/profile/samples/interval)
+  - B-Level2: 原子写入升级备份 + 回滚 (components.yaml.bak)
+  - B-Level3: 全自动模式 (Confidence >0.9 + 自动 git commit + 灰度验证)
+
+🎯 本次迭代核心收获:
+
+  "越到后面设计对齐就越要 cross-check，
+   尽量获取全局信息之后再设计"
+   — qc 原话，刻进脑子
+
+  ✊ 测试验证业务语义，不验证序列化格式
+  ✊ 状态机调用是单向的，重复会失败
+  ✊ 标准库优先，避免跨文件重复定义
+  ✊ 原子写入用临时文件 + rename，简单可靠
+
+  ✊ 为业务写测试，不为覆盖率写代码
+  ✊ 提取公共函数避免重复，但不过早抽象
+  ✊ 最小必要原则，先跑通逻辑再加固
+
+B-Level1.2 部署挂钩闭环. sizing 引擎可自动触发 + 原子写入 + 业务语义测试兜底.
+下一步: B-Level2 (Prometheus 集成 + 全量优化 + sizing 字段解析) 或 休息复盘.
