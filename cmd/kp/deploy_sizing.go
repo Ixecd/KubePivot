@@ -58,6 +58,7 @@ func runSizingHook(cfg *deployConfig, plan []planner.Plan, projectRoot, kubeconf
 		wg       sync.WaitGroup
 		sem      = make(chan struct{}, 10) // 信号量限流
 		updates  = make(map[string]*sizing.Suggestion)
+		reasons  = make(map[string]string)
 		mu       sync.Mutex // 保护 updates 并发写
 		softErrs []string   // 软失败: 记录但不停止
 		hardErrs []string   // 硬失败: 记录 + 可能阻断
@@ -107,6 +108,7 @@ func runSizingHook(cfg *deployConfig, plan []planner.Plan, projectRoot, kubeconf
 				}
 				mu.Lock()
 				updates[t.plan.Name] = sug
+				reasons[t.plan.Name] = fmt.Sprintf("sizing optimized (profile=%s, confidence=%.2f)", sug.Profile, sug.Confidence)
 				mu.Unlock()
 			}
 		}(t)
@@ -118,7 +120,7 @@ func runSizingHook(cfg *deployConfig, plan []planner.Plan, projectRoot, kubeconf
 	//    原子性由 updateComponentsSizingBatch 保障 (临时文件 + rename)
 	if len(updates) > 0 {
 		componentsPath := filepath.Join(projectRoot, cfg.components)
-		if err := updateComponentsSizingBatch(componentsPath, updates); err != nil {
+		if err := updateComponentsSizingBatch(componentsPath, updates, reasons); err != nil {
 			P.Fail("✗ Failed to update components.yaml")
 			fmt.Fprintf(os.Stderr, "  Details: %v\n", err)
 			if !cfg.sizingForce {
@@ -132,6 +134,30 @@ func runSizingHook(cfg *deployConfig, plan []planner.Plan, projectRoot, kubeconf
 	// 4. 结果汇总 + 分级报告
 	//    对齐既有 logger 风格: P.Info/P.Warn/P.Fail + fmt.Fprintf(os.Stderr)
 	reportSizingResults(len(targets), len(updates), softErrs, hardErrs, cfg.sizingForce)
+
+	// 👇 Level5: 生成 VPA 建议 (只读模式，批量输出)
+	// 策略: 仅当至少一个 Pod 优化成功时生成，避免空文件
+	// 输出: <projectRoot>/configs/vpa-suggestion.yaml (覆盖模式，简化)
+	// 注意: 不自动应用，用户需手动 `kubectl apply` 或忽略
+	// -----------------------------------------------------------------
+	if len(updates) > 0 {
+		vpaPath := filepath.Join(projectRoot, "configs", "vpa-suggestion.yaml")
+		// 简化: 只生成第一个成功 Pod 的 VPA 建议 (Level6 支持批量)
+		var firstSug *sizing.Suggestion
+		var firstName string
+		for name, sug := range updates {
+			firstSug = sug
+			firstName = name
+			break
+		}
+		if firstSug != nil {
+			if err := sizing.WriteVPASuggestion(vpaPath, namespace, firstName, firstSug, "Off"); err != nil {
+				slog.Warn("failed to write VPA suggestion", "err", err)
+			} else {
+				P.Info("📄", fmt.Sprintf("VPA suggestion written to %s (mode=Off, review before apply)", vpaPath))
+			}
+		}
+	}
 }
 
 // computeSizingForPod 计算单个 Pod 的 sizing 建议 (B-Level3: 支持动态参数)
@@ -184,7 +210,7 @@ func computeSizingForPod(plan *planner.Plan, promURL, namespace, kubeconfig stri
 		if plan.Sizing.Profile == "" {
 			// 用户未显式设 profile，尝试自动推荐
 			// sizing.RecommendProfile 是导出函数 (大写开头)，可跨包调用
-			recProfile, conf, recReason := sizing.RecommendProfile(samples, nil)
+			recProfile, conf, recReason := sizing.RecommendProfile(samples)
 			if conf >= 0.6 {
 				// 置信度足够高，采用推荐
 				profile = recProfile
@@ -195,7 +221,7 @@ func computeSizingForPod(plan *planner.Plan, promURL, namespace, kubeconfig stri
 		}
 	}
 
-// 4. 执行 DP 计算 (用最终确定的 profile)
+	// 4. 执行 DP 计算 (用最终确定的 profile)
 	//    注意: sizing.Compute 内部用 weights(profile) 计算权重，我们无需干预
 	//    Level5: 扩展 Compute 签名支持自定义权重 (weight_learning)
 	sug, err := sizing.Compute(context.Background(), samples, profile)
@@ -205,7 +231,21 @@ func computeSizingForPod(plan *planner.Plan, promURL, namespace, kubeconfig stri
 
 	// 5. 返回建议 (由调用方决定是否写入)
 	//    注意: Confidence 已在 sizing.Compute 内计算，这里直接透传
+	//    👇 Level5: 生成 VPA 建议 (只读模式，输出独立文件)
+	//    注意: 不自动应用，保持 GitOps 原则 (建议可审计 + 人类最终确认)
+	//    输出路径: <projectRoot>/configs/vpa-suggestion.yaml (可配置)
+	//    简化: 先硬编码路径，Level6 支持命令行参数
+	// vpaPath := filepath.Join(projectRoot, "configs", "vpa-suggestion.yaml")
+	// if err := sizing.WriteVPASuggestion(vpaPath, namespace, plan.Name, sug, "Off"); err != nil {
+	//     // 记录警告但不阻断: VPA 建议生成失败不影响 sizing 核心功能
+	//     slog.Warn("failed to write VPA suggestion", "err", err, "pod", plan.Name)
+	// }
 
+	// 简化: 先不写入文件，只返回 sug，调用方在 runSizingHook 中统一处理
+	// Level6: 支持 --vpa-output 参数 + 批量生成
+
+	_ = namespace // 占位，后续集成时移除
+	_ = plan.Name // 占位，后续集成时移除
 	return sug, nil
 }
 
@@ -269,6 +309,9 @@ func reportSizingResults(total, success int, softErrs, hardErrs []string, force 
 func resolveSizingConfig(cfg *deployConfig, plan *planner.Plan) (mode string, profile sizing.Profile) {
 	mode = cfg.sizingMode
 	profile = sizing.Profile(cfg.sizingProfile)
+	if profile == "" {
+		profile = sizing.ProfileDefault // 👈 兜底: 空字符串 → ProfileDefault
+	}
 	if plan.Sizing != nil {
 		if plan.Sizing.Mode != "" {
 			mode = plan.Sizing.Mode
@@ -308,48 +351,165 @@ func samplePodMetrics(ctx context.Context, client metrics.MetricsClient, namespa
 	return samples, nil
 }
 
-// updateComponentsSizingBatch 批量更新 components.yaml (原子写入，B-Level3 无变更)
-func updateComponentsSizingBatch(path string, updates map[string]*sizing.Suggestion) error {
-	// 1. 读取原文件
+// updateComponentsSizingBatch 批量更新 components.yaml (原子写入 + v3 注释注入)
+// Level5:
+//   - 无需注释注入时走简单路径 (兼容 Level1-4 测试)
+//   - 需要注释时用 yaml.Node API 精确控制
+//   - 健壮导航: 能处理常见 YAML 结构变体
+func updateComponentsSizingBatch(path string, updates map[string]*sizing.Suggestion, reasons map[string]string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read components: %w", err)
 	}
 
-	// 2. 解析 YAML
-	var raw struct {
-		Components []planner.Component `yaml:"components"`
-	}
-	if err := yaml.Unmarshal(data, &raw); err != nil {
-		return fmt.Errorf("parse components: %w", err)
-	}
-
-	// 3. 批量修改 + 注入可解释性注释 (B-Level4)
-	for i := range raw.Components {
-		if sug, ok := updates[raw.Components[i].Name]; ok {
-			raw.Components[i].CPU = fmt.Sprintf("%dm", sug.RecommendedCPU)
-			raw.Components[i].Memory = fmt.Sprintf("%dMi", sug.RecommendedMem>>20)
-
-			// 👇 B-Level4: 注入可解释性注释 (如果启用)
-			// 注意: yaml.v3 的 Node API 支持保留/添加注释，但复杂
-			// Level4 简化: 用文本替换方式在字段后追加注释
-			// Level5 升级: 用 yaml.v3 Node API 精确控制注释位置
-			// 这里先跳过注释注入，Level5 再实现
+	// Level5: 检测是否需要注释注入
+	// 如果不需要，走简单路径 (兼容既有测试 + 性能更好)
+	needsComment := false
+	if reasons != nil {
+		for name := range updates {
+			if _, hasReason := reasons[name]; hasReason {
+				needsComment = true
+				break
+			}
 		}
 	}
 
-	// 4. 原子写入 (临时文件 + rename)
-	newData, err := yaml.Marshal(&raw)
+	if !needsComment {
+		// 👇 简单路径: 解析 → 修改 → Marshal → 原子写入 (兼容 Level1-4)
+		var raw struct {
+			Components []planner.Component `yaml:"components"`
+		}
+		if err := yaml.Unmarshal(data, &raw); err != nil {
+			return fmt.Errorf("parse components: %w", err)
+		}
+		for i := range raw.Components {
+			if sug, ok := updates[raw.Components[i].Name]; ok {
+				raw.Components[i].CPU = fmt.Sprintf("%dm", sug.RecommendedCPU)
+				raw.Components[i].Memory = fmt.Sprintf("%dMi", sug.RecommendedMem>>20)
+			}
+		}
+		newData, err := yaml.Marshal(&raw)
+		if err != nil {
+			return fmt.Errorf("marshal components: %w", err)
+		}
+		// 原子写入
+		tmpPath := path + ".tmp"
+		if err := os.WriteFile(tmpPath, newData, 0644); err != nil {
+			return fmt.Errorf("write temp file: %w", err)
+		}
+		if err := os.Rename(tmpPath, path); err != nil {
+			_ = os.Remove(tmpPath)
+			return fmt.Errorf("atomic rename: %w", err)
+		}
+		return nil
+	}
+
+	// 👇 注释注入路径: 用 yaml.Node API 精确控制
+	// 注意: 此路径对 YAML 结构要求较严格，仅当需要注释时使用
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return fmt.Errorf("parse components: %w", err)
+	}
+
+	// 健壮导航: 尝试多种常见结构
+	// 模式 1: root -> DocumentNode -> MappingNode -> "components" Key -> SequenceNode
+	// 模式 2: root -> MappingNode (无显式 DocumentNode) -> "components" Key -> SequenceNode
+	var compSeq *yaml.Node
+	if root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
+		// 变体 1: 有显式 DocumentNode
+		compSeq = findComponentsSequence(root.Content[0])
+	} else {
+		// 变体 2: 无显式 DocumentNode，root 本身就是 MappingNode
+		compSeq = findComponentsSequence(&root)
+	}
+
+	if compSeq == nil || compSeq.Kind != yaml.SequenceNode {
+		// 兜底: 如果找不到，回退到简单路径 + 警告
+		// 这是「为业务写测试」原则: 不因结构解析失败阻断核心功能
+		// 注释注入失败 → 记录日志 + 继续用简单路径更新值
+		// (实际生产应返回错误，但测试场景先保证核心功能)
+		// 🔧 简化: 直接返回错误，让调用方决定如何处理
+		return fmt.Errorf("components list not found: yaml structure may be non-standard")
+	}
+
+	// 遍历并修改/注入注释
+	for _, compMap := range compSeq.Content {
+		if compMap.Kind != yaml.MappingNode {
+			continue
+		}
+
+		var nameNode, cpuNode, memNode *yaml.Node
+		for i := 0; i < len(compMap.Content); i += 2 {
+			key := compMap.Content[i]
+			val := compMap.Content[i+1]
+			switch key.Value {
+			case "name":
+				nameNode = val
+			case "cpu":
+				cpuNode = val
+			case "memory":
+				memNode = val
+			}
+		}
+
+		if nameNode == nil {
+			continue
+		}
+		sug, ok := updates[nameNode.Value]
+		if !ok {
+			continue
+		}
+
+		// 更新值
+		if cpuNode != nil {
+			cpuNode.Value = fmt.Sprintf("%dm", sug.RecommendedCPU)
+		}
+		if memNode != nil {
+			memNode.Value = fmt.Sprintf("%dMi", sug.RecommendedMem>>20)
+		}
+
+		// 注入注释 (Level5: 只注入一次，避免重复追加)
+		if reason, hasReason := reasons[nameNode.Value]; hasReason {
+			comment := fmt.Sprintf("# Reason: %s", reason)
+			if cpuNode != nil {
+				cpuNode.LineComment = comment
+			}
+			if memNode != nil {
+				memNode.LineComment = comment
+			}
+		}
+	}
+
+	// 序列化回写
+	out, err := yaml.Marshal(&root)
 	if err != nil {
 		return fmt.Errorf("marshal components: %w", err)
 	}
+
+	// 原子写入
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, newData, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, out, 0644); err != nil {
 		return fmt.Errorf("write temp file: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("atomic rename: %w", err)
+	}
+	return nil
+}
+
+// findComponentsSequence 辅助函数: 在 MappingNode 中查找 "components" 对应的 SequenceNode
+// 健壮实现: 能处理不同 YAML 解析结果的结构变体
+func findComponentsSequence(node *yaml.Node) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i < len(node.Content); i += 2 {
+		key := node.Content[i]
+		val := node.Content[i+1]
+		if key.Value == "components" && val.Kind == yaml.SequenceNode {
+			return val
+		}
 	}
 	return nil
 }

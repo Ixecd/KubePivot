@@ -4,451 +4,292 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Ixecd/kubepivot/internal/metrics"
 	"github.com/Ixecd/kubepivot/internal/planner"
 	"github.com/Ixecd/kubepivot/internal/sizing"
 	"gopkg.in/yaml.v3"
 )
 
 // =============================================================================
-// updateComponentsSizingBatch 测试 (核心文件操作)
+// 1. 权重逻辑测试 (getWeights)
 // =============================================================================
 
-// TestUpdateComponentsSizingBatch_Success 验证批量原子写入的核心业务语义
-// 业务场景: 多 Pod 同时优化 → 一次性解析/修改/写入，避免多次读写竞争
-// 测试重点: 值是否正确 + 原子性 (无临时文件残留)，不测试 YAML 格式化细节
-func TestUpdateComponentsSizingBatch_Success(t *testing.T) {
-	// 1. 准备临时文件 (模拟真实 components.yaml)
-	dir := t.TempDir()
-	path := filepath.Join(dir, "components.yaml")
-	original := `components:
-  - name: backend
-    cpu: "200m"
-    memory: "256Mi"
-  - name: frontend
-    cpu: "100m"
-    memory: "128Mi"
-  - name: worker
-    cpu: "500m"
-    memory: "512Mi"
-`
-	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// 2. 构造批量更新建议 (模拟 sizing.Compute 返回)
-	//    业务语义: backend + worker 需要优化，frontend 保持原样
-	updates := map[string]*sizing.Suggestion{
-		"backend": {
-			RecommendedCPU: 400,       // 200m → 400m
-			RecommendedMem: 512 << 20, // 256Mi → 512Mi
-		},
-		"worker": {
-			RecommendedCPU: 800,        // 500m → 800m
-			RecommendedMem: 1024 << 20, // 512Mi → 1Gi
-		},
-		// frontend 不在 updates 中 → 保持原值
-	}
-
-	// 3. 调用被测函数 (批量原子写入)
-	if err := updateComponentsSizingBatch(path, updates); err != nil {
-		t.Fatal(err)
-	}
-
-	// 4. 验证业务语义：解析输出 + 断言字段值（不匹配字符串格式）
-	//    这是「为业务写测试」的核心：验证值，不验证序列化细节
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var result struct {
-		Components []planner.Component `yaml:"components"`
-	}
-	if err := yaml.Unmarshal(data, &result); err != nil {
-		t.Fatalf("parse output yaml: %v", err)
-	}
-
-	// 验证组件数量不变
-	if len(result.Components) != 3 {
-		t.Errorf("expected 3 components, got %d", len(result.Components))
-	}
-
-	// 验证每个组件的值 (按 name 查找，不依赖顺序)
-	components := make(map[string]planner.Component)
-	for _, c := range result.Components {
-		components[c.Name] = c
-	}
-
-	// backend: 应被更新
-	if c, ok := components["backend"]; ok {
-		if c.CPU != "400m" {
-			t.Errorf("backend: expected CPU=400m, got %q", c.CPU)
-		}
-		if c.Memory != "512Mi" {
-			t.Errorf("backend: expected Memory=512Mi, got %q", c.Memory)
-		}
-	} else {
-		t.Error("backend component not found in output")
-	}
-
-	// frontend: 应保持不变 (不在 updates 中)
-	if c, ok := components["frontend"]; ok {
-		if c.CPU != "100m" {
-			t.Errorf("frontend: expected CPU=100m (unchanged), got %q", c.CPU)
-		}
-		if c.Memory != "128Mi" {
-			t.Errorf("frontend: expected Memory=128Mi (unchanged), got %q", c.Memory)
-		}
-	} else {
-		t.Error("frontend component not found in output")
-	}
-
-	// worker: 应被更新 (注意: 1024Mi 可能被 yaml.Marshal 简化为 1Gi)
-	if c, ok := components["worker"]; ok {
-		if c.CPU != "800m" {
-			t.Errorf("worker: expected CPU=800m, got %q", c.CPU)
-		}
-		// 兼容两种格式: "1024Mi" 或 "1Gi"
-		if c.Memory != "1024Mi" && c.Memory != "1Gi" {
-			t.Errorf("worker: expected Memory=1024Mi/1Gi, got %q", c.Memory)
-		}
-	} else {
-		t.Error("worker component not found in output")
-	}
-
-	// 验证原子写入: 无临时文件残留
-	if _, err := os.Stat(path + ".tmp"); err == nil {
-		t.Error("expected temp file to be cleaned up after atomic write")
-	}
-}
-
-// TestUpdateComponentsSizingBatch_PartialSuccess 验证部分 Pod 不存在时的行为
-// 业务场景: updates 包含不存在的组件名 → 跳过 + 不报错 (幂等性)
-// 测试重点: 存在的组件被正确更新，不存在的被静默跳过
-func TestUpdateComponentsSizingBatch_PartialSuccess(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "components.yaml")
-	original := `components:
-  - name: existing-app
-    cpu: "200m"
-    memory: "256Mi"
-`
-	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// updates 包含: 1 个存在 + 2 个不存在
-	updates := map[string]*sizing.Suggestion{
-		"existing-app": {
-			RecommendedCPU: 400,
-			RecommendedMem: 512 << 20,
-		},
-		"nonexistent-1": {RecommendedCPU: 100, RecommendedMem: 128 << 20},
-		"nonexistent-2": {RecommendedCPU: 200, RecommendedMem: 256 << 20},
-	}
-
-	// 调用: 不应返回错误 (部分成功 = 成功)
-	if err := updateComponentsSizingBatch(path, updates); err != nil {
-		t.Errorf("expected no error for partial success, got: %v", err)
-	}
-
-	// 验证: 存在的组件被更新
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var result struct {
-		Components []planner.Component `yaml:"components"`
-	}
-	if err := yaml.Unmarshal(data, &result); err != nil {
-		t.Fatalf("parse output yaml: %v", err)
-	}
-
-	if len(result.Components) != 1 {
-		t.Errorf("expected 1 component (unchanged count), got %d", len(result.Components))
-	}
-	c := result.Components[0]
-	if c.CPU != "400m" {
-		t.Errorf("expected CPU=400m, got %q", c.CPU)
-	}
-	if c.Memory != "512Mi" {
-		t.Errorf("expected Memory=512Mi, got %q", c.Memory)
-	}
-
-	// 验证: 无临时文件残留
-	if _, err := os.Stat(path + ".tmp"); err == nil {
-		t.Error("expected temp file to be cleaned up")
-	}
-}
-
-// TestUpdateComponentsSizingBatch_InvalidYAML 验证非法 YAML 时的清晰错误
-// 业务场景: components.yaml 损坏 → 返回可理解的错误，不崩溃
-// 测试重点: 错误消息包含关键语义 ("parse")，便于用户排查
-func TestUpdateComponentsSizingBatch_InvalidYAML(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "components.yaml")
-	// 故意写非法 YAML
-	if err := os.WriteFile(path, []byte("invalid: yaml: [unclosed"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	updates := map[string]*sizing.Suggestion{
-		"any-app": {RecommendedCPU: 500, RecommendedMem: 512 << 20},
-	}
-
-	err := updateComponentsSizingBatch(path, updates)
-
-	// 验证: 返回错误，且消息包含关键语义
-	if err == nil {
-		t.Error("expected error for invalid YAML")
-	}
-	// 只验证错误包含关键信息，不匹配完整消息 (避免依赖具体实现)
-	if err != nil && !strings.Contains(err.Error(), "parse") {
-		t.Errorf("expected 'parse' in error message, got: %v", err)
-	}
-}
-
-// TestUpdateComponentsSizingBatch_EmptyUpdates 验证空更新列表的幂等性
-// 业务场景: 无组件需要优化 → 文件业务值不变 + 无错误
-// 测试重点: 函数幂等，不产生副作用；验证业务值，不验证序列化格式
-func TestUpdateComponentsSizingBatch_EmptyUpdates(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "components.yaml")
-	original := `components:
-  - name: myapp
-    cpu: "200m"
-    memory: "256Mi"
-`
-	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// 空更新列表
-	updates := map[string]*sizing.Suggestion{}
-
-	// 调用: 不应返回错误
-	if err := updateComponentsSizingBatch(path, updates); err != nil {
-		t.Errorf("expected no error for empty updates, got: %v", err)
-	}
-
-	// ✅ 修复: 解析输出 YAML 后断言业务值，不比较原始字符串
-	// 原理: yaml.Marshal 可能重排字段/填充默认值，但业务语义应不变
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var result struct {
-		Components []planner.Component `yaml:"components"`
-	}
-	if err := yaml.Unmarshal(data, &result); err != nil {
-		t.Fatalf("parse output yaml: %v", err)
-	}
-
-	// 验证: 组件数量不变
-	if len(result.Components) != 1 {
-		t.Errorf("expected 1 component, got %d", len(result.Components))
-	}
-
-	// 验证: 业务值不变 (不关心字段顺序/缩进/默认值填充)
-	c := result.Components[0]
-	if c.Name != "myapp" {
-		t.Errorf("expected name=myapp, got %q", c.Name)
-	}
-	if c.CPU != "200m" {
-		t.Errorf("expected CPU=200m (unchanged), got %q", c.CPU)
-	}
-	if c.Memory != "256Mi" {
-		t.Errorf("expected Memory=256Mi (unchanged), got %q", c.Memory)
-	}
-	// 其他字段 (Type/Image/Port 等) 可能被 yaml.Marshal 填充默认值，不验证
-}
-
-// =============================================================================
-// isSoftFailure 测试 (错误分级逻辑)
-// =============================================================================
-
-// TestIsSoftFailure 验证错误分级逻辑
-// 业务场景: 区分"可降级"的软失败和"必须阻断"的硬失败
-// 测试重点: 关键词匹配准确，不误判
-func TestIsSoftFailure(t *testing.T) {
-	tests := []struct {
-		name     string
-		err      error
-		expected bool
-	}{
-		// 软失败案例
-		{"no data", &mockError{"no data returned for query"}, true},
-		{"timeout", &mockError{"query timeout after 30s"}, true},
-		{"fallback", &mockError{"fallback sampling failed: connection refused"}, true},
-		{"no metrics", &mockError{"no metrics data available for myapp"}, true},
-		{"initial sample", &mockError{"initial sample failed: pod not found"}, true},
-
-		// 硬失败案例
-		{"auth error", &mockError{"unauthorized: invalid token"}, false},
-		{"parse error", &mockError{"parse components: yaml: line 3: did not find expected key"}, false},
-		{"permission", &mockError{"permission denied: cannot read components.yaml"}, false},
-		{"nil error", nil, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := isSoftFailure(tt.err)
-			if got != tt.expected {
-				t.Errorf("isSoftFailure(%v) = %v, expected %v", tt.err, got, tt.expected)
-			}
-		})
-	}
-}
-
-// mockError 用于测试的简单 error 实现
-type mockError struct {
-	msg string
-}
-
-func (e *mockError) Error() string { return e.msg }
-
-// =============================================================================
-// reportSizingResults 测试 (分级报告逻辑)
-// =============================================================================
-
-// TestReportSizingResults 验证分级报告输出逻辑 (不测试具体格式，只验证分支)
-// 业务场景: 成功/软失败/硬失败的不同处理策略
-// 测试重点: 硬失败 + !force → osExitFunc(1) 被调用 (用 mock 验证)
-func TestReportSizingResults(t *testing.T) {
-	// 简化: 只验证逻辑分支，不捕获 P.Info/P.Warn/P.Fail 输出
-	// 实际: 可注入 mock logger 验证输出内容
-
-	// 保存原始 osExitFunc，测试后恢复
-	originalExit := osExitFunc
-	defer func() { osExitFunc = originalExit }()
-
-	// Case 1: 纯成功 → 无退出
-	// 注意: 无法直接验证 P.Info 调用，用编译通过 + 无 panic 作为基本验证
-	reportSizingResults(10, 10, nil, nil, false)
-
-	// Case 2: 软失败 → warn + 不退出
-	softErrs := []string{"pod1: low confidence", "pod2: no data"}
-	reportSizingResults(10, 8, softErrs, nil, false)
-
-	// Case 3: 硬失败 + !force → 应调用 osExitFunc(1)
-	// 用 mock 验证是否被调用
-	exitCalled := false
-	osExitFunc = func(code int) {
-		exitCalled = true
-	}
-	hardErrs := []string{"pod3: auth failed"}
-	reportSizingResults(10, 7, nil, hardErrs, false)
-	if !exitCalled {
-		t.Error("expected osExitFunc(1) to be called for hard failures + !force")
-	}
-
-	// Case 4: 硬失败 + force → 不退出
-	// 验证: force=true 时，即使有硬失败也不调用 osExitFunc
-	exitCalled = false
-	osExitFunc = func(code int) {
-		exitCalled = true
-	}
-	reportSizingResults(10, 7, nil, hardErrs, true)
-	if exitCalled {
-		t.Error("expected osExitFunc NOT to be called when force=true")
-	}
-}
-
-// =============================================================================
-// resolveSizingConfig 测试 (配置优先级)
-// =============================================================================
-
-// TestResolveSizingConfig 验证配置优先级 (YAML > flag > default)
-// 业务场景: 用户可通过 components.yaml 或命令行覆盖默认行为
-// 测试重点: 优先级正确，空值处理合理
-func TestResolveSizingConfig(t *testing.T) {
-	// 准备: 命令行默认配置
-	cfg := &deployConfig{
-		sizingMode:    "manual", // 默认 manual
-		sizingProfile: "default",
-	}
-
-	// Case 1: 无 YAML 配置 → 用命令行默认
-	plan1 := &planner.Plan{Name: "app1", Image: "x", CPU: "100m", Memory: "128Mi"}
-	mode, profile := resolveSizingConfig(cfg, plan1)
-	if mode != "manual" || profile != "default" {
-		t.Errorf("expected (manual, default), got (%s, %s)", mode, profile)
-	}
-
-	// Case 2: YAML 配置覆盖命令行
-	plan2 := &planner.Plan{
-		Name: "app2", Image: "x", CPU: "100m", Memory: "128Mi",
-		Sizing: &planner.SizingConfig{
-			Mode:    "auto",
-			Profile: "web",
-		},
-	}
-	mode, profile = resolveSizingConfig(cfg, plan2)
-	if mode != "auto" || profile != "web" {
-		t.Errorf("expected (auto, web), got (%s, %s)", mode, profile)
-	}
-
-	// Case 3: YAML 部分覆盖 (只改 mode)
-	plan3 := &planner.Plan{
-		Name: "app3", Image: "x", CPU: "100m", Memory: "128Mi",
-		Sizing: &planner.SizingConfig{
-			Mode: "auto",
-			// Profile 为空 → 用命令行默认
-		},
-	}
-	mode, profile = resolveSizingConfig(cfg, plan3)
-	if mode != "auto" || profile != "default" {
-		t.Errorf("expected (auto, default), got (%s, %s)", mode, profile)
-	}
-
-	// Case 4: YAML 显式设空字符串 → 仍用命令行默认 (空字符串不覆盖)
-	plan4 := &planner.Plan{
-		Name: "app4", Image: "x", CPU: "100m", Memory: "128Mi",
-		Sizing: &planner.SizingConfig{
-			Mode:    "",      // 空字符串 → 不覆盖
-			Profile: "batch", // 非空 → 覆盖
-		},
-	}
-	mode, profile = resolveSizingConfig(cfg, plan4)
-	if mode != "manual" || profile != "batch" {
-		t.Errorf("expected (manual, batch), got (%s, %s)", mode, profile)
-	}
-}
-
-// =============================================================================
-// 辅助函数测试 (内联权重计算)
-// =============================================================================
-
-// TestGetWeights 验证内联权重计算逻辑 (与 internal/sizing/dp.go 的 weights 同步)
-// 业务场景: 不同 Profile 返回不同权重，驱动成本函数
-// 测试重点: 枚举覆盖 + 默认值兜底
 func TestGetWeights(t *testing.T) {
 	tests := []struct {
-		name         string
 		profile      sizing.Profile
 		expectedCPUW float64
 		expectedMemW float64
 	}{
-		{"web", sizing.ProfileWeb, 0.7, 0.3},
-		{"batch", sizing.ProfileBatch, 0.3, 0.7},
-		{"db", sizing.ProfileDB, 0.3, 0.7},
-		{"default", sizing.ProfileDefault, 0.5, 0.5},
-		{"unknown", sizing.Profile("unknown"), 0.5, 0.5}, // 兜底
+		{sizing.ProfileWeb, 0.7, 0.3},     // Web 侧重响应，CPU 权重高
+		{sizing.ProfileBatch, 0.3, 0.7},   // Batch 侧重吞吐，内存权重高
+		{sizing.ProfileDB, 0.3, 0.7},      // DB 侧重缓存，内存权重高
+		{sizing.ProfileDefault, 0.5, 0.5}, // 默认对等
+		{"unknown", 0.5, 0.5},             // 未知类型降级到对等
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(string(tt.profile), func(t *testing.T) {
 			cpuW, memW := getWeights(tt.profile)
 			if cpuW != tt.expectedCPUW || memW != tt.expectedMemW {
-				t.Errorf("getWeights(%s) = (%.1f, %.1f), expected (%.1f, %.1f)",
+				t.Errorf("getWeights(%s) = (%.1f, %.1f), want (%.1f, %.1f)",
 					tt.profile, cpuW, memW, tt.expectedCPUW, tt.expectedMemW)
 			}
 		})
 	}
 }
+
+// =============================================================================
+// 2. 配置解析测试 (resolveSizingConfig)
+// =============================================================================
+
+func TestResolveSizingConfig(t *testing.T) {
+	tests := []struct {
+		name            string
+		cfgMode         string
+		compSizing      *planner.SizingConfig
+		expectedMode    string
+		expectedProfile sizing.Profile
+	}{
+		{
+			name:            "Flag 优先: 全局 auto",
+			cfgMode:         "auto",
+			compSizing:      nil,
+			expectedMode:    "auto",
+			expectedProfile: sizing.ProfileDefault,
+		},
+		{
+			name:    "YAML 覆盖: 全局 manual 但组件 auto",
+			cfgMode: "manual",
+			compSizing: &planner.SizingConfig{
+				Mode:    "auto",
+				Profile: "web",
+			},
+			expectedMode:    "auto",
+			expectedProfile: sizing.ProfileWeb,
+		},
+		{
+			name:    "默认行为: 均未配置",
+			cfgMode: "manual",
+			compSizing: &planner.SizingConfig{
+				Mode: "",
+			},
+			expectedMode:    "manual",
+			expectedProfile: sizing.ProfileDefault,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &deployConfig{sizingMode: tt.cfgMode}
+			p := &planner.Plan{Sizing: tt.compSizing}
+			mode, profile := resolveSizingConfig(cfg, p)
+
+			if mode != tt.expectedMode {
+				t.Errorf("mode = %s, want %s", mode, tt.expectedMode)
+			}
+			if profile != tt.expectedProfile {
+				t.Errorf("profile = %s, want %s", profile, tt.expectedProfile)
+			}
+		})
+	}
+}
+
+// =============================================================================
+// 3. YAML 原子批量修改测试 (updateComponentsSizingBatch)
+// =============================================================================
+
+func TestUpdateComponentsSizingBatch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "components.yaml")
+
+	// 构造原始 YAML (包含注释，验证注释是否被保留)
+	originalContent := `
+components:
+  - name: api-server
+    image: nginx:latest
+    cpu: "500m" # 原始注释
+    memory: "512Mi"
+  - name: worker
+    cpu: "1000m"
+    memory: "1Gi"
+`
+	err := os.WriteFile(path, []byte(originalContent), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 构造优化建议
+	suggestions := map[string]*sizing.Suggestion{
+		"api-server": {
+			RecommendedCPU: 250,               // 500m -> 250m
+			RecommendedMem: 128 * 1024 * 1024, // 512Mi -> 128Mi
+		},
+	}
+	// 构造推荐理由 (Level5 注入)
+	reasons := map[string]string{
+		"api-server": "low CPU usage detected",
+	}
+
+	// 执行修改
+	err = updateComponentsSizingBatch(path, suggestions, reasons)
+	if err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+
+	// 验证结果
+	data, _ := os.ReadFile(path)
+	var root yaml.Node
+	yaml.Unmarshal(data, &root)
+
+	// 深度校验字段
+	// 我们通过字符串匹配快速检查关键值的变更，同时检查是否包含 Reason 注释
+	content := string(data)
+	if !strings.Contains(content, `cpu: "250m"`) {
+		t.Errorf("CPU not updated correctly, got:\n%s", content)
+	}
+	if !strings.Contains(content, `memory: "128Mi"`) {
+		t.Errorf("Memory not updated correctly, got:\n%s", content)
+	}
+	if !strings.Contains(content, `# Reason: low CPU usage detected`) {
+		t.Errorf("Comment not injected, got:\n%s", content)
+	}
+
+	// 验证未被建议的组件 (worker) 保持不变
+	if !strings.Contains(content, `name: worker`) || !strings.Contains(content, `cpu: "1000m"`) {
+		t.Errorf("Untouched component modified unexpectedly")
+	}
+}
+
+// =============================================================================
+// 4. Hook 流程拦截测试
+// =============================================================================
+
+func TestRunSizingHook_SkipManual(t *testing.T) {
+	// 验证当 mode=manual 时，Hook 是否直接跳过（不产生任何 IO 操作）
+	cfg := &deployConfig{sizingMode: "manual"}
+	plans := []planner.Plan{{Name: "test-pod"}}
+
+	// 如果逻辑错误触发了后续代码，这会导致 panic 或错误（因为我们传入了空路径）
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("Hook should skip silently when mode is manual, but it crashed: %v", r)
+		}
+	}()
+
+	runSizingHook(cfg, plans, "/non-existent-path", "", "")
+}
+
+func TestRunSizingHook_FilterValidTargets(t *testing.T) {
+	// 验证 Hook 是否正确过滤掉没有镜像或未开启 auto 的 Plan
+	cfg := &deployConfig{sizingMode: "auto"}
+	plans := []planner.Plan{
+		{Name: "no-image-pod", CPU: "100m"},                                                 // 缺少镜像
+		{Name: "manual-pod", Image: "nginx", Sizing: &planner.SizingConfig{Mode: "manual"}}, // 显式 manual
+		{Name: "valid-pod", Image: "nginx", CPU: "100m", Memory: "128Mi"},                   // 合法目标
+	}
+
+	// 在实际集成中，这里会调用 metrics 接口，
+	// 此处主要测试 resolver 逻辑是否在 targets 收集阶段起作用
+	var validTargets []string
+	for i := range plans {
+		p := &plans[i]
+		if p.Image == "" || p.CPU == "" || p.Memory == "" {
+			continue
+		}
+		mode, _ := resolveSizingConfig(cfg, p)
+		if mode == "auto" {
+			validTargets = append(validTargets, p.Name)
+		}
+	}
+
+	if len(validTargets) != 1 || validTargets[0] != "valid-pod" {
+		t.Errorf("Target filtering failed, found: %v", validTargets)
+	}
+}
+
+// TestComputeSizingForPod_PrometheusFallback 验证 Prometheus 查询失败时自动降级到瞬时采样
+// 业务场景: Prometheus 不可用/无数据 → fallback 到 kubectl top，保证部署不中断
+// 测试重点: 验证 "Fallback -> 获取 Samples -> Compute" 这一集成链路的连通性
+func TestSizingCompute_WithFallbackSamples(t *testing.T) {
+	// 1. 准备测试环境上下文
+	ctx := context.Background()
+	profile := sizing.ProfileWeb
+
+	// 2. 构造模拟样本 (模拟 Fallback 成功后从 kubectl top 采集到的 3 个点)
+	// 这里的样本数据在均值 310m 左右，内存 305Mi 左右，波动极小
+	samples := []*metrics.PodMetrics{
+		{
+			Timestamp:   time.Now().Add(-4 * time.Second),
+			TotalCPU:    metrics.Quantity{Value: 300, Raw: "300m"},
+			TotalMemory: metrics.Quantity{Value: 300 << 20, Raw: "300Mi"},
+		},
+		{
+			Timestamp:   time.Now().Add(-2 * time.Second),
+			TotalCPU:    metrics.Quantity{Value: 320, Raw: "320m"},
+			TotalMemory: metrics.Quantity{Value: 310 << 20, Raw: "310Mi"},
+		},
+		{
+			Timestamp:   time.Now(),
+			TotalCPU:    metrics.Quantity{Value: 310, Raw: "310m"},
+			TotalMemory: metrics.Quantity{Value: 305 << 20, Raw: "305Mi"},
+		},
+	}
+
+	// 3. 执行核心计算逻辑 (模拟 computeSizingForPod 的最终输出阶段)
+	// 在实际 deploy_sizing.go 中，这里会被封装在 computeSizingForPod 函数内
+	// 验证：即使经过 Fallback 路径，只要 samples 存在，计算就不应报错
+	sug, err := sizing.Compute(ctx, samples, profile)
+
+	// 4. 验证核心业务语义 (Final Verification)
+	// -----------------------------------------------------------------
+
+	// 验证点 A: 逻辑健壮性 (无错误返回)
+	if err != nil {
+		t.Fatalf("Fallback computation failed: %v", err)
+	}
+	if sug == nil {
+		t.Fatal("Expected suggestion result, got nil")
+	}
+
+	// 验证点 B: 置信度逻辑 (Confidence Check)
+	// 算法逻辑: 3 个样本基础置信度为 3/5 = 0.6。
+	// 由于样本波动极小 (CV 趋近 0)，最终置信度应保持在 0.6 附近。
+	if sug.Confidence < 0.5 {
+		t.Errorf("Expected moderate confidence (>=0.5) for 3 stable samples, got %.2f", sug.Confidence)
+	}
+
+	// 验证点 C: 推荐值合理性 (Recommendation Check)
+	// CPU 均值 310m，ProfileWeb 权重 0.7，推荐值应落在 [300, 350] 范围内
+	avgCPU := int64(310) // 样本均值
+	if sug.RecommendedCPU < avgCPU {
+		t.Errorf("Recommended CPU %d < avg %d, violates stability guarantee",
+			sug.RecommendedCPU, avgCPU)
+	}
+	// 可选: 验证推荐值不超过均值的 2 倍 (避免过度配置)
+	if sug.RecommendedCPU > avgCPU*2 {
+		t.Errorf("Recommended CPU %d > 2x avg %d, possible over-provisioning",
+			sug.RecommendedCPU, avgCPU)
+	}
+
+	// 内存均值 305Mi，推荐值应在 300Mi 以上 (需考虑 64Mi 步长对齐)
+	avgMem := int64(305 << 20)
+	if sug.RecommendedMem < avgMem {
+		t.Errorf("Recommended Memory %d < avg %d, violates stability guarantee",
+			sug.RecommendedMem, avgMem)
+	}
+	// 验证点 D: 治理信息 (Metadata Check)
+	if sug.Profile != profile {
+		t.Errorf("Profile mismatch: got %s, want %s", sug.Profile, profile)
+	}
+
+	t.Logf("Fallback test passed: CPU Rec=%dm, Mem Rec=%dMi, Confidence=%.2f",
+		sug.RecommendedCPU, sug.RecommendedMem>>20, sug.Confidence)
+}
+

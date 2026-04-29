@@ -13,7 +13,9 @@ import (
 	"github.com/Ixecd/kubepivot/internal/metrics"
 )
 
-// --- 1. Quantity 转换辅助（对齐真实 metrics/quantity.go）---
+// =============================================================================
+// 1. Quantity 转换辅助（对齐真实 metrics/quantity.go）
+// =============================================================================
 
 // toMillicores CPU Quantity → millicores (int64)
 // 因 Quantity.Value 已是标准化 millicores，直接返回
@@ -27,7 +29,9 @@ func toBytes(q metrics.Quantity) int64 {
 	return q.Value
 }
 
-// --- 2. 采样层：模拟"历史"数据（Level1 方案）---
+// =============================================================================
+// 2. 采样层：模拟"历史"数据（Level1 方案，Level5 无变更）
+// =============================================================================
 
 // samplePodMetrics 采集 N 次瞬时指标，模拟短期历史
 // 间隔建议: 2-5s (避免太近噪声 / 太远漂移)
@@ -62,7 +66,9 @@ func samplePodMetrics(ctx context.Context, client metrics.MetricsClient, namespa
 	return samples, nil
 }
 
-// --- 3. DP 核心：输入 []*metrics.PodMetrics ---
+// =============================================================================
+// 3. Profile + 权重系统（Level5 扩展：导出 + 自定义权重）
+// =============================================================================
 
 // Profile 业务模板，驱动得分权重 (设计拍板 Q2=B)
 type Profile string
@@ -86,11 +92,19 @@ func weights(p Profile) (float64, float64) {
 	}
 }
 
+// GetWeights 导出函数: 按 Profile 返回 (cpuWeight, memWeight)
+// Level5 扩展: 供外部调用 (如 deploy_sizing.go 的 weight_learning)
+func GetWeights(p Profile) (float64, float64) {
+	return weights(p)
+}
+
+// =============================================================================
+// 4. 离散化配置（设计拍板 Q1=C，Level5 无变更）
+// =============================================================================
+
 // discreteLevels 混合离散化 (设计拍板 Q1=C)
 // CPU: 线性 50m 步长 [50, 4000] → 80 级
 // Mem: 倍数增长 [64Mi, 8Gi] → ~128 级 (256/512/1024... 槽位)
-// internal/sizing/dp.go 修正 discreteLevels:
-
 func discreteLevels() (cpuLevels []int64, memLevels []int64) {
 	// CPU: 50m ~ 4000m, step=50m → 80 级 ✓
 	for c := int64(50); c <= 4000; c += 50 {
@@ -105,6 +119,10 @@ func discreteLevels() (cpuLevels []int64, memLevels []int64) {
 	return cpuLevels, memLevels
 }
 
+// =============================================================================
+// 5. Suggestion 输出格式（Level5 无变更）
+// =============================================================================
+
 // Suggestion 输出格式 (设计拍板 Q4=B: patch/suggest, not auto-apply)
 type Suggestion struct {
 	CurrentCPU     int64   // millicores, 解析自 Plan.CPU (调用方传入)
@@ -117,14 +135,18 @@ type Suggestion struct {
 	SavingsMem     float64
 }
 
+// =============================================================================
+// 6. DP 核心算法（Level5 重构：提取 compute + 支持自定义权重）
+// =============================================================================
+
 // Compute 单 Pod 最优 sizing (维度 B: Pod × CPU × Memory)
 //
 // 核心逻辑:
-//  1. 聚合采样点: 指数衰减加权 + 估算 P95 (avg + 1.5*std)
-//  2. DP 状态空间: 混合离散化 (CPU 50m 步长, Mem 64Mi 步长)
-//  3. 成本函数: 加权资源成本 + 浪费惩罚 (请求 > P95 的部分)
-//  4. 约束: P95 <= request * (1 - headroom), headroom=20%
-//  5. 输出: 最小成本状态 + 置信度 (基于样本数 + 离散度)
+//   1. 聚合采样点: 指数衰减加权 + 估算 P95 (avg + 1.5*std)
+//   2. DP 状态空间: 混合离散化 (CPU 50m 步长, Mem 64Mi 步长)
+//   3. 成本函数: 加权资源成本 + 浪费惩罚 (请求 > P95 的部分)
+//   4. 约束: P95 <= request * (1 - headroom), headroom=20%
+//   5. 输出: 最小成本状态 + 置信度 (基于样本数 + 离散度)
 //
 // 参数:
 //   - ctx: 控制超时/取消
@@ -139,7 +161,45 @@ type Suggestion struct {
 //   - 确定性: 同输入必同输出 (方便 CI 缓存 + 调试)
 //   - 最小必要: 简化 P95 估算 + 线性离散化, 避免过度工程
 //   - 可解释: 置信度 + 节省率帮助用户决策
+//
+// Level5 备注: 如需自定义权重，请使用 ComputeWithWeights
 func Compute(ctx context.Context, samples []*metrics.PodMetrics, profile Profile) (*Suggestion, error) {
+	cpuW, memW := GetWeights(profile)
+	return compute(ctx, samples, profile, cpuW, memW)
+}
+
+// ComputeWithWeights 支持自定义权重的 sizing 计算 (Level5 新增)
+//
+// 用途: weight_learning 场景，基于历史利用率变异系数 (CV) 动态调整权重
+//
+// 参数:
+//   - ctx, samples, profile: 同 Compute
+//   - cpuW, memW: 自定义权重 (若 <=0 则自动 fallback 到 GetWeights(profile))
+//
+// 返回: 同 Compute
+//
+// 示例:
+//
+//	// 基于 CV 计算动态权重
+//	adaptiveCPU, adaptiveMem, _, _ := CalculateAdaptiveWeights(samples, 0.5, 0.5)
+//	sug, err := ComputeWithWeights(ctx, samples, profile, adaptiveCPU, adaptiveMem)
+func ComputeWithWeights(ctx context.Context, samples []*metrics.PodMetrics, profile Profile, cpuW, memW float64) (*Suggestion, error) {
+	// 容错 & fallback: 若权重非法，自动回退到默认 Profile 权重
+	if cpuW <= 0 || memW <= 0 {
+		cpuW, memW = GetWeights(profile)
+	}
+	// 归一化: 确保权重和为 1.0 (避免成本函数量纲错误)
+	sum := cpuW + memW
+	if sum > 1e-6 {
+		cpuW /= sum
+		memW /= sum
+	}
+	return compute(ctx, samples, profile, cpuW, memW)
+}
+
+// compute 核心 DP 逻辑 (内部复用，不导出)
+// 参数 cpuW/memW 为已归一化的权重，直接用于成本计算
+func compute(ctx context.Context, samples []*metrics.PodMetrics, profile Profile, cpuW, memW float64) (*Suggestion, error) {
 	// --- 前置校验 ---
 	if len(samples) == 0 {
 		return nil, fmt.Errorf("no metrics samples: cannot compute sizing without data")
@@ -186,9 +246,6 @@ func Compute(ctx context.Context, samples []*metrics.PodMetrics, profile Profile
 	// DP 表: map[state]result (稀疏存储, 只存可行状态)
 	dp := make(map[state]result)
 
-	// 预计算: 业务权重 (避免循环内重复调用)
-	cpuWeight, memWeight := weights(profile)
-
 	// 约束参数: 20% 缓冲 (headroom)
 	headroom := 0.2
 
@@ -208,14 +265,16 @@ func Compute(ctx context.Context, samples []*metrics.PodMetrics, profile Profile
 
 			// [成本计算] 第一项: 加权资源成本
 			// 原理: 资源本身有成本 (云厂商计费), 权重反映业务偏好
-			resourceCost := float64(cpuReq)*cpuWeight + float64(memReq)*memWeight
+			// Level5: 使用传入的 cpuW/memW (支持 weight_learning)
+			resourceCost := float64(cpuReq)*cpuW + float64(memReq)*memW
 
 			// [成本计算] 第二项: 浪费惩罚
 			// 原理: 请求 > P95 的部分是"过度配置", 应惩罚
 			// 注意: Mem 浪费权重减半 (内存更弹性, CPU 更敏感)
+			// Level5: Mem 浪费惩罚也使用传入的 memW (保持一致性)
 			wasteCPU := math.Max(0, float64(cpuReq)-float64(p95CPU))
 			wasteMem := math.Max(0, float64(memReq)-float64(p95Mem))
-			wastePenalty := wasteCPU*cpuWeight + wasteMem*memWeight*0.5
+			wastePenalty := wasteCPU*cpuW + wasteMem*memW*0.5
 
 			// 总成本 = 资源成本 + 浪费惩罚
 			totalCost := resourceCost + wastePenalty
@@ -294,6 +353,10 @@ func Compute(ctx context.Context, samples []*metrics.PodMetrics, profile Profile
 	}, nil
 }
 
+// =============================================================================
+// 7. 辅助函数（Level5 无变更）
+// =============================================================================
+
 // meanStd 计算整数切片的均值 + 总体标准差
 // 公式:
 //
@@ -329,6 +392,10 @@ func meanStd(vals []int64) (avg, std int64) {
 
 	return
 }
+
+// =============================================================================
+// 8. 输出格式化（Level5 无变更）
+// =============================================================================
 
 // ToPatch 生成 patch YAML (设计拍板 Q4=B)
 // 输出可直接重定向到文件: kp sizing recommend ... > sizing-patch.yaml
