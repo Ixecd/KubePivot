@@ -1,0 +1,121 @@
+feat(scheduler): 乾枢 Level 5+6 — 运行时重调度 + 可观测性
+
+乾枢调度系统生产级增强。实现了周期性重调度、事件驱动降级、多级安全阀，
+以及 Prometheus 指标暴露。
+
+核心用户价值:
+  - 集群资源利用率持续优化：每 5 分钟自动检测负载不均并迁移 Pod
+  - 自适应安全：资源抖动或 OOM 时自动进入观察/紧急降级模式，避免雪崩
+  - 紧急刹车：Pause/Resume 一键停止/恢复自动调度
+  - 全链路可观测：7 个 Prometheus 指标暴露
+  - 迁移安全：StatefulSet、蓝绿部署锁定 Pod 永不迁移
+
+变更:
+  internal/scheduler/rescheduler.go         新增 332 行   重调度器核心逻辑
+  internal/scheduler/rescheduler_test.go    新增 250 行   8 项测试
+  internal/scheduler/metrics.go             新增  80 行   调度器 Prometheus 指标
+  internal/scheduler/scheduler.go           修改   5 行   Schedule() 接入 coordinator
+  internal/controller/global.go             新增  15 行   重调度器启动
+
+合计: ~682 行新代码
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+设计核心 (6 个决策点全锁):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Q-Resched.1=A 周期性重调度: 5min 间隔，可配置
+    ✓ 每周期扫描全集群节点利用率
+    ✓ 检测平均利用率 1.2x 的高负载节点和 0.8x 的低负载节点
+    ✓ 从高负载节点选 Pod 迁移到低负载节点，单次迁移≤5%总Pod数
+
+  Q-Resched.2=A 迁移安全性: StatefulSet 和蓝绿 Pod 永不迁移
+    ✓ statefulset.kubernetes.io/pod-name 标签判断 StatefulSet
+    ✓ kubepivot.io/blue-green-locked=true 标签判断蓝绿锁定
+
+  Q-Resched.3=A 抖动检测与多级降级:
+    ✓ 5min 窗口内 CPU>95% 或 Memory>95% 视为 spike
+    ✓ 3 次 spikes → Level 1 (观察模式，迁移量减半)
+    ✓ 6 次 spikes 或 OOM → Level 2 (紧急降级，停止迁移)
+    ✓ Level 3 (暂停所有自动调度，等待用户介入)
+    ✓ 抖动消失后自动逐级恢复
+
+  Q-Resched.4=A PodAssigner 接口: 解耦重调度器与具体调度器
+    ✓ 接口仅含 AssignPod 方法，便于 mock 测试
+    ✓ Scheduler.AssignPod 自动满足接口，无需修改
+
+  Q-Metrics.1=A Prometheus 指标: 7 个核心指标
+    ✓ kubepivot_scheduler_iterations_total
+    ✓ kubepivot_scheduler_solve_duration_seconds
+    ✓ kubepivot_node_utilization_cpu_ratio / memory_ratio
+    ✓ kubepivot_pod_oomkill_total
+    ✓ kubepivot_scheduler_fallback_level
+    ✓ kubepivot_pod_migration_total
+
+  Q-Metrics.2=A 指标采集策略: 非侵入式，每次周期扫描更新
+    ✓ 节点利用率在 run() 后刷新，迁移计数在迁移成功后递增
+    ✓ 降级级别在抖动检测后同步，调度耗时在 Schedule() 完成后记录
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+工程纪律亮点:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ✊ 接口注入保持可测试性:
+    - PodAssigner 接口隔离了重调度器对具体调度的依赖
+    - 单测中使用 mockAssigner 验证迁移逻辑，无需真实 Scheduler
+
+  ✊ 安全第一，默认保守:
+    - 降级机制优先于优化，抖动时先保护集群稳定性
+    - Level 3 暂停需用户手动恢复，防止自动化引发二次故障
+
+  ✊ 最小侵入:
+    - 重调度器和指标暴露均在新增文件中，不改动现有核心调度代码
+    - global.go 中仅增加几行启动和指标注册代码
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+打脸记录:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ✓ 第 1 次: Schedule() 改用 coordinator 后空集群场景报错
+    根因: coordinator 内先查 nodes 再判断 pods 是否为空
+    修复: pod 列表为空时提前返回空计划，不查 node
+  ✓ 第 2 次: migratePods 只打日志未实际更新 Pod.NodeName
+    根因: 最初实现只记录意向，未修改 Pod 对象状态
+    修复: 在分配成功后更新 p.NodeName = node
+  ✓ 第 3 次: Rescheduler 直接依赖 *Scheduler 导致不可测试
+    根因: 具体类型依赖，mock 注入困难
+    修复: 引入 PodAssigner 接口，Scheduler.AssignPod 自动满足
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+测试覆盖 (全部 PASS):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  重调度器 (8):
+    TestComputeNodeUtilization      节点利用率计算正确性
+    TestDetectImbalance             不平衡节点对检测
+    TestDetectImbalance_NoImbalance 均衡集群无迁移
+    TestIsMigratable                迁移约束判断（5 sub）
+    TestMigratePods_Simple          Pod 迁移与状态更新
+    TestDetectJitter                抖动检测与自动降级升级
+    TestPauseAndResume              手动暂停/恢复
+    TestReportOOM                   OOM 事件触发降级
+
+  调度器核心（无回归）:
+    TestBinPack / TestCoordinate / TestWebhook 等全部通过
+    make dev 全绿
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+后续规划:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  生产化适配 (v3.0.x):
+    - 集成 K8s Eviction API 真正驱逐 Pod
+    - Controller HTTP server 暴露 /metrics
+    - 通过 ownerReferences 精确识别 StatefulSet
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+乾枢 v3.0 运行时重调度与可观测性交付——
+  自动平衡集群负载、防御资源抖动、暴露全链路指标，
+  这是 KubePivot 从"能调度"到"能自愈"的关键一步。

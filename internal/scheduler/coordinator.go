@@ -19,9 +19,20 @@ func (s *Scheduler) coordinate(ctx context.Context) (*SchedulingPlan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list pods: %w", err)
 	}
+
+	// 空集群无需调度
+	if len(pods) == 0 {
+		slog.Debug("集群无 Pod，跳过调度")
+		return &SchedulingPlan{PodAssignments: map[string]string{}, Converged: true}, nil
+	}
+
 	nodes, err := s.nodes.ListAllNodes(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list nodes: %w", err)
+	}
+
+	if len(nodes) == 0 {
+		return nil, fmt.Errorf("集群无可用节点")
 	}
 
 	// 第 0 次：不做裁剪，直接用原始请求装箱

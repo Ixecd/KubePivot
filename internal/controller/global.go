@@ -150,6 +150,24 @@ func StartGlobal(ctx context.Context) {
 	kubeAdapter := scheduler.NewKubectlAdapter(kubeconfig)
 	sched := scheduler.NewScheduler(kubeAdapter, kubeAdapter, nil, nil, nil)
 
+	// ── 初始化乾枢重调度器（运行时）──
+	reschedulerCfg := scheduler.ReschedulerConfig{
+		Interval:         5 * time.Minute, // 每5分钟扫描一次集群
+		MaxMigrations:    0,               // 0 表示使用默认值（总Pod数的5%）
+		JitterWindow:     5 * time.Minute,
+		JitterThreshold:  0.95,
+		JitterSpikeCount: 3,
+	}
+	rescheduler := scheduler.NewRescheduler(sched, kubeAdapter, kubeAdapter, reschedulerCfg)
+
+	// ── 启动乾枢重调度器 ──
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		slog.Info("乾枢重调度器已启动", "interval", reschedulerCfg.Interval)
+		rescheduler.Start(ctx)
+	}()
+
 	// ── 启动乾枢 Webhook 服务器 ──
 	wg.Add(1)
 	go func() {
