@@ -1,0 +1,73 @@
+docs(scheduler): 乾枢脚手架跨 Chart 硬编码修复 + Scheduler/Rescheduler 设计文档
+
+修复业务 Chart 中残留的 {{ .Release.Name }} 导致的首次部署失败，
+并补充乾枢调度器与重调度器的完整设计文档。
+
+问题:
+  1. 业务 Chart 的 Deployment 模板中 ServiceAccount / InitContainer host /
+     DB_HOST / DB_NAME / ETCD_ENDPOINTS 使用了 {{ .Release.Name }}，
+     与 Postgres/etcd Chart 中基于项目名的静态命名不一致。
+     首次部署时 Pod 因找不到 ServiceAccount 而无法创建，
+     InitContainer 连不上正确的服务地址，导致部署超时失败。
+  2. rollout 状态检查错误地使用了 plan.Name 而非 release 名称，
+     导致 kubectl rollout status 找不到目标 Deployment，
+     即使 Pod 已健康运行仍被判定失败并触发回滚。
+  3. 首次部署时未自动创建 namespace，helm install 因目标命名空间缺失而失败。
+
+修复:
+  internal/scaffold/helm.go       将 Deployment 模板中所有跨 Chart 引用的
+                                  {{ .Release.Name }} 替换为静态变量 name
+  cmd/kp/multi_deploy.go          修正 rollout 检查使用 release 名称
+  cmd/kp/deploy.go                新增 ensureNamespaceExists 幂等创建逻辑
+
+新增:
+  docs/design/scheduler.md        乾枢调度器设计文档 (BinPack / Coordinator /
+                                  PlanWriter / Webhook)
+  docs/design/rescheduler.md      乾枢重调度器设计文档 (周期性扫描 / 抖动检测 /
+                                  多级降级 / 迁移约束)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+打脸记录 (本轮部署修复全程):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ✓ 第 1 次: Postgres 密码硬编码 → 改为 secretKeyRef
+  ✓ 第 2 次: 业务 Chart 重复创建同名 Secret → 删除冗余生成逻辑
+  ✓ 第 3 次: DATABASE_URL 硬编码凭证 → 拆分为独立环境变量
+  ✓ 第 4 次: values.yaml 包含已废弃的 DATABASE_URL 样例 → 清理
+  ✓ 第 5 次: InitContainer 无超时限制 → 加入计数器重试逻辑
+  ✓ 第 6 次: Secret 命名残留多余 name 参数 → 清理为纯字符串
+  ✓ 第 7 次: 遗漏 wait-etcd 的 host 名修改 → 统一使用 name 变量
+  ✓ 第 8 次: Deployment 模板中 app / serviceAccountName /
+     DB_HOST / DB_NAME / ETCD_ENDPOINTS 仍残留 {{ .Release.Name }} →
+     全部替换为 name 变量
+  ✓ 第 9 次: rollout 状态检查使用 plan.Name 而非 release 名称 →
+     改为 release 变量
+  ✓ 第 10 次: 首次部署未创建 namespace → 新增 ensureNamespaceExists
+  ✓ 第 11 次: 跨 Chart Secret 名称不一致 (king-postgres-auth vs
+     king-king-postgres-auth) → 统一使用 name 变量静态命名
+
+  教训: Helm 的 {{ .Release.Name }} 仅在单 Chart 内部稳定。
+        跨 Chart (多 Release 架构) 共享资源必须使用外部注入的固定值。
+        任何模板迁移到多 Release 架构时，必须对所有 .Release.Name
+        引用进行适配审查。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+验证:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  [✓] helm template 渲染后所有资源名称一致
+  [✓] kp deploy 首次部署成功 (king 项目，全部 Pod Running)
+  [✓] rollout 状态检查通过
+  [✓] Controller 自愈：手动删除 Deployment 后自动恢复
+  [✓] make dev 全绿
+  [✓] 无编译错误、无测试回归
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+乾枢 v3.0 脚手架安全基线交付——
+  从 Secret 管理、RBAC 最小权限、网络隔离到跨 Chart 命名一致性，
+  每一个 kp init 生成的项目都自带生产级安全配置。
+  Scheduler 与 Rescheduler 设计文档完成，
+  为后续 K8s Eviction API 集成和持续调优提供完整参考。
