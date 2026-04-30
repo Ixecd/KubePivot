@@ -79,28 +79,32 @@ func StartGlobal(ctx context.Context) {
 				}()
 			}
 
-			// ── 处理接管的陌生分片：主动同步已存在的项目 ──
+			// ── 处理接管的陌生分片：从集群主动同步已存在的项目 ──
 			if len(added) > 0 {
 				go func() {
-					time.Sleep(2 * time.Second)
+					time.Sleep(2 * time.Second) // 确保分片状态已稳定
 
-					projects := gs.ListProjects() // map[namespace]sha256
+					// 直接从 K8s API 拉取最新的托管命名空间列表
+					existing, err := executor.GetExecutor().Kubectl(ctx, kubeconfig,
+						"get", "ns", "-l", "kubepivot.io/managed=true",
+						"-o", "jsonpath={.items[*].metadata.name}",
+					)
+					if err != nil {
+						slog.Warn("分片接管后无法获取项目列表", "err", err)
+						return
+					}
+
 					syncedCount := 0
-					for _, ns := range projects {
-						if !shardMgr.Shards().OwnsNamespace(ns, totalShards) {
+					for _, ns := range strings.Fields(string(existing)) {
+						if IsProtectedNamespace(ns) || !shardMgr.Shards().OwnsNamespace(ns, totalShards) {
 							continue
 						}
-						pool.Enqueue(ReconcileTask{
-							Project:   ns,
-							Namespace: ns,
-							Kind:      "ConfigMap",
-							Reason:    "shard-acquired",
-						})
+						slog.Info("📥 分片接管发现已存在项目，主动同步", "ns", ns)
+						loadResourcesConfigMap(ctx, kubeconfig, gs, ns)
 						syncedCount++
 					}
-					slog.Info("📥 分片接管完成，已主动同步项目",
-						"added_shards", added,
-						"synced_projects", syncedCount)
+					slog.Info("📥 分片接管完成，已同步历史项目",
+						"added_shards", added, "synced_projects", syncedCount)
 				}()
 			}
 		},
@@ -286,12 +290,9 @@ func watchNamespaces(
 		if IsProtectedNamespace(meta.Name) {
 			return
 		}
-
-		// v2.5.0：shard 过滤
 		if !shardMgr.Shards().OwnsNamespace(meta.Name, totalShards) {
 			return
 		}
-
 		switch ev.Action {
 		case WatchAdded, WatchModified:
 			slog.Info("📥 发现 managed namespace（属于本 shard）",

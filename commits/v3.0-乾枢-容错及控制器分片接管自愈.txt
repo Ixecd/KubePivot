@@ -1,0 +1,94 @@
+fix(controller-eventstream): 修复 Informer List/Watch 容错及控制器分片接管自愈
+
+这次修复是一场捍卫自研 Informer 与控制器核心自愈能力的持久战。在将控制器升级到 v3.0 后，我们发现了一个堪称“完美风暴”的连环故障：升级后 Informer 缓存永远为空，控制器最核心的自愈能力完全失效。
+
+根因排查过程遭遇了 Docker Registry、K8s 节点双重镜像缓存的严重干扰，在长达数小时的反复构建、部署、验证中，最终锁定了两个根本问题。特此诚实记录，以奉后来者。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+问题一：K8s API List/Watch 事件缺失必要字段导致 Informer 彻底失效
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+根因:
+  - K8s API 的 List 响应中，`items` 里的每个单独对象不包含 `kind` 字段。
+  - Watch 事件流中偶尔出现缺少 `metadata.name` 的内部簿记事件。
+  - 原先严格的 `ParseSkeleton` 会将这类事件视为致命错误，导致整个
+    List/Watch 流程中断，最终缓存永远为空，所有依赖 Informer 的功能停摆。
+
+修复策略:
+  我们拒绝了“退回使用 kubectl”的便利解，因为那将完全抛弃自研 Informer
+  的核心性能优势——44x List 查询、5.4x allocs 降低。
+
+  选择了零依赖、高性能的字节层防御方案：
+
+  - 新增 `extractJSONString` 辅助函数：通过对原始 HTTP body 的简单
+    字节扫描提取顶层 `kind` 值，不引入任何 JSON 解析开销。
+  - 新增 `injectKind` 及 `injectJSONField` 函数：在字节层面为原始
+    JSON 对象注入缺失的 `kind` 字段后再交给 `ParseSkeleton`。
+  - 修改 `doInitialList` 流程：在分页解析 List 响应前自动从原始 body
+    提取外层 `kind` 并对每个 item 进行注入。
+  - 修改 `handleWatchLine` 流程：在解析 Watch 事件对象前进行相同的
+    `kind` 注入，并在 `resourceVersion` 更新后静默跳过无法解析的
+    内部簿记事件（不再中断 Watch 连接）。
+  - 修改 `ParseSkeleton`：将缺少 `metadata.name` 视为可容错跳过，
+    而非致命错误。
+
+修改文件:
+  internal/eventstream/informer_impl.go     +68行  核心容错逻辑
+  internal/eventstream/serializer.go        +2行   缺少 name 跳过
+
+工程哲学:
+  这是对“专用优于通用”原则的忠诚。我们的 Informer 不是为了解析所有
+  合法的 K8s 对象而存在的，而是为了支撑调度和自愈的精确需求。
+  用几个字节操作守卫住整个高性能数据层，值得。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+问题二：控制器分片重分配后不主动接管已存在的项目
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+根因:
+  - 当控制器 Pod 重启并抢占新分片时，原先的 `OnShardChanged` 回调
+    只处理了失去分片时的孤儿清理，没有处理接管新分片时的主动同步。
+    这导致之前已 enroll 的项目（如 king）在控制器重启后无法被自动
+    发现和接管，自愈机制完全绕过这些“历史项目”。
+  - 初期尝试在 `OnShardChanged` 中通过遍历内存 `GlobalState` 来同步，
+    但因 Watcher 尚未触发导致内存为空而失败。
+  - 后期尝试在 `watchNamespaces` 启动时 List 历史项目，又因 `shardMgr`
+    并发初始化导致 `OwnsNamespace` 误判为 false 而失败。
+
+修复策略:
+  - 最终在 `OnShardChanged` 的 `added` 分支中采用“直接从集群 List
+    历史项目”的方案：用 `kubectl get ns -l ...` 获取所有托管命名空间，
+    再通过 `loadResourcesConfigMap` 注入 `GlobalState`。此后由每 8 秒
+    执行的 Periodic Reconcile Loop 完成最终的自愈重建。
+  - 该 List 仅在分片变动时执行一次，稳定运行期间无性能影响。
+  - 彻底移除所有基于内存遍历或过早 List 的中间方案，保持代码整洁。
+
+修改文件:
+  internal/controller/global.go             +30行   分片接管主动同步
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+额外修复：跨 Chart 硬编码 Release.Name 及 Controller RBAC 缺失
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  - 修复业务 Chart Deployment 模板中多处残留的 {{ .Release.Name }}，
+    改为静态变量 name，确保 Secret、ServiceAccount、InitContainer host
+    等跨 Chart 资源名称完全一致。
+  - 重建缺失的 ClusterRole 和 ClusterRoleBinding，控制器 ServiceAccount
+    获得必要的 list/watch 权限。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+教训：Docker 镜像缓存的“完美骗局”
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  - `docker buildx --no-cache` 只控制构建层缓存，无法控制 Registry
+    对同一 tag 的 manifest 缓存，也无法控制 kubelet 的本地 image 缓存。
+  - 使用固定标签反复推送新镜像时，新代码极有可能不生效。
+  - 后续重大修复务必使用唯一镜像标签，并设置 `imagePullPolicy: Always`。
+  - 其他 CI/CD 流程也必须将此列为铁律。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+累计工作量与验证:
+  - 排查耗时：~4 小时（包含大量重复构建部署及缓存干扰）
+  - 实际代码修改：~120 行
+  - 验证结果：Informer initial count=9，控制器自愈功能完全恢复，
+    分片接管后 `king-king` Pod 自动重建并 Running。
+  - make dev 全绿，无编译错误，无测试回归。
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
