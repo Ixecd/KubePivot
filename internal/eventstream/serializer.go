@@ -59,7 +59,8 @@ func ParseSkeleton(rawJSON []byte) (*Resource, error) {
 		return nil, fmt.Errorf("eventstream: ParseSkeleton: missing kind")
 	}
 	if partial.Metadata.Name == "" {
-		return nil, fmt.Errorf("eventstream: ParseSkeleton: missing metadata.name")
+		// 某些 K8s 内部 Watch 事件或非标准资源可能不包含 metadata.name
+		return nil, fmt.Errorf("eventstream: ParseSkeleton: skip object without name")
 	}
 
 	// 时间戳解析（容错处理）

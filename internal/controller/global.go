@@ -64,17 +64,44 @@ func StartGlobal(ctx context.Context) {
 		Kubeconfig:  kubeconfig,
 		// v2.5.0 Step 3：分片变化时即时清理孤儿（5s grace period）
 		OnShardChanged: func(added, removed []int) {
-			if len(removed) == 0 {
-				return // 仅持有增多 → 无需清理
+			// ── 处理失去的分片：清理不再由本 Pod 管理的孤儿项目 ──
+			if len(removed) > 0 {
+				go func() {
+					// Grace period：让正在跑的 reconcile 完成
+					time.Sleep(5 * time.Second)
+					cleaned := gs.RemoveOrphanProjects(func(ns string) bool {
+						return shardMgr.Shards().OwnsNamespace(ns, totalShards)
+					})
+					if len(cleaned) > 0 {
+						slog.Info("🧹 OnShardChanged 触发的孤儿清理完成",
+							"removed_shards", removed, "cleaned_namespaces", cleaned)
+					}
+				}()
 			}
-			// Grace period：让正在跑的 reconcile 完成（Q3 决策 B 方案）
-			time.Sleep(5 * time.Second)
-			cleaned := gs.RemoveOrphanProjects(func(ns string) bool {
-				return shardMgr.Shards().OwnsNamespace(ns, totalShards)
-			})
-			if len(cleaned) > 0 {
-				slog.Info("🧹 OnShardChanged 触发的孤儿清理完成",
-					"removed_shards", removed, "cleaned_namespaces", cleaned)
+
+			// ── 处理接管的陌生分片：主动同步已存在的项目 ──
+			if len(added) > 0 {
+				go func() {
+					time.Sleep(2 * time.Second)
+
+					projects := gs.ListProjects() // map[namespace]sha256
+					syncedCount := 0
+					for _, ns := range projects {
+						if !shardMgr.Shards().OwnsNamespace(ns, totalShards) {
+							continue
+						}
+						pool.Enqueue(ReconcileTask{
+							Project:   ns,
+							Namespace: ns,
+							Kind:      "ConfigMap",
+							Reason:    "shard-acquired",
+						})
+						syncedCount++
+					}
+					slog.Info("📥 分片接管完成，已主动同步项目",
+						"added_shards", added,
+						"synced_projects", syncedCount)
+				}()
 			}
 		},
 	})

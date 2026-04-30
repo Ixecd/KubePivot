@@ -2,6 +2,7 @@ package eventstream
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -527,6 +529,9 @@ func (im *informerImpl) doInitialList(ctx context.Context) error {
 			return fmt.Errorf("list returned %d: %s", resp.StatusCode, string(body))
 		}
 
+		// 从原始 body 中提取外层 Kind，用于补全 items 中缺失的 kind 字段
+		listKind := extractJSONString(body, "kind")
+
 		// 解析 List 响应
 		var listResp struct {
 			Metadata struct {
@@ -546,6 +551,10 @@ func (im *informerImpl) doInitialList(ctx context.Context) error {
 
 		// 解 Skeleton
 		for _, raw := range listResp.Items {
+			// K8s List API 返回的 items 可能缺少 kind 字段，补全之。
+			// kubectl 客户端会自动补全，但直接 HTTP 请求拿到的原生 JSON 不包含。
+			// 这里从最外层 list 响应中推导 kind，注入到每个 raw item 中。
+			raw = injectKind(raw, listKind)
 			r, err := ParseSkeleton(raw)
 			if err != nil {
 				slog.Warn("eventstream: parse skeleton failed in list",
@@ -675,14 +684,21 @@ func (im *informerImpl) handleWatchLine(raw []byte) error {
 		return fmt.Errorf("watch ERROR event: %s", string(ev.Object))
 	}
 
-	// 解析对象
-	r, err := ParseSkeleton(ev.Object)
-	if err != nil {
-		return fmt.Errorf("parse skeleton: %w", err)
+	// 从原始对象中提取 resourceVersion（用于断线续传）。
+	// 必须在 ParseSkeleton 之前提取，因为 K8s 偶尔会推送
+	// 没有 metadata.name 的内部簿记事件，但它们仍携带 RV。
+	if rv := extractJSONString(ev.Object, "resourceVersion"); rv != "" {
+		im.setResourceVersion(rv)
 	}
 
-	// 更新 RV（用于断线续传）
-	im.setResourceVersion(r.ResourceVersion)
+	// 解析对象
+	r, err := ParseSkeleton(injectKind(ev.Object, "")) // 防御式注入 kind
+	if err != nil {
+		// 这是 K8s 内部簿记事件（无 metadata.name），静默跳过。
+		// resourceVersion 已经在上面的 extractJSONString 中提取并更新，
+		// Watch 流不会中断。
+		return nil
+	}
 
 	// 转换事件类型 + 更新 cache
 	switch ev.Type {
@@ -748,8 +764,9 @@ func (im *informerImpl) bumpEventTypeCounter(t EventType) {
 // buildListURL 构造 list 请求 URL。
 //
 // 例：
-//   /api/v1/pods?limit=500
-//   /apis/apps/v1/deployments?limit=500&continue=token
+//
+//	/api/v1/pods?limit=500
+//	/apis/apps/v1/deployments?limit=500&continue=token
 func (im *informerImpl) buildListURL(continueToken string) (string, error) {
 	base, err := im.resourceBaseURL()
 	if err != nil {
@@ -771,7 +788,8 @@ func (im *informerImpl) buildListURL(continueToken string) (string, error) {
 // buildWatchURL 构造 watch 请求 URL。
 //
 // 例：
-//   /api/v1/pods?watch=1&resourceVersion=12345&allowWatchBookmarks=true
+//
+//	/api/v1/pods?watch=1&resourceVersion=12345&allowWatchBookmarks=true
 func (im *informerImpl) buildWatchURL() (string, error) {
 	base, err := im.resourceBaseURL()
 	if err != nil {
@@ -794,9 +812,10 @@ func (im *informerImpl) buildWatchURL() (string, error) {
 // resourceBaseURL 构造资源的 base URL（不含 query）。
 //
 // APIVersion 解析：
-//   "v1"        → /api/v1/{resource}                    (核心组)
-//   "apps/v1"   → /apis/apps/v1/{resource}               (扩展组)
-//   "networking.k8s.io/v1" → /apis/networking.k8s.io/v1/{resource}
+//
+//	"v1"        → /api/v1/{resource}                    (核心组)
+//	"apps/v1"   → /apis/apps/v1/{resource}               (扩展组)
+//	"networking.k8s.io/v1" → /apis/networking.k8s.io/v1/{resource}
 func (im *informerImpl) resourceBaseURL() (string, error) {
 	if im.opts.APIServerURL == "" {
 		return "", fmt.Errorf("APIServerURL not configured")
@@ -835,4 +854,60 @@ func (im *informerImpl) setResourceVersion(rv string) {
 	im.rvMu.Lock()
 	defer im.rvMu.Unlock()
 	im.resourceVersion = rv
+}
+
+// injectKind 根据外层 List 的 Kind (如 "DeploymentList") 推导出单个资源的 Kind (如 "Deployment")
+// 然后注入到 raw JSON 中。如果 listKind 不符合 "*List" 模式则原样返回 raw。
+func injectKind(raw json.RawMessage, listKind string) json.RawMessage {
+	kind := strings.TrimSuffix(listKind, "List")
+	if kind == listKind || kind == "" {
+		return raw // 不是标准的 *List 格式，不注入
+	}
+	return injectJSONField(raw, "kind", kind)
+}
+
+// injectJSONField 在原始 JSON 对象的第一个 "{" 后直接注入指定的 key/value 对。
+// 不依赖任何 JSON 解析库，完全通过字节操作实现，性能极高。
+func injectJSONField(raw []byte, key, value string) []byte {
+	// 找到第一个 '{' 的位置
+	pos := bytes.IndexByte(raw, '{')
+	if pos < 0 {
+		return raw // 不是合法的 JSON 对象
+	}
+	// 构造插入片段："\"key\":\"value\","
+	insert := []byte(`"` + key + `":"` + value + `",`)
+	// 新切片：raw[0:pos+1] + insert + raw[pos+1:]
+	out := make([]byte, 0, len(raw)+len(insert))
+	out = append(out, raw[:pos+1]...)
+	out = append(out, insert...)
+	out = append(out, raw[pos+1:]...)
+	return out
+}
+
+// extractJSONString 从 JSON 字节中提取指定 key 的字符串值。
+// 简单的字节扫描，不依赖完整的 JSON 解析，用于从顶层对象中提取已知字段。
+func extractJSONString(raw []byte, key string) string {
+	// 寻找 \"key\":
+	search := []byte(`"` + key + `":`)
+	pos := bytes.Index(raw, search)
+	if pos < 0 {
+		return ""
+	}
+	// 跳过 key 和引号及冒号
+	start := pos + len(search)
+	// 跳过空白
+	for start < len(raw) && (raw[start] == ' ' || raw[start] == '\t') {
+		start++
+	}
+	// 必须是字符串值，以双引号开始
+	if start >= len(raw) || raw[start] != '"' {
+		return ""
+	}
+	start++ // 跳过开头的双引号
+	// 寻找结尾的双引号
+	end := bytes.IndexByte(raw[start:], '"')
+	if end < 0 {
+		return ""
+	}
+	return string(raw[start : start+end])
 }
