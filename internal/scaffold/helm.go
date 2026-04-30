@@ -90,7 +90,7 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Release.Name }}-postgres-auth
+                  name: %s-postgres-auth
                   key: password
             - name: POSTGRES_DB
               value: %s
@@ -117,7 +117,7 @@ spec:
         resources:
           requests:
             storage: {{ .Values.storage }}
-`, name, name, name, name, name, name, name, name)
+`, name, name, name, name, name, name, name, name, name)
 
 	svc := fmt.Sprintf(`apiVersion: v1
 kind: Service
@@ -134,15 +134,16 @@ spec:
 
 	postgresValuesYAML := "storage: 1Gi\npostgres:\n  password: pass  # 生产环境请务必修改\n"
 
-	postgresSecretYAML := `apiVersion: v1
+	// Secret 模板中
+	postgresSecretYAML := fmt.Sprintf(`apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ .Release.Name }}-postgres-auth
+  name: %s-postgres-auth
   namespace: {{ .Release.Namespace }}
 type: Opaque
 data:
   password: {{ .Values.postgres.password | b64enc | quote }}
-`
+`, name)
 
 	netpol := fmt.Sprintf(`apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -326,13 +327,13 @@ dependencies: []
   kubectl port-forward -n {{ .Release.Namespace }} deployment/%s {{ .Values.service.port }}:{{ .Values.service.port }}
 `, name, name)
 
-	deployment := `apiVersion: apps/v1
+	deployment := fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
   labels:
-    app: {{ .Release.Name }}
+    app: %s
     kubepivot.io/name: {{ .Chart.Name }}
     kubepivot.io/instance: {{ .Release.Name }}
     kubepivot.io/version: {{ .Chart.AppVersion }}
@@ -342,22 +343,22 @@ spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      app: {{ .Release.Name }}
+      app: %s
   template:
     metadata:
       labels:
-        app: {{ .Release.Name }}
+        app: %s
         version: {{ .Values.image.tag | default .Chart.AppVersion }}
     spec:
-      serviceAccountName: {{ .Release.Name }}
+      serviceAccountName: %s
       automountServiceAccountToken: {{ .Values.rbac.create }}
       initContainers:
         - name: wait-postgres
           image: busybox:1.35
-          command: ['sh', '-c', 'count=0; until nc -z {{ .Release.Name }}-postgres 5432; do count=$((count+1)); if [ $count -gt 30 ]; then echo "timeout waiting for postgres"; exit 1; fi; echo waiting for postgres; sleep 2; done']
+          command: ['sh', '-c', 'count=0; until nc -z %s-postgres 5432; do count=$((count+1)); if [ $count -gt 30 ]; then echo "timeout waiting for postgres"; exit 1; fi; echo waiting for postgres; sleep 2; done']
         - name: wait-etcd
           image: busybox:1.35
-          command: ['sh', '-c', 'count=0; until nc -z {{ .Release.Name }}-etcd 2379; do count=$((count+1)); if [ $count -gt 60 ]; then echo "timeout waiting for etcd"; exit 1; fi; echo waiting for etcd; sleep 2; done']
+          command: ['sh', '-c', 'count=0; until nc -z %s-etcd 2379; do count=$((count+1)); if [ $count -gt 60 ]; then echo "timeout waiting for etcd"; exit 1; fi; echo waiting for etcd; sleep 2; done']
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -379,16 +380,16 @@ spec:
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Release.Name }}-postgres-auth
+                  name: %s-postgres-auth
                   key: password
             - name: DB_HOST
-              value: {{ .Release.Name }}-postgres
+              value: %s-postgres
             - name: DB_NAME
-              value: {{ .Release.Name }}
+              value: %s
             - name: DB_SSLMODE
               value: {{ .Values.db.sslmode | quote }}
             - name: ETCD_ENDPOINTS
-              value: {{ .Release.Name }}-etcd:2379
+              value: %s-etcd:2379
           livenessProbe:
             httpGet:
               path: /healthz
@@ -403,7 +404,7 @@ spec:
             periodSeconds: 5
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-`
+`, name, name, name, name, name, name, name, name, name, name)
 
 	svc := fmt.Sprintf(`apiVersion: v1
 kind: Service
@@ -496,19 +497,18 @@ roleRef:
 {{- end -}}
 `
 
-// 	secretYAML := `apiVersion: v1
-// kind: Secret
-// metadata:
-//   name: {{ .Release.Name }}-postgres-auth
-//   namespace: {{ .Release.Namespace }}
-//   labels:
-//     kubepivot.io/name: {{ .Chart.Name }}
-//     kubepivot.io/instance: {{ .Release.Name }}
-//     app.kubernetes.io/managed-by: kp
-// type: Opaque
-// data:
-//   password: {{ .Values.postgres.password | b64enc | quote }}`
-
+	// 	secretYAML := `apiVersion: v1
+	// kind: Secret
+	// metadata:
+	//   name: {{ .Release.Name }}-postgres-auth
+	//   namespace: {{ .Release.Namespace }}
+	//   labels:
+	//     kubepivot.io/name: {{ .Chart.Name }}
+	//     kubepivot.io/instance: {{ .Release.Name }}
+	//     app.kubernetes.io/managed-by: kp
+	// type: Opaque
+	// data:
+	//   password: {{ .Values.postgres.password | b64enc | quote }}`
 
 	vsPreview := fmt.Sprintf(`# virtualservice-preview.yaml
 # 仅在 strategy: blue-green 时使用，kp deploy --preview 会自动生成填充版本

@@ -285,7 +285,7 @@ func deployService(cfg *deployConfig, env map[string]string, plan planner.Plan, 
 
 			rolloutArgs := []string{
 				"kubectl", "rollout", "status",
-				fmt.Sprintf("%s/%s", resourceType, plan.Name),
+				fmt.Sprintf("%s/%s", resourceType, release),
 				"--namespace", cfg.namespace,
 				"--timeout=120s",
 			}

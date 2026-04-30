@@ -109,6 +109,12 @@ func runDeploy(args []string) {
 
 	resolveDeployConfig(cfg, env, root)
 
+	// 确保目标 namespace 存在（首次部署时自动创建）
+	if err := ensureNamespaceExists(cfg); err != nil {
+		fmt.Fprintln(os.Stderr, "创建命名空间失败:", err)
+		os.Exit(1)
+	}
+
 	plan, err := planner.BuildPlan(filepath.Join(root, cfg.components))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "解析组件失败:", err)
@@ -877,5 +883,39 @@ func updateComponentsSizing(path, podName string, sug *sizing.Suggestion) error 
 		return fmt.Errorf("write components: %w", err)
 	}
 
+	return nil
+}
+
+// ensureNamespaceExists 确保目标 namespace 存在。
+// 通过 kubectl apply 幂等创建，避免首次部署时因 namespace 缺失而失败。
+func ensureNamespaceExists(cfg *deployConfig) error {
+	if cfg.namespace == "" {
+		return nil // 未指定 namespace 则跳过
+	}
+
+	execer := executor.GetExecutor()
+
+	// 构造 namespace YAML
+	nsYaml := fmt.Sprintf(`apiVersion: v1
+kind: Namespace
+metadata:
+  name: %s`, cfg.namespace)
+
+	// 构造 kubectl apply 命令参数（不带 "kubectl" 前缀）
+	var args []string
+	if cfg.context != "" {
+		args = append(args, "--context", cfg.context)
+	}
+	args = append(args, "apply", "-f", "-") // apply stdin
+
+	// 使用 CmdKubectl 获取 exec.Cmd 对象以便传入 stdin
+	cmd := execer.CmdKubectl(context.Background(), cfg.kubeconfig, args...)
+	cmd.Stdin = strings.NewReader(nsYaml)
+
+	// 执行并捕获错误
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("apply namespace: %w\n%s", err, string(out))
+	}
 	return nil
 }
