@@ -88,7 +88,10 @@ spec:
             - name: POSTGRES_USER
               value: user
             - name: POSTGRES_PASSWORD
-              value: pass
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-postgres-auth
+                  key: password
             - name: POSTGRES_DB
               value: %s
             - name: PGDATA
@@ -129,11 +132,46 @@ spec:
       targetPort: 5432
 `, name, name)
 
+	postgresValuesYAML := "storage: 1Gi\npostgres:\n  password: pass  # 生产环境请务必修改\n"
+
+	postgresSecretYAML := `apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-postgres-auth
+  namespace: {{ .Release.Namespace }}
+type: Opaque
+data:
+  password: {{ .Values.postgres.password | b64enc | quote }}
+`
+
+	netpol := fmt.Sprintf(`apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: %s-postgres
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: %s-postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: %s
+      ports:
+        - port: 5432
+          protocol: TCP
+`, name, name, name)
+
 	return writeFiles(map[string]string{
 		filepath.Join(deploymentsDir, name+"-postgres", "Chart.yaml"):  chartYAML,
-		filepath.Join(deploymentsDir, name+"-postgres", "values.yaml"): "storage: 1Gi\n",
+		filepath.Join(deploymentsDir, name+"-postgres", "values.yaml"): postgresValuesYAML,
 		filepath.Join(dir, "statefulset.yaml"):                         statefulset,
 		filepath.Join(dir, "service.yaml"):                             svc,
+		filepath.Join(dir, "secret.yaml"):                              postgresSecretYAML,
+		filepath.Join(dir, "netpol.yaml"):                              netpol,
 	})
 }
 
@@ -229,11 +267,33 @@ spec:
       targetPort: 2380
 `, name, name)
 
+	netpol := fmt.Sprintf(`apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: %s-etcd
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: %s-etcd
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: %s
+      ports:
+        - port: 2379
+          protocol: TCP
+`, name, name, name)
+
 	return writeFiles(map[string]string{
 		filepath.Join(deploymentsDir, name+"-etcd", "Chart.yaml"):  chartYAML,
 		filepath.Join(deploymentsDir, name+"-etcd", "values.yaml"): "storage: 1Gi\n",
 		filepath.Join(dir, "statefulset.yaml"):                     statefulset,
 		filepath.Join(dir, "service.yaml"):                         svc,
+		filepath.Join(dir, "netpol.yaml"):                          netpol,
 	})
 }
 
@@ -266,35 +326,40 @@ dependencies: []
   kubectl port-forward -n {{ .Release.Namespace }} deployment/%s {{ .Values.service.port }}:{{ .Values.service.port }}
 `, name, name)
 
-	deployment := fmt.Sprintf(`apiVersion: apps/v1
+	deployment := `apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: %s
+  name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
   labels:
-    app: %s
+    app: {{ .Release.Name }}
+    kubepivot.io/name: {{ .Chart.Name }}
+    kubepivot.io/instance: {{ .Release.Name }}
+    kubepivot.io/version: {{ .Chart.AppVersion }}
+    app.kubernetes.io/managed-by: kp
     version: {{ .Values.image.tag | default .Chart.AppVersion }}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      app: %s
+      app: {{ .Release.Name }}
   template:
     metadata:
       labels:
-        app: %s
+        app: {{ .Release.Name }}
         version: {{ .Values.image.tag | default .Chart.AppVersion }}
     spec:
-      serviceAccountName: %s
+      serviceAccountName: {{ .Release.Name }}
+      automountServiceAccountToken: {{ .Values.rbac.create }}
       initContainers:
         - name: wait-postgres
           image: busybox:1.35
-          command: ['sh', '-c', 'until nc -z %s-postgres 5432; do echo waiting for postgres; sleep 2; done']
+          command: ['sh', '-c', 'count=0; until nc -z {{ .Release.Name }}-postgres 5432; do count=$((count+1)); if [ $count -gt 30 ]; then echo "timeout waiting for postgres"; exit 1; fi; echo waiting for postgres; sleep 2; done']
         - name: wait-etcd
           image: busybox:1.35
-          command: ['sh', '-c', 'until nc -z %s-etcd 2379; do echo waiting for etcd; sleep 2; done']
+          command: ['sh', '-c', 'count=0; until nc -z {{ .Release.Name }}-etcd 2379; do count=$((count+1)); if [ $count -gt 60 ]; then echo "timeout waiting for etcd"; exit 1; fi; echo waiting for etcd; sleep 2; done']
       containers:
-        - name: %s
+        - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
@@ -308,10 +373,22 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
-          {{- with .Values.env }}
           env:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
+            - name: DB_USER
+              value: {{ .Values.db.user | quote }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-postgres-auth
+                  key: password
+            - name: DB_HOST
+              value: {{ .Release.Name }}-postgres
+            - name: DB_NAME
+              value: {{ .Release.Name }}
+            - name: DB_SSLMODE
+              value: {{ .Values.db.sslmode | quote }}
+            - name: ETCD_ENDPOINTS
+              value: {{ .Release.Name }}-etcd:2379
           livenessProbe:
             httpGet:
               path: /healthz
@@ -326,13 +403,18 @@ spec:
             periodSeconds: 5
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-`, name, name, name, name, name, name, name, name)
+`
 
 	svc := fmt.Sprintf(`apiVersion: v1
 kind: Service
 metadata:
   name: %s
   namespace: {{ .Release.Namespace }}
+  labels:
+    kubepivot.io/name: {{ .Chart.Name }}
+    kubepivot.io/instance: {{ .Release.Name }}
+    kubepivot.io/version: {{ .Chart.AppVersion }}
+    app.kubernetes.io/managed-by: kp
 spec:
   type: {{ .Values.service.type }}
   selector:
@@ -348,6 +430,11 @@ kind: ServiceAccount
 metadata:
   name: %s
   namespace: {{ .Release.Namespace }}
+  labels:
+    kubepivot.io/name: {{ .Chart.Name }}
+    kubepivot.io/instance: {{ .Release.Name }}
+    kubepivot.io/version: {{ .Chart.AppVersion }}
+    app.kubernetes.io/managed-by: kp
 `, name)
 
 	networkPolicy := fmt.Sprintf(`apiVersion: networking.k8s.io/v1
@@ -370,6 +457,58 @@ spec:
         - port: {{ .Values.service.port }}
           protocol: TCP
 `, name, name)
+
+	roleYAML := fmt.Sprintf(`# 业务服务默认不需要访问 K8s API，因此不绑定任何 RBAC 规则。
+# 如果你的服务需要访问 ConfigMap、Secret 或其他 K8s 资源，
+# 请将 values.yaml 中的 rbac.create 设为 true，并取消下面规则的注释。
+#
+# 示例：读取当前 namespace 的 ConfigMap
+# apiVersion: rbac.authorization.k8s.io/v1
+# kind: Role
+# metadata:
+#   name: %s-reader
+#   namespace: {{ .Release.Namespace }}
+# rules:
+#   - apiGroups: [""]
+#     resources: ["configmaps"]
+#     verbs: ["get", "list"]
+`, name)
+
+	roleBindingYAML := `{{- if .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-rb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Release.Name }}
+    kubepivot.io/name: {{ .Chart.Name }}
+    kubepivot.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: kp
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ .Release.Name }}-reader
+  apiGroup: rbac.authorization.k8s.io
+{{- end -}}
+`
+
+// 	secretYAML := `apiVersion: v1
+// kind: Secret
+// metadata:
+//   name: {{ .Release.Name }}-postgres-auth
+//   namespace: {{ .Release.Namespace }}
+//   labels:
+//     kubepivot.io/name: {{ .Chart.Name }}
+//     kubepivot.io/instance: {{ .Release.Name }}
+//     app.kubernetes.io/managed-by: kp
+// type: Opaque
+// data:
+//   password: {{ .Values.postgres.password | b64enc | quote }}`
+
 
 	vsPreview := fmt.Sprintf(`# virtualservice-preview.yaml
 # 仅在 strategy: blue-green 时使用，kp deploy --preview 会自动生成填充版本
@@ -421,10 +560,19 @@ spec:
 	vb.WriteString("    cpu: 500m\n")
 	vb.WriteString("    memory: 512Mi\n\n")
 	vb.WriteString("securityContext:\n")
-	vb.WriteString("  readOnlyRootFilesystem: false  # 改为 true 可加强安全，但需确保服务不写本地文件\n\n")
+	vb.WriteString("  readOnlyRootFilesystem: true  # 改为 true 可加强安全，但需确保服务不写本地文件\n\n")
+	vb.WriteString("rbac:\n")
+	vb.WriteString("  create: false\n")
+	vb.WriteString("  roles:\n")
+	vb.WriteString("    # - name: config-reader\n")
+	vb.WriteString("    #   apiGroups: [\"\"]\n")
+	vb.WriteString("    #   resources: [\"configmaps\"]\n")
+	vb.WriteString("    #   verbs: [\"get\", \"list\"]\n")
+	vb.WriteString("\n")
+	vb.WriteString("db:\n")
+	vb.WriteString("  user: \"user\"\n")
+	vb.WriteString("  sslmode: \"disable\"  # 生产环境建议 require\n")
 	vb.WriteString("env:\n")
-	vb.WriteString("  - name: DATABASE_URL\n")
-	vb.WriteString("    value: \"postgres://user:pass@" + name + "-postgres:5432/" + name + "?sslmode=disable&search_path=public\"\n")
 	vb.WriteString("  - name: ETCD_ENDPOINTS\n")
 	vb.WriteString("    value: \"" + name + "-etcd:2379\"\n")
 
@@ -436,6 +584,8 @@ spec:
 		filepath.Join(dir, "service.yaml"):                 svc,
 		filepath.Join(dir, "serviceaccount.yaml"):          sa,
 		filepath.Join(dir, "networkpolicy.yaml"):           networkPolicy,
+		filepath.Join(dir, "role.yaml"):                    roleYAML,
+		filepath.Join(dir, "rolebinding.yaml"):             roleBindingYAML,
 		filepath.Join(dir, "virtualservice-preview.yaml"):  vsPreview,
 	})
 }

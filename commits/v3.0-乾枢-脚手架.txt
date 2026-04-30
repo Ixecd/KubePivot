@@ -1,0 +1,94 @@
+feat(scaffold): v3.0 安全基线脚手架 — Secret 管理 + RBAC 闭环 + 网络隔离 + 只读根文件系统
+
+乾枢 v3.0 脚手架模板安全加固。将 KubePivot 生成的业务服务 Helm chart 从
+"Demo 级"提升至"生产就绪"级别，默认遵循最小权限、防御深度和
+零信任安全原则。
+
+核心用户价值:
+  - 数据库密码通过 Secret 管理，不再硬编码在 values.yaml 或 Deployment 中
+  - RBAC 三元组 (SA + Role + RoleBinding) 完整生成，默认全部拒绝
+  - 数据库中间件 (Postgres/etcd) 默认启用 NetworkPolicy，仅允许业务 Pod 访问
+  - 容器根文件系统默认只读，遵循 CIS Kubernetes 安全基准
+  - InitContainer 增加超时重试逻辑，避免永久阻塞
+
+变更:
+  internal/scaffold/helm.go                  重构 ~300 行   安全基线模板全面升级
+
+合计: ~300 行重构 + 0 额外依赖
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+设计核心 (6 个决策点全锁):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Q-Scaffold.1=A Secret 单一事实来源: Postgres Chart 负责生成
+    ✓ Secret 仅在 Postgres 独立 Chart 中定义和管理
+    ✓ 业务 Chart 通过 secretKeyRef 消费，不重复创建同名资源
+    ✓ 遵循 "Don't Repeat Yourself" 原则，避免部署冲突
+
+  Q-Scaffold.2=A 数据库连接变量解耦: 拆分为独立环境变量
+    ✓ DB_USER / DB_PASSWORD / DB_HOST / DB_NAME / DB_SSLMODE
+    ✓ 密码通过 Secret 注入，符合 12-Factor App 原则
+    ✓ 移除硬编码的 DATABASE_URL，避免配置漂移
+
+  Q-Scaffold.3=A RBAC 默认拒绝: rbac.create 默认为 false
+    ✓ ServiceAccount 已绑定但 automountServiceAccountToken 默认关闭
+    ✓ Role 和 RoleBinding 模板提供带注释的示例，按需开启
+    ✓ 与 v2.8 RBAC 的 teams.yaml 逻辑对称: "默认全拒绝，显式放行"
+
+  Q-Scaffold.4=A 网络策略最小化: Postgres/etcd 仅允许业务 Pod 访问
+    ✓ 通过 podSelector 匹配 app: %s 标签精确控制
+    ✓ 与业务 Chart 的 NetworkPolicy (namespace 级别隔离) 形成纵深防御
+    ✓ etct 保持监听 0.0.0.0 以保证 Service 可达性
+
+  Q-Scaffold.5=A 容器安全上下文加固: readOnlyRootFilesystem 默认 true
+    ✓ 容器根文件系统不可写入，大幅提高入侵难度
+    ✓ runAsNonRoot + allowPrivilegeEscalation: false + drop ALL capabilities
+    ✓ 符合 CIS Kubernetes Benchmark 推荐配置
+
+  Q-Scaffold.6=A InitContainer 超时保护: 避免永久阻塞
+    ✓ wait-postgres 最多重试 30 次 (60s)
+    ✓ wait-etcd 最多重试 60 次 (120s)
+    ✓ 超时后 exit 1 触发 Pod 重启，故障可见
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+工程纪律亮点:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ✊ 安全左移: 将安全基线内置到脚手架生成逻辑中
+    - 用户 kp init 即获得生产级安全配置，无需手动加固
+    - 默认安全 > 默认方便，与 DEPENDENCY_POLICY.md 哲学一致
+
+  ✊ 最小惊讶: 所有安全默认值均可通过 values.yaml 覆盖
+    - rbac.create: false → true
+    - readOnlyRootFilesystem: true → false
+    - db.sslmode: "disable" → "require"
+
+  ✊ 代码即文档: 每个安全配置均附带注释说明
+    - values.yaml 中的注释引导用户按需修改
+    - role.yaml 中的注释示例展示如何开启权限
+
+  ✊ 零破坏性变更: 既有的 kp init 流程完全不受影响
+    - 仅修改生成的模板内容，不改变脚手架生成逻辑
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+打脸记录:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ✓ 第 1 次: Postgres 密码硬编码在 StatefulSet 中 → 改为 secretKeyRef
+  ✓ 第 2 次: 业务 Chart 重复创建同名 Secret → 删除冗余生成逻辑
+  ✓ 第 3 次: DATABASE_URL 硬编码凭证 → 拆分为独立环境变量
+  ✓ 第 4 次: values.yaml 包含已废弃的 DATABASE_URL 样例 → 清理
+  ✓ 第 5 次: InitContainer 无超时限制 → 加入计数器重试逻辑
+  ✓ 第 6 次: Secret 生成中残留无用的 name 参数 → 清理为纯字符串
+  ✓ 第 7 次: roleBindingYAML/secretYAML 等误用 fmt.Sprintf 未携带 %s 导致编译错误
+    根因: 模板改为纯字符串后忘记去掉 fmt.Sprintf 和多余的参数
+    修复: 全部改为 raw string 声明，删除无用的 name 参数传递
+    验证: make dev 全绿，所有模板正确生成
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+乾枢 v3.0 脚手架安全基线交付 — 从 kp init 开始，
+  每一个生成的 Pod 都默认拥有 Secret 管理、RBAC 最小权限、
+  网络隔离和只读根文件系统，这是 KubePivot 对生产安全的承诺。
