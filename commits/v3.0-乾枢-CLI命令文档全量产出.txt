@@ -1,0 +1,10 @@
+docs(cmd): v3.0 CLI 全命令文档 — docs/cmd/ 下 32 个主命令完整覆盖
+
+每个命令一个文件夹 + 同名 .md，统一结构：用法 → Flag 表 → 子命令 → 工作流程 → RBAC → 相关命令。
+复杂命令（deploy/sandbox/secret/controller/sizing/supply-chain）含流程图和设计说明。
+
+变更:
+  docs/cmd/                        32 个文件夹
+  docs/cmd/*/*.md                  33 个 markdown 文件
+
+合计: 33 个新文件，内容来源为 tools/audit 扫描输出 + 人工 review cmd/kp/ 源码
