@@ -22,8 +22,8 @@ jobs:
 
       - name: Configure git
         run: |
-          git config --global user.email "ci@dtk.dev"
-          git config --global user.name "dtk-ci"
+          git config --global user.email "kp@kp.dev"
+          git config --global user.name "kp-ci"
 
       - name: Install kubectl
         run: |
@@ -48,7 +48,10 @@ jobs:
             ./internal/controller/...
 
       - name: Test (all)
-        run: go test ./...
+        run: |
+          mv configs/teams.yaml configs/teams.yaml.ci-bak
+          trap 'mv configs/teams.yaml.ci-bak configs/teams.yaml' EXIT
+          go test ./...
 
       - name: Docker build
         run: |
