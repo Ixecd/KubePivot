@@ -99,6 +99,8 @@ type cacheSnapshot struct {
 	//   Put 内层 map 拷贝（O(N_ns)）
 	//   总体 trade-off 划算
 	items map[string]map[string]*Resource
+
+	size int // 总数缓存
 }
 
 // NewCache 创建一个空的 SkeletonCache 实例。
@@ -152,7 +154,7 @@ func (c *SkeletonCache) List(ns string) []*Resource {
 
 // ListAll 全量列出（跨 namespace）。
 //
-// 性能（基于 Day 1 benchmark）：
+// 性能（cache 内 size 计数器，省去第一遍遍历）：
 //
 //	1000 items: ~7500ns / 8KB
 //	vs client-go: ~7300ns
@@ -160,13 +162,7 @@ func (c *SkeletonCache) List(ns string) []*Resource {
 func (c *SkeletonCache) ListAll() []*Resource {
 	snap := c.snapshot.Load().(*cacheSnapshot)
 
-	// 计算总量预分配
-	total := 0
-	for _, nsMap := range snap.items {
-		total += len(nsMap)
-	}
-
-	result := make([]*Resource, 0, total)
+	result := make([]*Resource, 0, snap.size)
 	for _, nsMap := range snap.items {
 		for _, r := range nsMap {
 			result = append(result, r)
@@ -199,6 +195,7 @@ func (c *SkeletonCache) Put(r *Resource) {
 	defer c.writeMu.Unlock()
 
 	old := c.snapshot.Load().(*cacheSnapshot)
+	newSize := old.size
 
 	// 拷贝外层 map（namespace 数量通常 ~50-200）
 	newItems := make(map[string]map[string]*Resource, len(old.items)+1)
@@ -208,6 +205,9 @@ func (c *SkeletonCache) Put(r *Resource) {
 			newNsMap := make(map[string]*Resource, len(nsMap)+1)
 			for k, v := range nsMap {
 				newNsMap[k] = v
+			}
+			if _, exists := nsMap[r.Name]; !exists {
+				newSize++
 			}
 			newNsMap[r.Name] = r
 			newItems[ns] = newNsMap
@@ -220,9 +220,10 @@ func (c *SkeletonCache) Put(r *Resource) {
 	// ns 不存在则新建
 	if _, exists := newItems[r.Namespace]; !exists {
 		newItems[r.Namespace] = map[string]*Resource{r.Name: r}
+		newSize++
 	}
 
-	c.snapshot.Store(&cacheSnapshot{items: newItems})
+	c.snapshot.Store(&cacheSnapshot{items: newItems, size: newSize})
 }
 
 // PutBulk 批量写入。
@@ -256,6 +257,7 @@ func (c *SkeletonCache) PutBulk(items []*Resource) {
 	defer c.writeMu.Unlock()
 
 	old := c.snapshot.Load().(*cacheSnapshot)
+	newSize := old.size
 
 	// 按 ns 分组待写入对象
 	nsGroups := make(map[string][]*Resource)
@@ -277,6 +279,9 @@ func (c *SkeletonCache) PutBulk(items []*Resource) {
 				merged[k] = v
 			}
 			for _, r := range newRes {
+				if _, exists := nsMap[r.Name]; !exists {
+					newSize++
+				}
 				merged[r.Name] = r
 			}
 			newItems[ns] = merged
@@ -294,9 +299,10 @@ func (c *SkeletonCache) PutBulk(items []*Resource) {
 			nsMap[r.Name] = r
 		}
 		newItems[ns] = nsMap
+		newSize += len(nsMap)
 	}
 
-	c.snapshot.Store(&cacheSnapshot{items: newItems})
+	c.snapshot.Store(&cacheSnapshot{items: newItems, size: newSize})
 }
 
 // Delete 删除指定 ns + name 的 Resource。
@@ -341,7 +347,7 @@ func (c *SkeletonCache) Delete(ns, name string) {
 		}
 	}
 
-	c.snapshot.Store(&cacheSnapshot{items: newItems})
+	c.snapshot.Store(&cacheSnapshot{items: newItems, size: old.size - 1})
 }
 
 // Stats 返回当前 Cache 监控指标。
@@ -351,6 +357,7 @@ func (c *SkeletonCache) Stats() CacheStats {
 	snap := c.snapshot.Load().(*cacheSnapshot)
 
 	stats := CacheStats{
+		TotalItems:     snap.size,
 		NamespaceCount: len(snap.items),
 		ItemsByLayer:   make(map[CacheLayer]int),
 	}
@@ -358,7 +365,6 @@ func (c *SkeletonCache) Stats() CacheStats {
 	var bytesEst uint64
 	for _, nsMap := range snap.items {
 		for _, r := range nsMap {
-			stats.TotalItems++
 			stats.ItemsByLayer[r.cacheLayer]++
 			// 估算：Skeleton 字段 ~200B + RawJSON 长度
 			bytesEst += 200 + uint64(len(r.RawJSON))

@@ -1,0 +1,15 @@
+perf(eventstream): SkeletonCache ListAll 省去计数遍历 — size 计数器维护
+
+cacheSnapshot 新增 size 字段，Put/PutBulk/Delete 构造新 snapshot 时维护，
+ListAll 直接用 snap.size 预分配，省去第一遍 namespace 遍历计数。
+
+之前：ListAll 两遍遍历 (数总数 + 拷贝)，7500ns vs client-go 7300ns
+现在：ListAll 单遍遍历，省掉 ~200ns 计数开销，大 map 场景差距更大
+
+Stats() 同时受益：TotalItems 从遍历计数改为 snap.size O(1)。
+
+变更:
+  internal/eventstream/cache.go      +20 行   size 字段 + 4 构造点 counter 维护
+  internal/eventstream/cache_test.go  +35 行   TestCache_SizeCounter
+
+合计: ~55 行代码

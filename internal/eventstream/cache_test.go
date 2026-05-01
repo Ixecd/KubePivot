@@ -324,3 +324,47 @@ func itoa(n int) string {
 	}
 	return string(digits)
 }
+
+// ─── Size 计数器测试 ──────────────────────────────────────────────
+func TestCache_SizeCounter(t *testing.T) {
+	c := NewCache()
+	if s := c.Stats(); s.TotalItems != 0 {
+		t.Fatalf("empty cache: got %d, want 0", s.TotalItems)
+	}
+
+	// Put: 新增
+	c.Put(&Resource{Namespace: "ns1", Name: "a"})
+	c.Put(&Resource{Namespace: "ns1", Name: "b"})
+	c.Put(&Resource{Namespace: "ns2", Name: "c"})
+	if s := c.Stats(); s.TotalItems != 3 {
+		t.Fatalf("after 3 Puts: got %d, want 3", s.TotalItems)
+	}
+
+	// Put: 替换已有 key
+	c.Put(&Resource{Namespace: "ns1", Name: "a"})
+	if s := c.Stats(); s.TotalItems != 3 {
+		t.Fatalf("after replace: got %d, want 3", s.TotalItems)
+	}
+
+	// ListAll 使用 size 预分配
+	all := c.ListAll()
+	if len(all) != 3 {
+		t.Fatalf("ListAll: got %d, want 3", len(all))
+	}
+
+	// Delete
+	c.Delete("ns1", "a")
+	if s := c.Stats(); s.TotalItems != 2 {
+		t.Fatalf("after delete: got %d, want 2", s.TotalItems)
+	}
+
+	// PutBulk
+	c.PutBulk([]*Resource{
+		{Namespace: "ns3", Name: "d"},
+		{Namespace: "ns3", Name: "e"},
+		{Namespace: "ns2", Name: "c"}, // 替换已有
+	})
+	if s := c.Stats(); s.TotalItems != 4 {
+		t.Fatalf("after PutBulk: got %d, want 4 (c not dup), got %d", 4, s.TotalItems)
+	}
+}
