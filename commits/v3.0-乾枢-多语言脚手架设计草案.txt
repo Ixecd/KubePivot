@@ -1,0 +1,33 @@
+docs(design): kp init 多语言脚手架设计草案 — 壳+核 架构 + 5语言 x 3 workload
+
+v3.1 GPU 调度前，脚手架从 Go-only 扩展到 5 种语言 + 零侵入模式。
+核层（configs/deployments/scripts/Makefile）语言无关、所有项目完全相同。
+壳层（Dockerfile + 业务骨架）按语言差异生成，统一走 Docker 多阶段构建。
+
+设计核心:
+  - 壳+核 两层架构：kp deploy 只读核层，不感知语言差异
+  - 5 种语言：Go(默认) / Python(FastAPI) / Java(Spring Boot) / Rust(Axum) / C++(Drogon)
+  - 3 种 workload：web(默认) / grpc / job(CronJob)
+  - --no-app 零侵入模式：已有项目原地 K8s 化
+  - 资源预设按语言分档：Go/Rust/C++(128Mi) / Python(256Mi) / Java(512Mi)
+  - 统一 docker build：用户不需要任何语言工具链
+  - 模板系统：embed.FS + core/app 分离 + strings.ReplaceAll 变量替换
+  - Helm 条件渲染：物理文件拆分 web/grpc/job 子目录（不用 text/template）
+  - GPU v3.1 伏笔：python/cpp Dockerfile GPU 镜像注释提示 + resources.yaml gpu 预留字段
+  - 12+2 个测试用例 + 向后兼容 golden file + 幂等性测试
+
+变更:
+  docs/design/init-multi-lang-draft.md   新增 ~800 行   完整设计草案（10 Q 拍板 + 5 语言完整 Dockerfile + Makefile + 业务骨架）
+
+合计: 1 个新文件
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+补充记录 (v1.1 qc 拍板):
+  - Makefile _check_docker 预飞行检查
+  - create-secret.sh 安全警告 + DRY_RUN 预览模式
+  - Java application.properties 优雅停机
+  - C++ ccache 构建缓存 + BuildKit --mount
+  - Python gunicorn 生产模式注释
+  - 模板变量方案最终决策：物理文件拆分
+  - 幂等性测试：同目录重复 init + --force 保护
+  - 编辑记录作者修正：qc + DeepSeek 😈

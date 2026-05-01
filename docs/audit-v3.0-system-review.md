@@ -394,5 +394,5 @@ KubePivot v3.0 代码质量良好。Master 分支保持 0 fix commit 的工程�
 
 ---
 
-审计工具：`tools/audit/audit.py` (Python) + 人工审查
+审计工具：`tools/audit/audit.py` (Python) + 人工审查（qc + DeepSeek）
 报告位置：`docs/audit-v3.0-system-review.md`
