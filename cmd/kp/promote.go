@@ -6,8 +6,10 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/Ixecd/kubepivot/internal/audit"
 	"github.com/Ixecd/kubepivot/internal/bluegreen"
 	"github.com/Ixecd/kubepivot/internal/planner"
+	"github.com/Ixecd/kubepivot/internal/rbac"
 )
 
 func runPromote(args []string) {
@@ -21,7 +23,7 @@ func runPromote(args []string) {
 		os.Exit(1)
 	}
 
-	root, err := projectRoot()
+	root, err := Root()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "找不到项目根目录:", err)
 		os.Exit(1)
@@ -36,6 +38,10 @@ func runPromote(args []string) {
 	resolveDeployConfig(cfg, env, root)
 
 	projectName := envOrDefault(env, "PROJECT_NAME", filepath.Base(root))
+
+	// RBAC 检查
+	mustCheck(audit.ResolveActor(), cfg.namespace, rbac.PermPromote)
+
 	etcdEndpoints := env["ETCD_ENDPOINTS"]
 	store := bluegreen.NewAutoStore(etcdEndpoints)
 

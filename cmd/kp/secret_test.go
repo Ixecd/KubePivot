@@ -127,7 +127,7 @@ spec:
 
 func TestExtractServiceFromPath_Deployment(t *testing.T) {
 	path := "/home/qc/web3-blitz/deployments/web3-blitz/wallet-service/templates/deployment.yaml"
-	svc, kind := extractServiceFromPath(path)
+	svc, kind := extractServiceFromPath(path, []byte(""))
 	if svc != "wallet-service" {
 		t.Errorf("服务名错误，got %s", svc)
 	}
@@ -138,7 +138,7 @@ func TestExtractServiceFromPath_Deployment(t *testing.T) {
 
 func TestExtractServiceFromPath_StatefulSet(t *testing.T) {
 	path := "/home/qc/web3-blitz/deployments/web3-blitz/postgres/templates/statefulset.yaml"
-	svc, kind := extractServiceFromPath(path)
+	svc, kind := extractServiceFromPath(path, []byte(""))
 	if svc != "postgres" {
 		t.Errorf("服务名错误，got %s", svc)
 	}

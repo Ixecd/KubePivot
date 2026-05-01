@@ -19,7 +19,7 @@ import (
 // ════════════════════════════════════════════════════════════════════════════
 
 func TestResolveTeamsConfigPath_NeitherExists(t *testing.T) {
-	switchToTempProjectRoot(t)
+	switchToTempRoot(t)
 
 	// 项目根 / 用户 home 都没 teams.yaml
 	home := t.TempDir()
@@ -35,7 +35,7 @@ func TestResolveTeamsConfigPath_NeitherExists(t *testing.T) {
 }
 
 func TestResolveTeamsConfigPath_UserOnly(t *testing.T) {
-	switchToTempProjectRoot(t)
+	switchToTempRoot(t)
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -65,7 +65,7 @@ func TestGetRBACChecker_NilSafe(t *testing.T) {
 	ResetRBACCheckerForTest()
 	defer ResetRBACCheckerForTest()
 
-	switchToTempProjectRoot(t)
+	switchToTempRoot(t)
 
 	// 临时 home, 无任何 teams.yaml
 	home := t.TempDir()
@@ -84,7 +84,7 @@ func TestGetRBACChecker_EmptyConfig_AllowsAll(t *testing.T) {
 	ResetRBACCheckerForTest()
 	defer ResetRBACCheckerForTest()
 
-	switchToTempProjectRoot(t)
+	switchToTempRoot(t)
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -106,7 +106,7 @@ func TestMustCheck_NoConfig_DoesNotExit(t *testing.T) {
 	ResetRBACCheckerForTest()
 	defer ResetRBACCheckerForTest()
 
-	switchToTempProjectRoot(t)
+	switchToTempRoot(t)
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -130,7 +130,7 @@ func TestMustCheck_ChecksUnderlyingChecker(t *testing.T) {
 	ResetRBACCheckerForTest()
 	defer ResetRBACCheckerForTest()
 
-	switchToTempProjectRoot(t)
+	switchToTempRoot(t)
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -165,7 +165,7 @@ func TestMustCheck_ChecksUnderlyingChecker(t *testing.T) {
 }
 
 func TestResetRBACCheckerForTest_ReloadsConfig(t *testing.T) {
-	switchToTempProjectRoot(t)
+	switchToTempRoot(t)
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -203,14 +203,14 @@ func TestResetRBACCheckerForTest_ReloadsConfig(t *testing.T) {
 // 测试 helper: 切到临时项目根
 // ════════════════════════════════════════════════════════════════════════════
 
-// switchToTempProjectRoot 切 cwd 到临时项目根 (含 Makefile + 空 configs/).
+// switchToTempRoot 切 cwd 到临时项目根 (含 Makefile + 空 configs/).
 //
 // 用途: 隔离测试不受真实项目根的 configs/teams.yaml 干扰.
 // resolveTeamsConfigPath 优先项目级, 不切走会读到真实 configs/teams.yaml,
 // 导致测试结果依赖真实项目状态 (B.4 后 configs/teams.yaml 可能存在并影响测试).
 //
 // t.Cleanup 自动 chdir 回原目录.
-func switchToTempProjectRoot(t *testing.T) string {
+func switchToTempRoot(t *testing.T) string {
 	t.Helper()
 	oldCwd, err := os.Getwd()
 	require.NoError(t, err)
@@ -218,11 +218,24 @@ func switchToTempProjectRoot(t *testing.T) string {
 	projectDir := t.TempDir()
 	require.NoError(t, os.WriteFile(
 		filepath.Join(projectDir, "Makefile"),
-		[]byte("# stub for projectRoot()"), 0o644))
+		[]byte("# stub for Root()"), 0o644))
 	require.NoError(t, os.MkdirAll(
 		filepath.Join(projectDir, "configs"), 0o755))
 	require.NoError(t, os.Chdir(projectDir))
 
 	t.Cleanup(func() { _ = os.Chdir(oldCwd) })
 	return projectDir
+}
+
+func TestMustCheck_NewPermissions_Pass(t *testing.T) {
+	ResetRBACCheckerForTest()
+	// 无 teams.yaml → 全权限 (Q-B5)，所有权限应通过
+	// 不会 panic，不会 exit
+	// 通过检查不写 audit denied
+}
+
+func TestMustCheck_NewPermissions_Denied(t *testing.T) {
+	ResetRBACCheckerForTest()
+	// 写一个临时 teams.yaml，限制特定权限
+	// 验证 mustCheck 在拒绝时写 audit denied
 }

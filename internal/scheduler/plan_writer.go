@@ -24,18 +24,18 @@ type componentEntry struct {
 
 // filePlanWriter 将调度结果写入 configs/components.yaml
 type filePlanWriter struct {
-	projectRoot string
+	Root string
 }
 
 // NewFilePlanWriter 创建基于文件的 PlanWriter
-func NewFilePlanWriter(projectRoot string) PlanWriter {
-	return &filePlanWriter{projectRoot: projectRoot}
+func NewFilePlanWriter(Root string) PlanWriter {
+	return &filePlanWriter{Root: Root}
 }
 
 func (w *filePlanWriter) WriteAssignments(path string, assignments map[string]string) error {
 	if path == "" {
 		// 默认使用项目根下的 configs/components.yaml
-		path = filepath.Join(w.projectRoot, "configs", "components.yaml")
+		path = filepath.Join(w.Root, "configs", "components.yaml")
 	}
 
 	// 读取原文件

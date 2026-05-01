@@ -27,7 +27,7 @@ components:
 		t.Fatal(err)
 	}
 
-	writer := &filePlanWriter{projectRoot: dir}
+	writer := &filePlanWriter{Root: dir}
 	assignments := map[string]string{
 		"default/web":    "node1",
 		"default/worker": "node2",

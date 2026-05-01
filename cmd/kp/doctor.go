@@ -43,7 +43,7 @@ func runDoctor(args []string) {
 
 	var env map[string]string
 
-	root, err := projectRoot()
+	root, err := Root()
 	if err == nil {
 		env, _ = readEnvFile(filepath.Join(root, "configs", "project.env"))
 		results = append(results, checkProjectEnv(root))

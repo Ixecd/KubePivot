@@ -27,7 +27,7 @@ type targetSpec struct {
 }
 
 // runSizingHook 资源优化 sizing 挂钩 (B-Level3: 并发 + 灰度 + 动态配置)
-func runSizingHook(cfg *deployConfig, plan []planner.Plan, projectRoot, kubeconfig, namespace string) {
+func runSizingHook(cfg *deployConfig, plan []planner.Plan, Root, kubeconfig, namespace string) {
 	if cfg.sizingMode != "auto" {
 		return
 	}
@@ -119,7 +119,7 @@ func runSizingHook(cfg *deployConfig, plan []planner.Plan, projectRoot, kubeconf
 	//    注意: 即使部分失败，已成功的更新仍应写入 (软失败降级原则)
 	//    原子性由 updateComponentsSizingBatch 保障 (临时文件 + rename)
 	if len(updates) > 0 {
-		componentsPath := filepath.Join(projectRoot, cfg.components)
+		componentsPath := filepath.Join(Root, cfg.components)
 		if err := updateComponentsSizingBatch(componentsPath, updates, reasons); err != nil {
 			P.Fail("✗ Failed to update components.yaml")
 			fmt.Fprintf(os.Stderr, "  Details: %v\n", err)
@@ -137,11 +137,11 @@ func runSizingHook(cfg *deployConfig, plan []planner.Plan, projectRoot, kubeconf
 
 	// 👇 Level5: 生成 VPA 建议 (只读模式，批量输出)
 	// 策略: 仅当至少一个 Pod 优化成功时生成，避免空文件
-	// 输出: <projectRoot>/configs/vpa-suggestion.yaml (覆盖模式，简化)
+	// 输出: <Root>/configs/vpa-suggestion.yaml (覆盖模式，简化)
 	// 注意: 不自动应用，用户需手动 `kubectl apply` 或忽略
 	// -----------------------------------------------------------------
 	if len(updates) > 0 {
-		vpaPath := filepath.Join(projectRoot, "configs", "vpa-suggestion.yaml")
+		vpaPath := filepath.Join(Root, "configs", "vpa-suggestion.yaml")
 		// 简化: 只生成第一个成功 Pod 的 VPA 建议 (Level6 支持批量)
 		var firstSug *sizing.Suggestion
 		var firstName string
@@ -233,9 +233,9 @@ func computeSizingForPod(plan *planner.Plan, promURL, namespace, kubeconfig stri
 	//    注意: Confidence 已在 sizing.Compute 内计算，这里直接透传
 	//    👇 Level5: 生成 VPA 建议 (只读模式，输出独立文件)
 	//    注意: 不自动应用，保持 GitOps 原则 (建议可审计 + 人类最终确认)
-	//    输出路径: <projectRoot>/configs/vpa-suggestion.yaml (可配置)
+	//    输出路径: <Root>/configs/vpa-suggestion.yaml (可配置)
 	//    简化: 先硬编码路径，Level6 支持命令行参数
-	// vpaPath := filepath.Join(projectRoot, "configs", "vpa-suggestion.yaml")
+	// vpaPath := filepath.Join(Root, "configs", "vpa-suggestion.yaml")
 	// if err := sizing.WriteVPASuggestion(vpaPath, namespace, plan.Name, sug, "Off"); err != nil {
 	//     // 记录警告但不阻断: VPA 建议生成失败不影响 sizing 核心功能
 	//     slog.Warn("failed to write VPA suggestion", "err", err, "pod", plan.Name)

@@ -39,7 +39,7 @@ func runAudit(args []string) {
 	source := flags.String("source", "", "过滤来源：deploy | secret | drift（留空=全部）")
 	flags.Parse(args)
 
-	root, err := projectRoot()
+	root, err := Root()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "找不到项目根目录:", err)
 		os.Exit(1)

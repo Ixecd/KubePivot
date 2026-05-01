@@ -10,14 +10,15 @@
 //   - Checker 接口隔离实现, 测试通过 mock 注入
 //
 // 7 个 Q 拍板:
-//   Q-B1.A  members 用 email
-//   Q-B1.B  namespaces 用 shell glob (* / ?)
-//   Q-B1.C  excluded 优先级高于 permissions (黑名单绝对优先)
-//   Q-B2    Group 一锅端支持 (members 可用 group:<name> 语法)
-//   Q-B3    Permission enum 风格
-//   Q-B4    Check 返回 error (跟既有 Go 风格一致)
-//   Q-B5    teams.yaml 缺失 → 全权限 (向后兼容, ROADMAP 一致)
-//   Q-B6=C  跨 team excluded 全局优先 (任一 team excluded → 拒绝)
+//
+//	Q-B1.A  members 用 email
+//	Q-B1.B  namespaces 用 shell glob (* / ?)
+//	Q-B1.C  excluded 优先级高于 permissions (黑名单绝对优先)
+//	Q-B2    Group 一锅端支持 (members 可用 group:<name> 语法)
+//	Q-B3    Permission enum 风格
+//	Q-B4    Check 返回 error (跟既有 Go 风格一致)
+//	Q-B5    teams.yaml 缺失 → 全权限 (向后兼容, ROADMAP 一致)
+//	Q-B6=C  跨 team excluded 全局优先 (任一 team excluded → 拒绝)
 //
 // 性能优化 (qc 拍的 2 个工程优化点):
 //   - teams.yaml 解析时预编译 glob → 区分 exact/prefix/glob 三类
@@ -30,13 +31,14 @@ package rbac
 // Permission 权限类型 (Q-B3=A enum 风格).
 //
 // 跟 cmd/kp 各命令一一对应:
-//   PermDeploy              ↔ kp deploy / kp sandbox start (运行时业务部署)
-//   PermSandbox             ↔ kp sandbox start/status/unlock
-//   PermRollback            ↔ kp rollback / kp pvc restore
-//   PermStatus              ↔ kp status / kp diff / kp drift (只读)
-//   PermControllerInstall   ↔ kp controller install (controller 安装)
-//   PermControllerUninstall ↔ kp controller uninstall (危险操作)
-//   PermAll                 ↔ "*" 通配符
+//
+//	PermDeploy              ↔ kp deploy / kp sandbox start (运行时业务部署)
+//	PermSandbox             ↔ kp sandbox start/status/unlock
+//	PermRollback            ↔ kp rollback / kp pvc restore
+//	PermStatus              ↔ kp status / kp diff / kp drift (只读)
+//	PermControllerInstall   ↔ kp controller install (controller 安装)
+//	PermControllerUninstall ↔ kp controller uninstall (危险操作)
+//	PermAll                 ↔ "*" 通配符
 type Permission string
 
 const (
@@ -47,12 +49,17 @@ const (
 	PermControllerInstall   Permission = "controller-install"
 	PermControllerUninstall Permission = "controller-uninstall"
 	PermAll                 Permission = "*"
-
-	// v2.8 B.5 (D-Level1): controller reconcile 端 4 个新增 Permission
-	PermDriftSync          Permission = "drift-sync"     // controller drift force-sync
-	PermHeal               Permission = "heal"           // controller 资源 healing
-	PermSandboxGC          Permission = "sandbox-gc"     // sandbox 超期清理
-	PermSweeperLease       Permission = "sweeper-lease"  // 孤儿 lease 清理
+	PermDriftSync           Permission = "drift-sync"    // controller drift force-sync
+	PermHeal                Permission = "heal"          // controller 资源 healing
+	PermSandboxGC           Permission = "sandbox-gc"    // sandbox 超期清理
+	PermSweeperLease        Permission = "sweeper-lease" // 孤儿 lease 清理
+	PermMigrate             Permission = "migrate"       // kp migrate run
+	PermPVC                 Permission = "pvc"           // kp pvc backup/restore
+	PermSecret              Permission = "secret"        // kp secret rotate/seal/sync
+	PermChaos               Permission = "chaos"         // kp chaos inject/stop
+	PermPromote             Permission = "promote"       // kp promote
+	PermSupplyChain         Permission = "supply-chain"  // kp supply-chain verify/sbom
+	PermSizing              Permission = "sizing"        // kp sizing recommend
 )
 
 // String 实现 fmt.Stringer.
@@ -66,7 +73,9 @@ func (p Permission) String() string {
 func (p Permission) IsValid() bool {
 	switch p {
 	case PermDeploy, PermSandbox, PermRollback, PermStatus,
-		PermControllerInstall, PermControllerUninstall, PermAll:
+		PermControllerInstall, PermControllerUninstall, PermAll,
+		PermMigrate, PermPVC, PermSecret, PermChaos,
+		PermPromote, PermSupplyChain, PermSizing:
 		return true
 	}
 	return false
@@ -81,6 +90,13 @@ func AllPermissions() []Permission {
 		PermRollback,
 		PermControllerInstall,
 		PermControllerUninstall,
+		PermMigrate,
+		PermPVC,
+		PermSecret,
+		PermChaos,
+		PermPromote,
+		PermSupplyChain,
+		PermSizing,
 	}
 }
 

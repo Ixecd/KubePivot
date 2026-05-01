@@ -12,7 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Ixecd/kubepivot/internal/audit"
 	"github.com/Ixecd/kubepivot/internal/metrics"
+	"github.com/Ixecd/kubepivot/internal/rbac"
 	"github.com/Ixecd/kubepivot/internal/sizing"
 )
 
@@ -53,6 +55,9 @@ func runSizingRecommend(args []string) {
 		fmt.Fprintf(os.Stderr, "Usage: kp sizing recommend --pod=xxx [options]\n")
 		osExitFunc(1)
 	}
+
+	// 1.5 RBAC 检查
+	mustCheck(audit.ResolveActor(), *namespace, rbac.PermSizing)
 
 	// 2. 解析 profile
 	profile := sizing.Profile(*profileStr)

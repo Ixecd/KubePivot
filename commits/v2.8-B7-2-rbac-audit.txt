@@ -34,7 +34,7 @@ v2.8 企业治理三模块一锅端 (B.3 命令接入 / B.7.2 audit / B.7.3 deni
     ResetRBACCheckerForTest() 测试时重置 cache
     
   Q-B7.11=C 拍板 - 路径优先级:
-    1. <projectRoot>/configs/teams.yaml      项目级 (推荐)
+    1. <Root>/configs/teams.yaml      项目级 (推荐)
     2. ~/.kp/teams.yaml                      用户级 (本地测试)
     3. 都没有 → empty checker (Q-B5 全权限, 向后兼容)
     

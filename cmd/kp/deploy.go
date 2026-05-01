@@ -81,7 +81,7 @@ func runDeploy(args []string) {
 
 	cfg.kubeconfig = expandHome(cfg.kubeconfig)
 
-	root, err := projectRoot()
+	root, err := Root()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "找不到项目根目录:", err)
 		os.Exit(1)
@@ -193,7 +193,7 @@ func runResume(args []string) {
 	}
 	*kubeconfig = expandHome(*kubeconfig)
 
-	root, err := projectRoot()
+	root, err := Root()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "找不到项目根目录:", err)
 		os.Exit(1)
@@ -284,7 +284,7 @@ func runRollback(args []string) {
 	}
 	*kubeconfig = expandHome(*kubeconfig)
 
-	root, err := projectRoot()
+	root, err := Root()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "找不到项目根目录:", err)
 		os.Exit(1)
@@ -818,7 +818,7 @@ func autoSyncResourcesIfEnrolled(cfg *deployConfig) error {
 	}
 
 	// 2. 找 resources.yaml
-	root, err := projectRoot()
+	root, err := Root()
 	if err != nil {
 		return fmt.Errorf("找项目根目录: %w", err)
 	}

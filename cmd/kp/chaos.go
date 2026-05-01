@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Ixecd/kubepivot/internal/audit"
+	"github.com/Ixecd/kubepivot/internal/rbac"
 )
 
 // Chaos Mesh API 地址（默认 port-forward 到本地）
@@ -61,12 +64,15 @@ func runChaosInject(args []string) {
 		os.Exit(1)
 	}
 
-	root, _ := projectRoot()
+	root, _ := Root()
 	env, _ := readEnvFile(filepath.Join(root, "configs", "project.env"))
 	ns := *namespace
 	if ns == "" {
 		ns = envOrDefault(env, "KUBE_NAMESPACE", "default")
 	}
+
+	// RBAC 检查
+	mustCheck(audit.ResolveActor(), ns, rbac.PermChaos)
 
 	// 构建实验配置
 	expName := fmt.Sprintf("kp-%s-%s-%d", *kind, *service,
@@ -119,7 +125,7 @@ func runChaosList(args []string) {
 	namespace := flags.String("namespace", "", "kubernetes namespace")
 	flags.Parse(args)
 
-	root, _ := projectRoot()
+	root, _ := Root()
 	env, _ := readEnvFile(filepath.Join(root, "configs", "project.env"))
 	ns := *namespace
 	if ns == "" {
@@ -153,6 +159,7 @@ func runChaosList(args []string) {
 func runChaosStop(args []string) {
 	flags := flag.NewFlagSet("chaos stop", flag.ExitOnError)
 	uid := flags.String("uid", "", "实验 UID（必填）")
+	namespace := flags.String("namespace", "", "kubernetes namespace")
 	addr := flags.String("chaos-mesh", defaultChaosMeshAddr, "Chaos Mesh API 地址")
 	flags.Parse(args)
 
@@ -160,6 +167,17 @@ func runChaosStop(args []string) {
 		fmt.Fprintln(os.Stderr, "❌ --uid 必填，运行 kp chaos list 查看")
 		os.Exit(1)
 	}
+
+	// 解析 namespace（对齐 runChaosInject 第 64-69 行模式）
+	root, _ := Root()
+	env, _ := readEnvFile(filepath.Join(root, "configs", "project.env"))
+	ns := *namespace
+	if ns == "" {
+		ns = envOrDefault(env, "KUBE_NAMESPACE", "default")
+	}
+
+	// v3.0 H1: RBAC 检查
+	mustCheck(audit.ResolveActor(), ns, rbac.PermChaos)
 
 	P.Start("⏹ ", fmt.Sprintf("停止混沌实验（uid: %s）", *uid))
 	url := fmt.Sprintf("%s/api/v1/experiments/%s", *addr, *uid)

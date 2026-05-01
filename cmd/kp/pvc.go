@@ -9,16 +9,19 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Ixecd/kubepivot/internal/audit"
+	"github.com/Ixecd/kubepivot/internal/rbac"
 )
 
 // ── 数据结构 ──────────────────────────────────────────────────────────────────
 
 type volumeSnapshot struct {
-	Name        string
-	PVCName     string
-	Service     string
-	CreatedAt   time.Time
-	ReadyToUse  bool
+	Name          string
+	PVCName       string
+	Service       string
+	CreatedAt     time.Time
+	ReadyToUse    bool
 	SnapshotClass string
 }
 
@@ -75,6 +78,9 @@ func runPVCBackup(args []string) {
 	}
 
 	cfg := resolvePVCConfig(*namespace, *context, *kubeconfig)
+
+	// RBAC 检查
+	mustCheck(audit.ResolveActor(), cfg.namespace, rbac.PermPVC)
 
 	// 检查 VolumeSnapshot CRD
 	if !checkVolumeSnapshotCRDExists(cfg) {
@@ -161,6 +167,9 @@ func runPVCRestore(args []string) {
 	}
 
 	cfg := resolvePVCConfig(*namespace, *context, *kubeconfig)
+
+	// RBAC 检查
+	mustCheck(audit.ResolveActor(), cfg.namespace, rbac.PermPVC)
 
 	// 找到要恢复的 snapshot
 	snap, err := resolveSnapshot(cfg, *service, *snapshotName)
@@ -249,6 +258,7 @@ func runPVCList(args []string) {
 		os.Exit(1)
 	}
 
+	// 读开放、写管控
 	cfg := resolvePVCConfig(*namespace, *context, *kubeconfig)
 
 	snaps, err := listSnapshots(cfg, *service, *all)
@@ -296,7 +306,7 @@ type pvcConfig struct {
 
 func resolvePVCConfig(ns, ctx, kc string) pvcConfig {
 	if ns == "" {
-		root, err := projectRoot()
+		root, err := Root()
 		if err == nil {
 			env, _ := readEnvFile(root + "/configs/project.env")
 			ns = envOrDefault(env, "KUBE_NAMESPACE", "default")
@@ -386,8 +396,8 @@ metadata:
   name: %s
   namespace: %s
   labels:
-    kp.io/service: %s
-    kp.io/pvc: %s
+    kubepivot.io/service: %s
+    kubepivot.io/pvc: %s
 spec:
   volumeSnapshotClassName: %s
   source:
@@ -499,9 +509,9 @@ func listSnapshots(cfg pvcConfig, service string, all bool) ([]volumeSnapshot, e
 		"-o", "json",
 	)
 	if !all && service != "" {
-		args = append(args, "-l", fmt.Sprintf("kp.io/service=%s", service))
+		args = append(args, "-l", fmt.Sprintf("kubepivot.io/service=%s", service))
 	} else if !all {
-		args = append(args, "-l", "kp.io/service")
+		args = append(args, "-l", "kubepivot.io/service")
 	}
 
 	out, err := runOutput(args...)
@@ -537,8 +547,8 @@ func listSnapshots(cfg pvcConfig, service string, all bool) ([]volumeSnapshot, e
 		ready := item.Status.ReadyToUse != nil && *item.Status.ReadyToUse
 		result = append(result, volumeSnapshot{
 			Name:          item.Metadata.Name,
-			PVCName:       item.Metadata.Labels["kp.io/pvc"],
-			Service:       item.Metadata.Labels["kp.io/service"],
+			PVCName:       item.Metadata.Labels["kubepivot.io/pvc"],
+			Service:       item.Metadata.Labels["kubepivot.io/service"],
 			CreatedAt:     t,
 			ReadyToUse:    ready,
 			SnapshotClass: item.Spec.VolumeSnapshotClassName,

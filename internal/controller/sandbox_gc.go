@@ -44,8 +44,8 @@ func (r *Reconciler) StartSandboxGCLoop(ctx context.Context) {
 func (r *Reconciler) gcExpiredSandboxSessions() {
 	// Session 文件存在 <project-root>/.kp/sandbox/
 	// Controller 运行在集群内，从环境变量获取项目根目录
-	projectRoot := getenv("PROJECT_ROOT", "/app")
-	sandboxDir := filepath.Join(projectRoot, ".kp", "sandbox")
+	Root := getenv("PROJECT_ROOT", "/app")
+	sandboxDir := filepath.Join(Root, ".kp", "sandbox")
 
 	entries, err := os.ReadDir(sandboxDir)
 	if err != nil {

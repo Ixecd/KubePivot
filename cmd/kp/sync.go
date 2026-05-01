@@ -57,7 +57,7 @@ func runSync(args []string) {
 	only := flags.String("only", "", "只同步指定类型：scripts | makefile | hooks | env")
 	flags.Parse(args)
 
-	root, err := projectRoot()
+	root, err := Root()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "找不到项目根目录:", err)
 		os.Exit(1)

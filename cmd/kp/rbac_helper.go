@@ -24,18 +24,25 @@ import (
 //   - fail-fast: 拒绝即 os.Exit(1) (跟 KubePivot 既有错误处理一致)
 //
 // teams.yaml 路径优先级 (Q-B7.11=C):
-//   1. <projectRoot>/configs/teams.yaml      项目级 (推荐)
+//   1. <Root>/configs/teams.yaml      项目级 (推荐)
 //   2. ~/.kp/teams.yaml                      用户级 (开发者本地测试)
 //   3. 都没有 → empty checker (Q-B5 全权限, 向后兼容)
 //
-// 7 critical 命令接入 (Q-B7.4=B + Q-B7.9=A):
+// 14 critical 命令接入 (Q-B7.4=B + Q-B7.9=A + v3.0 审计 H1):
 //   runDeploy             → PermDeploy
 //   runResume             → PermDeploy
 //   runRollback           → PermRollback
 //   runSandboxStart       → PermSandbox
-//   runDown               → PermRollback (销毁性, 跟 rollback 同级)
+//   runDown               → PermRollback
 //   runControllerInstall  → PermControllerInstall
 //   runControllerUninstall → PermControllerUninstall
+//   runMigrateRun         → PermMigrate          (v3.0 H1)
+//   runPVCBackup/Restore  → PermPVC             (v3.0 H1)
+//   runSecretRotate/Sync  → PermSecret           (v3.0 H1)
+//   runChaosInject/Stop   → PermChaos            (v3.0 H1)
+//   runPromote            → PermPromote          (v3.0 H1)
+//   runSupplyChainVerify  → PermSupplyChain       (v3.0 H1)
+//   runSizingRecommend    → PermSizing            (v3.0 H1)
 // ════════════════════════════════════════════════════════════════════════════
 
 var (
@@ -76,14 +83,14 @@ func getRBACChecker() rbac.Checker {
 // resolveTeamsConfigPath 按 Q-B7.11=C 优先级返回 teams.yaml 实际路径.
 //
 // 优先级:
-//   1. <projectRoot>/configs/teams.yaml   项目级
+//   1. <Root>/configs/teams.yaml   项目级
 //   2. ~/.kp/teams.yaml                   用户级
 //   3. 空字符串                          没找到
 //
 // 项目根查找失败时跳过项目级 (允许在非项目目录运行 kp 命令).
 func resolveTeamsConfigPath() string {
 	// 1. 项目级
-	if root, err := projectRoot(); err == nil {
+	if root, err := Root(); err == nil {
 		projectPath := filepath.Join(root, "configs", "teams.yaml")
 		if _, err := os.Stat(projectPath); err == nil {
 			return projectPath

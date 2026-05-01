@@ -76,7 +76,7 @@ func restoreAfterMigrateFail(cfg *deployConfig, root string, hadSnapshot bool) {
 
 // runMigrateFixDirty 交互式修复 dirty 状态
 func runMigrateFixDirty(args []string) {
-	root, err := projectRoot()
+	root, err := Root()
 	if err != nil {
 		fmt.Println("找不到项目根目录:", err)
 		return

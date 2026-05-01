@@ -22,8 +22,8 @@ func TestBuildSnapshotYAML_ContainsRequiredFields(t *testing.T) {
 	}{
 		{"name", "name: data-0-snap-1234"},
 		{"namespace", "namespace: web3-blitz"},
-		{"kp.io/service label", "kp.io/service: postgres"},
-		{"kp.io/pvc label", "kp.io/pvc: data-0"},
+		{"kubepivot.io/service label", "kubepivot.io/service: postgres"},
+		{"kubepivot.io/pvc label", "kubepivot.io/pvc: data-0"},
 		{"snapshotClassName", "volumeSnapshotClassName: csi-hostpath-snapclass"},
 		{"source pvc", "persistentVolumeClaimName: data-0"},
 		{"apiVersion", "snapshot.storage.k8s.io/v1"},

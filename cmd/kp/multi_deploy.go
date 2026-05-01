@@ -357,11 +357,6 @@ func buildHelmArgs(cfg *deployConfig, release, chartPath string, env map[string]
 	return args
 }
 
-// root 从 chart 路径推断项目根目录
-func root(chartPath string) string {
-	return filepath.Dir(filepath.Dir(filepath.Dir(chartPath))) // 往上跳 3 级
-}
-
 // buildMakeEnvForService 构建单个服务的 make 环境变量
 func buildMakeEnvForService(env map[string]string, cfg *deployConfig, plan planner.Plan) []string {
 	makeEnv := os.Environ()

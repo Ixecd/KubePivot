@@ -94,7 +94,7 @@ func printTeamUsage() {
 
 // teamsFilePath 按 Q-B4.2 决定操作目标 yaml.
 //
-//	useUser=false  → <projectRoot>/configs/teams.yaml
+//	useUser=false  → <Root>/configs/teams.yaml
 //	useUser=true   → ~/.kp/teams.yaml
 func teamsFilePath(useUser bool) (string, error) {
 	if useUser {
@@ -104,7 +104,7 @@ func teamsFilePath(useUser bool) (string, error) {
 		}
 		return filepath.Join(home, ".kp", "teams.yaml"), nil
 	}
-	root, err := projectRoot()
+	root, err := Root()
 	if err != nil {
 		return "", fmt.Errorf("找不到项目根 (用 --user 操作用户级配置): %w", err)
 	}

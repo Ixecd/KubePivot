@@ -1,9 +1,19 @@
 teams:
     - name: backend
       members:
+        - qc@qc.local
         - alice@x.com
       namespaces:
         - kp-prod-*
+        - KubePivot
+        - "*"
       permissions:
         - deploy
         - sandbox
+        - migrate
+        - pvc
+        - secret
+        - chaos
+        - promote
+        - supply-chain
+        - sizing

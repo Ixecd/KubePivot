@@ -35,7 +35,7 @@ func runNetworkGen(args []string) {
 	output := flags.String("output", "", "输出目录（默认 deployments/<project>/network/）")
 	flags.Parse(args)
 
-	root, err := projectRoot()
+	root, err := Root()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "找不到项目根目录:", err)
 		os.Exit(1)

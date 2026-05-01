@@ -9,8 +9,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
+	"github.com/Ixecd/kubepivot/internal/audit"
+	"github.com/Ixecd/kubepivot/internal/rbac"
 	"github.com/Ixecd/kubepivot/internal/supplychain"
 )
 
@@ -88,6 +91,14 @@ func runSupplyChainVerify(args []string) {
 		fmt.Fprintf(os.Stderr, "Error: --image and --key are required\n")
 		printSupplyChainVerifyHelp()
 		osExitFunc(1)
+	}
+
+	// 2.5 RBAC 检查（supply-chain 无 namespace，用项目名作为授权边界）
+	root, err := Root()
+	if err == nil {
+		env, _ := readEnvFile(filepath.Join(root, "configs", "project.env"))
+		projectName := envOrDefault(env, "PROJECT_NAME", filepath.Base(root))
+		mustCheck(audit.ResolveActor(), projectName, rbac.PermSupplyChain)
 	}
 
 	// 3. 依赖检测：对齐 doctor.go 风格
@@ -228,8 +239,16 @@ func runSupplyChainSbom(args []string) {
 		osExitFunc(1)
 	}
 
+	// v3.0 H1: RBAC 检查（supply-chain 无 namespace，用项目名作为授权边界）
+	root, err := Root()
+	if err == nil {
+		env, _ := readEnvFile(filepath.Join(root, "configs", "project.env"))
+		projectName := envOrDefault(env, "PROJECT_NAME", filepath.Base(root))
+		mustCheck(audit.ResolveActor(), projectName, rbac.PermSupplyChain)
+	}
+
 	// 3. 依赖检测
-	_, err := ensureSyftAvailable()
+	_, err = ensureSyftAvailable()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "✗ syft %-16s %s\n", "", err)
 		fmt.Fprintf(os.Stderr, "  %sinstall: https://github.com/anchore/syft/releases\n", strings.Repeat(" ", 18))
@@ -273,41 +292,41 @@ func runSupplyChainSbom(args []string) {
 		fmt.Print(output)
 	}
 	// 6. 可选: 上传 SBOM 到 OCI registry
-if pushSBOM {
-	// 🔧 用匿名函数包裹上传逻辑，用 return 替代 goto
-	func() {
-		P.Start("📤", fmt.Sprintf("Uploading SBOM to %s", uploadTarget))
+	if pushSBOM {
+		// 🔧 用匿名函数包裹上传逻辑，用 return 替代 goto
+		func() {
+			P.Start("📤", fmt.Sprintf("Uploading SBOM to %s", uploadTarget))
 
-		// 依赖检测
-		_, err := ensureOrasAvailable()
-		if err != nil {
-			msg := fmt.Sprintf("oras not found: %v", err)
-			if pushRequired {
-				P.Fail("✗ SBOM upload failed")
-				fmt.Fprintf(os.Stderr, "  Details: %v\n", msg)
-				fmt.Fprintf(os.Stderr, "  %sinstall: https://github.com/oras-project/oras/releases\n", strings.Repeat(" ", 18))
-				osExitFunc(2)
-			} else {
-				P.Info("⚠", msg+" (skipping upload)")
-				return // ✅ 用 return 替代 goto，在匿名函数内安全退出
+			// 依赖检测
+			_, err := ensureOrasAvailable()
+			if err != nil {
+				msg := fmt.Sprintf("oras not found: %v", err)
+				if pushRequired {
+					P.Fail("✗ SBOM upload failed")
+					fmt.Fprintf(os.Stderr, "  Details: %v\n", msg)
+					fmt.Fprintf(os.Stderr, "  %sinstall: https://github.com/oras-project/oras/releases\n", strings.Repeat(" ", 18))
+					osExitFunc(2)
+				} else {
+					P.Info("⚠", msg+" (skipping upload)")
+					return // ✅ 用 return 替代 goto，在匿名函数内安全退出
+				}
 			}
-		}
 
-		// 执行上传
-		ctx := context.Background()
-		if err := supplychain.PushSBOM(ctx, image, result.Content, result.Format, uploadTarget, uploadAuth); err != nil {
-			if pushRequired {
-				P.Fail("✗ SBOM upload failed")
-				fmt.Fprintf(os.Stderr, "  Details: %v\n", err)
-				osExitFunc(2)
+			// 执行上传
+			ctx := context.Background()
+			if err := supplychain.PushSBOM(ctx, image, result.Content, result.Format, uploadTarget, uploadAuth); err != nil {
+				if pushRequired {
+					P.Fail("✗ SBOM upload failed")
+					fmt.Fprintf(os.Stderr, "  Details: %v\n", err)
+					osExitFunc(2)
+				} else {
+					P.Info("⚠", fmt.Sprintf("SBOM upload failed: %v (continuing)", err))
+				}
 			} else {
-				P.Info("⚠", fmt.Sprintf("SBOM upload failed: %v (continuing)", err))
+				P.Done(fmt.Sprintf("SBOM uploaded to %s", uploadTarget))
 			}
-		} else {
-			P.Done(fmt.Sprintf("SBOM uploaded to %s", uploadTarget))
-		}
-	}() // ← 立即执行匿名函数
-}
+		}() // ← 立即执行匿名函数
+	}
 }
 
 // ensureSyftAvailable 检查 syft 是否可用 (对齐 ensureCosignAvailable)

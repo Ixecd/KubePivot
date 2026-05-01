@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Ixecd/kubepivot/internal/audit"
+	"github.com/Ixecd/kubepivot/internal/rbac"
 	"github.com/Ixecd/kubepivot/internal/sealed"
 )
 
@@ -53,6 +55,7 @@ func runSecretSeal(args []string) {
 	flags.Var(&filesFlag, "from-file", "key=path (可指定多次)")
 
 	namespace := flags.String("namespace", "default", "K8s namespace")
+
 	scopeFlag := flags.String("scope", string(sealed.DefaultScope),
 		"解密 scope: strict | namespace-wide | cluster-wide")
 	certPath := flags.String("cert", "",
@@ -103,6 +106,9 @@ func runSecretSeal(args []string) {
 			"❌ 必须至少 1 个 --from-literal 或 --from-file")
 		os.Exit(1)
 	}
+
+	// RBAC 检查
+	mustCheck(audit.ResolveActor(), *namespace, rbac.PermSecret)
 
 	// Step 3: 调 sealed.SealSecret
 	opts := sealed.SealOptions{

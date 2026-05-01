@@ -23,7 +23,7 @@ func runUpgrade(args []string) {
 		os.Exit(1)
 	}
 
-	root, err := projectRoot()
+	root, err := Root()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "找不到项目根目录:", err)
 		os.Exit(1)

@@ -7,6 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/Ixecd/kubepivot/internal/audit"
+	"github.com/Ixecd/kubepivot/internal/rbac"
 )
 
 func runMigrateRun(args []string) {
@@ -22,13 +25,17 @@ func runMigrateRun(args []string) {
 		os.Exit(1)
 	}
 
-	root, err := projectRoot()
+	root, err := Root()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "找不到项目根目录:", err)
 		os.Exit(1)
 	}
 
 	env, _ := readEnvFile(filepath.Join(root, "configs", "project.env"))
+
+	// RBAC 检查
+	projectName := envOrDefault(env, "PROJECT_NAME", filepath.Base(root))
+	mustCheck(audit.ResolveActor(), projectName, rbac.PermMigrate)
 
 	dbURL := resolveDatabaseURL(cfg, root, env)
 	if dbURL == "" {

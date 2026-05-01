@@ -218,7 +218,7 @@ func filepathBase(path string) string {
 	return base
 }
 
-func projectRoot() (string, error) {
+func Root() (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", err

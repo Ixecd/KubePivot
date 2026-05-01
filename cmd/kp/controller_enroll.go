@@ -37,7 +37,7 @@ func runControllerEnrollReal(args []string) {
 	}
 
 	// 1. 定位项目根目录
-	root, err := projectRoot()
+	root, err := Root()
 	if err != nil {
 		P.Fail(fmt.Sprintf("找不到项目根目录: %v", err))
 		os.Exit(1)
@@ -125,7 +125,7 @@ func runControllerUnenrollReal(args []string) {
 
 	ns := *namespace
 	if ns == "" {
-		root, err := projectRoot()
+		root, err := Root()
 		if err != nil {
 			P.Fail(fmt.Sprintf("找不到项目根目录: %v", err))
 			os.Exit(1)

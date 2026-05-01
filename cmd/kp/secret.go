@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Ixecd/kubepivot/internal/audit"
+	"github.com/Ixecd/kubepivot/internal/rbac"
 )
 
 // ── 主入口 ────────────────────────────────────────────────────────────────────
@@ -74,7 +77,7 @@ func runSecretRotate(args []string) {
 		os.Exit(1)
 	}
 
-	root, err := projectRoot()
+	root, err := Root()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "找不到项目根目录:", err)
 		os.Exit(1)
@@ -84,6 +87,9 @@ func runSecretRotate(args []string) {
 	if cfg.namespace == "" {
 		cfg.namespace = envOrDefault(env, "KUBE_NAMESPACE", "default")
 	}
+
+	// RBAC 检查
+	mustCheck(audit.ResolveActor(), cfg.namespace, rbac.PermSecret)
 
 	P.Info("🔐", fmt.Sprintf("Secret 轮转：%s（策略: %s）", *secretName, *strategy))
 	fmt.Println()
@@ -294,7 +300,7 @@ func scanSecretRefs(root, secretName string) []SecretRef {
 
 		// 检测 secretKeyRef
 		if strings.Contains(content, fmt.Sprintf("name: %s", secretName)) {
-			service, kind := extractServiceFromPath(path)
+			service, kind := extractServiceFromPath(path, data)
 			key := service + kind
 			if !seen[key] {
 				mountType := "env"
@@ -317,30 +323,96 @@ func scanSecretRefs(root, secretName string) []SecretRef {
 }
 
 // extractServiceFromPath 从 yaml 路径提取服务名和 Kind
-func extractServiceFromPath(path string) (string, string) {
+func extractServiceFromPath(path string, content []byte) (string, string) {
 	// deployments/<project>/<service>/templates/deployment.yaml
 	parts := strings.Split(filepath.ToSlash(path), "/")
+	var service string
 	for i, p := range parts {
 		if p == "templates" && i >= 1 {
-			service := parts[i-1]
-			// 从文件名推断 Kind
-			fileName := filepath.Base(path)
-			kind := "Deployment"
-			if strings.Contains(fileName, "statefulset") {
-				kind = "StatefulSet"
-			}
-			return service, kind
+			service = parts[i-1]
+			break
 		}
 	}
-	return filepath.Base(filepath.Dir(filepath.Dir(path))), "Deployment"
+	if service == "" {
+		service = filepath.Base(filepath.Dir(filepath.Dir(path)))
+	}
+
+	// 1. 从 YAML 内容解析 kind（精确）
+	kind := extractKindFromYAML(content)
+	if kind != "" {
+		return service, kind
+	}
+
+	// 2. Fallback: 文件名推断（向后兼容）
+	fileName := strings.ToLower(filepath.Base(path))
+	switch {
+	case strings.Contains(fileName, "statefulset"):
+		return service, "StatefulSet"
+	case strings.Contains(fileName, "daemonset"):
+		return service, "DaemonSet"
+	case strings.Contains(fileName, "job"):
+		return service, "Job"
+	case strings.Contains(fileName, "cronjob"):
+		return service, "CronJob"
+	default:
+		return service, "Deployment"
+	}
+}
+
+// extractKindFromYAML 从 YAML 字节中提取顶层 kind 字段
+// 不依赖 yaml.v3，用行扫描，因为只需要顶层的 kind: xxx
+func extractKindFromYAML(data []byte) string {
+	// 只扫前 30 行即可，kind 通常在文件头部
+	lines := bytes.Split(data, []byte("\n"))
+	maxLines := 30
+	if len(lines) < maxLines {
+		maxLines = len(lines)
+	}
+	for i := 0; i < maxLines; i++ {
+		line := strings.TrimSpace(string(lines[i]))
+		if strings.HasPrefix(line, "kind:") {
+			kind := strings.TrimSpace(strings.TrimPrefix(line, "kind:"))
+			// 去掉可能的引号
+			kind = strings.Trim(kind, `"'`)
+			if kind != "" {
+				return kind
+			}
+		}
+	}
+	return "" // 没找到，走 fallback
+}
+
+// workloadKinds 支持 kubectl rollout restart 的资源类型
+var workloadKinds = map[string]bool{
+	"deployment":  true,
+	"statefulset": true,
+	"daemonset":   true,
 }
 
 // rolloutRestart 重启服务
 func rolloutRestart(cfg pvcConfig, ref SecretRef) error {
+	lowerKind := strings.ToLower(ref.Kind)
+
+	if workloadKinds[lowerKind] {
+		// 标准 K8s workload：用 rollout restart
+		args := kubectlPVCArgs(cfg)
+		resource := lowerKind + "/" + ref.Service
+		args = append(args, "rollout", "restart", resource,
+			"--namespace", cfg.namespace,
+		)
+		_, err := runOutput(args...)
+		return err
+	}
+
+	// CRD / 非标准资源：删关联 Pod 触发重建
+	// 依赖 Pod 有 app.kubernetes.io/name label（KubePivot deploy 默认注入）
+	P.Info("🔄", fmt.Sprintf("%s/%s 不支持 rollout restart，通过删 Pod 触发重启",
+		ref.Kind, ref.Service))
 	args := kubectlPVCArgs(cfg)
-	resource := strings.ToLower(ref.Kind) + "/" + ref.Service
-	args = append(args, "rollout", "restart", resource,
+	args = append(args, "delete", "pods",
+		"-l", fmt.Sprintf("app.kubernetes.io/name=%s", ref.Service),
 		"--namespace", cfg.namespace,
+		"--ignore-not-found",
 	)
 	_, err := runOutput(args...)
 	return err
@@ -348,9 +420,28 @@ func rolloutRestart(cfg pvcConfig, ref SecretRef) error {
 
 // waitRolloutReady 等待 rollout 完成
 func waitRolloutReady(cfg pvcConfig, ref SecretRef, timeout time.Duration) error {
+	lowerKind := strings.ToLower(ref.Kind)
+
+	if workloadKinds[lowerKind] {
+		args := kubectlPVCArgs(cfg)
+		resource := lowerKind + "/" + ref.Service
+		args = append(args, "rollout", "status", resource,
+			"--namespace", cfg.namespace,
+			fmt.Sprintf("--timeout=%ds", int(timeout.Seconds())),
+		)
+		_, err := runOutput(args...)
+		return err
+	}
+
+	// CRD：等 Pod 重新 Ready（轮询 Deployment 不适用，用 kubectl wait）
+	P.Info("⏳", fmt.Sprintf("等待 %s/%s 的 Pod 就绪", ref.Kind, ref.Service))
+	_, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
 	args := kubectlPVCArgs(cfg)
-	resource := strings.ToLower(ref.Kind) + "/" + ref.Service
-	args = append(args, "rollout", "status", resource,
+	args = append(args, "wait", "pods",
+		"-l", fmt.Sprintf("app.kubernetes.io/name=%s", ref.Service),
+		"--for=condition=Ready",
 		"--namespace", cfg.namespace,
 		fmt.Sprintf("--timeout=%ds", int(timeout.Seconds())),
 	)
@@ -514,6 +605,17 @@ func runSecretSync(args []string) {
 		os.Exit(1)
 	}
 
+	// RBAC 检查
+	ns := *namespace
+	if ns == "" {
+		root, err := Root()
+		if err == nil {
+			env, _ := readEnvFile(filepath.Join(root, "configs", "project.env"))
+			ns = envOrDefault(env, "KUBE_NAMESPACE", "default")
+		}
+	}
+	mustCheck(audit.ResolveActor(), ns, rbac.PermSecret)
+
 	// 读取 Vault 配置（环境变量优先）
 	addr := *vaultAddr
 	if addr == "" {
@@ -532,7 +634,7 @@ func runSecretSync(args []string) {
 		os.Exit(1)
 	}
 
-	root, err := projectRoot()
+	root, err := Root()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "找不到项目根目录:", err)
 		os.Exit(1)

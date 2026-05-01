@@ -528,3 +528,33 @@ func TestNewFileBasedChecker_EmptyGroupSyntax(t *testing.T) {
 	_, err := NewFileBasedChecker(path)
 	require.Error(t, err, "空 group: 应报错")
 }
+
+func TestPermissionIsValid_NewPermissions(t *testing.T) {
+	// v3.0 H1: 7 个新权限都应被 IsValid() 识别
+	newPerms := []Permission{
+		PermMigrate, PermPVC, PermSecret, PermChaos,
+		PermPromote, PermSupplyChain, PermSizing,
+	}
+	for _, p := range newPerms {
+		if !p.IsValid() {
+			t.Errorf("IsValid(%q) = false, want true", p)
+		}
+	}
+}
+
+func TestAllPermissions_IncludesNewPermissions(t *testing.T) {
+	all := AllPermissions()
+	mustContain := []Permission{
+		PermMigrate, PermPVC, PermSecret, PermChaos,
+		PermPromote, PermSupplyChain, PermSizing,
+	}
+	set := make(map[Permission]bool)
+	for _, p := range all {
+		set[p] = true
+	}
+	for _, p := range mustContain {
+		if !set[p] {
+			t.Errorf("AllPermissions() missing %q", p)
+		}
+	}
+}

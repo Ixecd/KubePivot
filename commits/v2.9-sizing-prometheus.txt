@@ -74,7 +74,7 @@ fallback 瞬时采样 + 全量 Pod 优化 + 批量原子写入 →
       • 无 UsagePoint 类型 → 直接返回 []*PodMetrics 对齐既有接口
     - 写 deploy_sizing.go 前 grep 确认:
       • planner.Plan 是否有 Sizing 字段 → 无则同步添加
-      • root 变量名冲突 (func vs string) → 参数改名 projectRoot
+      • root 变量名冲突 (func vs string) → 参数改名 Root
       • fmt.Sprintf 格式字符串 → % 转义为 %%
     - 多花 10 分钟 grep，省 30 分钟 debug + 返工
     

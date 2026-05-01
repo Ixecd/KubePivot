@@ -182,9 +182,9 @@ KEY=value
 	}
 }
 
-// ── projectRoot 测试 ──────────────────────────────────────────────────────────
+// ── Root 测试 ──────────────────────────────────────────────────────────
 
-func TestProjectRoot_FindsMakefile(t *testing.T) {
+func TestRoot_FindsMakefile(t *testing.T) {
 	// 创建临时目录模拟项目根
 	dir := t.TempDir()
 	subdir := filepath.Join(dir, "internal", "state")
@@ -196,7 +196,7 @@ func TestProjectRoot_FindsMakefile(t *testing.T) {
 	defer os.Chdir(original)
 	os.Chdir(subdir)
 
-	root, err := projectRoot()
+	root, err := Root()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,17 +205,17 @@ func TestProjectRoot_FindsMakefile(t *testing.T) {
 	realDir, _ := filepath.EvalSymlinks(dir)
 
 	if realRoot != realDir {
-		t.Errorf("projectRoot 应返回 Makefile 所在目录，got %s want %s", root, dir)
+		t.Errorf("Root 应返回 Makefile 所在目录，got %s want %s", root, dir)
 	}
 }
 
-func TestProjectRoot_NotFound(t *testing.T) {
+func TestRoot_NotFound(t *testing.T) {
 	dir := t.TempDir() // 没有 Makefile
 	original, _ := os.Getwd()
 	defer os.Chdir(original)
 	os.Chdir(dir)
 
-	_, err := projectRoot()
+	_, err := Root()
 	if err == nil {
 		t.Error("没有 Makefile 时应该返回错误")
 	}
