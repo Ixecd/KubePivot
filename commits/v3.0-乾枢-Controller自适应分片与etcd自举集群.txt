@@ -1,0 +1,39 @@
+docs(design): 乾枢 v3.1 基础设施自举 — Controller 自适应分片 + etcd Learner 集群
+
+两份设计草案，覆盖 KubePivot Controller 从"外部依赖"到"零依赖闭环"的两个核心能力。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. controller-update-sizing-draft — 自适应分片规模推荐
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  - P→S→C 三维关系模型：S = clamp(ceil(P/4), 3, 50) → C = clamp(ceil(S/3), 2, 10)
+  - kp controller update CLI：dry-run 默认 + --apply + --force-downscale
+  - 不降配策略：replicas 不自动缩减，--force-downscale 显式允许
+  - etcd 健康度预检 + ConfigMap/env 冲突检测
+  - Terminating namespace 过滤 + ConfigMap 缺失兜底
+  - 自适应 WaitReady 超时：120s + P×2s, cap=600s
+  - 14 个测试用例
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. etcd-learner-bootstrap-draft — etcd Learner 自举集群
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  - 三层架构：Bootstrap 自举 + 运行时自治 + Shadow CRD
+  - Learner 零风险加入：Raft lag < 500 + 10s 稳定窗口才 promote
+  - "假 Pod-0" 陷阱防御：已有集群探测优先于 initial-cluster-state=new
+  - 轮询 Defrag：按 Pod 序号分布时间窗 + Leader 不做 Defrag
+  - 优雅退出：区分缩容(member remove) vs 滚动更新(直接 join)
+  - K8s API label 动态 Peer Discovery（不硬编码 DNS）
+  - PV 持久化（volumeClaimTemplates + local-storage 推荐）
+  - Shadow CRD KubePivotStatus 完整 schema
+  - StatefulSet 部署模板（OrderedReady + preStop hook）
+  - kp etcd 子命令（status/compact/defrag/snapshot/cleanup-member）
+  - 11 个测试用例
+
+键: Controller Pods (C) == etcd Nodes (N)，计算与存储 1:1 对等扩缩容。
+
+变更:
+  docs/design/controller-update-sizing-draft.md   新增 ~250 行
+  docs/design/etcd-learner-bootstrap-draft.md     新增 ~500 行
+
+合计: 2 个新文件, ~750 行
