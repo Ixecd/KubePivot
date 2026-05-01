@@ -2,7 +2,7 @@
 
 > 状态：✅ 已拍板，进入实施
 > 关联：[init.md](../cmd/init/init.md) / [scaffold.go](../../internal/scaffold/scaffold.go) / [helm.go](../../internal/scaffold/helm.go) / [skeleton.go](../../internal/scaffold/skeleton.go)
-> 背景：v3.1 GPU 调度前，脚手架从 Go-only 扩展到 5 语言 + 零侵入模式
+> 背景：v3.1 GPU 调度前，脚手架从 Go-only 扩展到 12 语言 + 零侵入模式
 > 拍板记录：qc 2026-05-01
 
 ---
@@ -84,7 +84,7 @@ myapp/                                   # --output 指定，默认 ./<name>
 ```
 kp init --name <name> [--lang <lang>] [--type <type>] [--no-app] [--module <module>] [其余既有 flag]
 
---lang    string   default="go"    应用层语言：go | python | java | rust | cpp
+--lang    string   default="go"    应用层语言：go | python | java | rust | cpp | cs | zig | kotlin | ts | php | swift | lua
 --type    string   default="web"   Workload 类型：web | grpc | job
 --no-app  bool     default=false   跳过应用层骨架，只生成核层文件
 ```
@@ -104,7 +104,7 @@ kp init --name <name> [--lang <lang>] [--type <type>] [--no-app] [--module <modu
 ### flag 校验与互斥规则
 
 ```
---lang 非法值    → 报错："unsupported language: xxx (supported: go, python, java, rust, cpp)"
+--lang 非法值    → 报错："unsupported language: xxx (supported: go, python, java, rust, cpp, cs, zig, kotlin, ts, php, swift, lua)"
 --lang != go  + --module → warn："--module ignored for non-Go projects"（不报错）
 --lang != go  + --with-frontend → warn："--with-frontend only supported for Go"（不生效）
 --no-app=true + --lang    → warn："--lang ignored when --no-app is set"（不报错）
@@ -117,11 +117,17 @@ kp init --name <name> [--lang <lang>] [--type <type>] [--no-app] [--module <modu
 | --lang | --type | --no-app | 生成内容 |
 |---|---|---|---|
 | go (默认) | web (默认) | false (默认) | 核 + Go web 业务骨架（与改造前完全一致） |
-| go | grpc | false | 核 + Go gRPC 骨架 |
 | python | web | false | 核 + Python FastAPI 骨架 |
 | java | web | false | 核 + Java Spring Boot 骨架 |
+| kotlin | web | false | 核 + Kotlin Ktor 骨架 |
 | rust | web | false | 核 + Rust Axum 骨架 |
 | cpp | web | false | 核 + C++ Drogon 骨架 |
+| cs | web | false | 核 + C# AOT Minimal API 骨架 |
+| zig | web | false | 核 + Zig std.http 骨架 |
+| ts | web | false | 核 + TypeScript Express 骨架 |
+| php | web | false | 核 + PHP FrankenPHP 骨架 |
+| swift | web | false | 核 + Swift Vapor 骨架 |
+| lua | web | false | 核 + Lua OpenResty 骨架 |
 | 任意 | 任意 | true | **只写核层**（configs/ + deployments/ + scripts/ + Makefile + Dockerfile） |
 
 ---
@@ -213,14 +219,21 @@ traffic:
 | Go | 100m | 128Mi | 500m | 256Mi |
 | Rust | 100m | 128Mi | 500m | 256Mi |
 | C++ | 100m | 128Mi | 500m | 256Mi |
+| Zig | 100m | 128Mi | 500m | 256Mi |
+| C# (AOT) | 100m | 128Mi | 500m | 256Mi |
+| Swift | 100m | 128Mi | 500m | 256Mi |
 | Python | 200m | 256Mi | 1000m | 512Mi |
+| TS/JS | 200m | 256Mi | 1000m | 512Mi |
+| PHP | 200m | 256Mi | 1000m | 512Mi |
+| Lua (OpenResty) | 200m | 256Mi | 1000m | 512Mi |
 | Java | 500m | 512Mi | 2000m | 1024Mi |
+| Kotlin | 500m | 512Mi | 2000m | 1024Mi |
 
 这些值来自各语言运行时的典型基线：
 
-- **Go / Rust / C++**：静态编译或原生二进制，内存开销低，128Mi 足够跑一个 hello world server
-- **Python**：解释型，GIL 限制单核，256Mi 起跑 FastAPI/uvicorn
-- **Java**：JVM 启动就要 ~200Mi 堆，512Mi 是 Spring Boot 最小存活值
+- **Go / Rust / C++ / Zig / C# AOT / Swift**：静态编译或原生二进制，128Mi 足够
+- **Python / TS/JS / PHP / Lua**：解释型或 JIT，256Mi 起跑 Web server
+- **Java / Kotlin**：JVM ~200Mi 堆起步，512Mi 是 Spring Boot / Ktor 最小存活值
 
 **注意**：这是初始预设，不追求精度。`kp deploy --sizing-mode=auto` 会基于 Prometheus 历史数据给出更精确的建议。
 
@@ -869,6 +882,423 @@ int main() {
 }
 ```
 
+### 5.6 C#（`--lang cs`）
+
+**Dockerfile**（.NET AOT 原生编译 → scratch，与 Go/Rust 同级）：
+
+```dockerfile
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS builder
+WORKDIR /app
+COPY *.csproj .
+RUN dotnet restore
+COPY . .
+RUN dotnet publish -c Release -p:PublishAot=true -o /out
+
+FROM scratch
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /out/{{.Name}} /app
+USER 65532:65532
+EXPOSE {{.Port}}
+ENTRYPOINT ["/app"]
+```
+
+**.dockerignore**：
+
+```
+bin/
+obj/
+.git/
+*.md
+```
+
+**业务骨架**：
+
+```
+src/
+├── {{.Name}}.csproj                      # <Project Sdk="Microsoft.NET.Sdk.Web">, PublishAot=true
+├── Program.cs                            # Minimal API: MapGet /healthz, MapGet /
+└── README.md
+```
+
+**`Program.cs`**：
+
+```csharp
+var builder = WebApplication.CreateSlimBuilder(args);
+var app = builder.Build();
+app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
+app.MapGet("/", () => Results.Ok(new { service = "{{.Name}}", status = "ok" }));
+app.Run("http://0.0.0.0:{{.Port}}");
+```
+
+**`.csproj` 关键节选**：
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+</Project>
+```
+
+### 5.7 Zig（`--lang zig`）
+
+**Dockerfile**（zig build-exe → scratch）：
+
+```dockerfile
+FROM alpine:3.21 AS builder
+RUN apk add --no-cache zig
+WORKDIR /app
+COPY build.zig .
+COPY src/ ./src/
+RUN zig build-exe src/main.zig -O ReleaseSafe -target x86_64-linux-musl --static
+
+FROM scratch
+COPY --from=builder /app/main /app
+USER 65532:65532
+EXPOSE {{.Port}}
+ENTRYPOINT ["/app"]
+```
+
+**.dockerignore**：
+
+```
+zig-out/
+zig-cache/
+.git/
+*.md
+```
+
+**业务骨架**：
+
+```
+src/
+├── build.zig                          # StandardTargetOptimizeOptions, addExecutable, linkSystemLibrary("c")
+├── src/
+│   └── main.zig                       # std.http.Server: GET /healthz + GET /
+└── README.md
+```
+
+**`src/main.zig`**（Zig 0.14+ 标准库 HTTP server）：
+
+```zig
+const std = @import("std");
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const addr = try std.net.Address.parseIp4("0.0.0.0", {{.Port}});
+    var server = try addr.listen(.{ .reuse_address = true });
+    defer server.deinit();
+
+    while (true) {
+        const conn = try server.accept();
+        defer conn.stream.close();
+        var buf: [4096]u8 = undefined;
+        const n = try conn.stream.read(&buf);
+        const req = buf[0..n];
+
+        if (std.mem.indexOf(u8, req, "GET /healthz") != null) {
+            _ = try conn.stream.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"status\":\"ok\"}");
+        } else {
+            _ = try conn.stream.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"service\":\"{{.Name}}\",\"status\":\"ok\"}");
+        }
+    }
+}
+```
+
+**`build.zig`**：
+
+```zig
+const std = @import("std");
+
+pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+    const exe = b.addExecutable(.{
+        .name = "{{.Name}}",
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    exe.linkLibC();
+    b.installArtifact(exe);
+}
+```
+
+### 5.8 Kotlin（`--lang kotlin`）
+
+与 Java 共享 JVM 生态，用 Ktor 替代 Spring Boot（更轻量，与 KubePivot 极简哲学一致）。
+
+**Dockerfile**（复用 Java 的 JRE alpine 镜像）：
+
+```dockerfile
+FROM eclipse-temurin:21-jdk-alpine AS builder
+WORKDIR /app
+COPY build.gradle.kts gradlew ./
+COPY gradle/ ./gradle/
+RUN chmod +x gradlew && ./gradlew dependencies --no-daemon
+COPY src/ ./src/
+RUN ./gradlew buildFatJar --no-daemon
+
+FROM eclipse-temurin:21-jre-alpine
+WORKDIR /app
+COPY --from=builder /app/build/libs/*.jar app.jar
+EXPOSE {{.Port}}
+CMD ["java", "-Xms256m", "-Xmx512m", "-jar", "app.jar"]
+```
+
+**业务骨架**：
+
+```
+src/
+├── build.gradle.kts                       # kotlin("jvm") + ktor + kotlinx-serialization
+├── settings.gradle.kts
+├── src/main/kotlin/com/example/
+│   └── Application.kt                     # fun main(): embeddedServer(Netty, port={{.Port}}) { ... }
+└── README.md
+```
+
+**`Application.kt`**：
+
+```kotlin
+package com.example
+
+import io.ktor.server.application.*
+import io.ktor.server.engine.*
+import io.ktor.server.netty.*
+import io.ktor.server.response.*
+import io.ktor.server.routing.*
+
+fun main() {
+    embeddedServer(Netty, port = {{.Port}}) {
+        routing {
+            get("/healthz") { call.respond(mapOf("status" to "ok")) }
+            get("/") { call.respond(mapOf("service" to "{{.Name}}", "status" to "ok")) }
+        }
+    }.start(wait = true)
+}
+```
+
+### 5.9 TypeScript / JavaScript（`--lang ts`）
+
+Node.js 22 + Express。也可选 Fastify（更快）。
+
+**Dockerfile**：
+
+```dockerfile
+FROM node:22-slim AS builder
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev
+COPY . .
+
+FROM node:22-slim
+WORKDIR /app
+COPY --from=builder /app /app
+USER node
+EXPOSE {{.Port}}
+CMD ["node", "src/index.js"]
+```
+
+**.dockerignore**：
+
+```
+node_modules/
+.git/
+*.md
+```
+
+**业务骨架**：
+
+```
+src/
+├── package.json                         # dependencies: express
+├── src/
+│   └── index.js                         # Express: GET /healthz + GET /
+└── README.md
+```
+
+**`package.json`**：
+
+```json
+{
+  "name": "{{.Name}}",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": { "express": "^5.0.0" },
+  "scripts": { "start": "node src/index.js" }
+}
+```
+
+**`src/index.js`**：
+
+```javascript
+const express = require("express");
+const app = express();
+app.get("/healthz", (req, res) => res.json({ status: "ok" }));
+app.get("/", (req, res) => res.json({ service: "{{.Name}}", status: "ok" }));
+app.listen({{.Port}}, "0.0.0.0", () => console.log("listening on :{{.Port}}"));
+```
+
+### 5.10 PHP（`--lang php`）
+
+FrankenPHP：Caddy 内嵌 PHP，单二进制，最接近 KubePivot "零依赖"哲学。不需要 nginx + PHP-FPM sidecar。
+
+**Dockerfile**：
+
+```dockerfile
+FROM dunglas/frankenphp:1.4-php8.4 AS builder
+WORKDIR /app
+COPY composer.json .
+RUN composer install --no-dev --no-interaction
+COPY . .
+
+FROM dunglas/frankenphp:1.4-php8.4
+WORKDIR /app
+COPY --from=builder /app /app
+EXPOSE {{.Port}}
+CMD ["frankenphp", "run", "--config", "Caddyfile"]
+```
+
+**业务骨架**：
+
+```
+src/
+├── composer.json                        # php >=8.2
+├── Caddyfile                            # :8080 { php_server }
+├── public/
+│   └── index.php                        # json response
+└── README.md
+```
+
+**`Caddyfile`**：
+
+```
+:{{.Port}} {
+    root * public/
+    php_server
+}
+```
+
+**`public/index.php`**：
+
+```php
+<?php
+$path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+header('Content-Type: application/json');
+if ($path === '/healthz') {
+    echo json_encode(['status' => 'ok']);
+} else {
+    echo json_encode(['service' => '{{.Name}}', 'status' => 'ok']);
+}
+```
+
+### 5.11 Swift（`--lang swift`）
+
+Server-side Swift + Vapor 4，静态链接后可走 scratch。
+
+**Dockerfile**：
+
+```dockerfile
+FROM swift:6.0-noble AS builder
+WORKDIR /app
+COPY Package.swift Package.resolved* ./
+RUN swift package resolve
+COPY . .
+RUN swift build -c release --static-swift-stdlib
+
+FROM scratch
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /app/.build/release/{{.Name}} /app
+USER 65532:65532
+EXPOSE {{.Port}}
+ENTRYPOINT ["/app"]
+```
+
+**业务骨架**：
+
+```
+src/
+├── Package.swift                        # name: "{{.Name}}", dependencies: ["vapor"]
+├── Sources/App/
+│   └── main.swift                       # Vapor app: GET /healthz + GET /
+└── README.md
+```
+
+**`Package.swift`**：
+
+```swift
+// swift-tools-version: 6.0
+import PackageDescription
+let package = Package(
+    name: "{{.Name}}",
+    dependencies: [.package(url: "https://github.com/vapor/vapor.git", from: "4.106.0")],
+    targets: [.executableTarget(name: "{{.Name}}", dependencies: [.product(name: "Vapor", package: "vapor")])]
+)
+```
+
+**`Sources/App/main.swift`**：
+
+```swift
+import Vapor
+
+let app = try Application(.detect())
+defer { app.shutdown() }
+
+app.get("healthz") { _ in ["status": "ok"] }
+app.get { _ in ["service": "{{.Name}}", "status": "ok"] }
+
+try app.run()
+```
+
+### 5.12 Lua（`--lang lua`）
+
+OpenResty（nginx + LuaJIT），轻量到极致——整个 runtime < 5MB。
+
+**Dockerfile**：
+
+```dockerfile
+FROM openresty/openresty:1.25-alpine
+WORKDIR /app
+COPY public/ /usr/local/openresty/nginx/html/
+COPY nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
+EXPOSE {{.Port}}
+CMD ["openresty", "-g", "daemon off;"]
+```
+
+**业务骨架**：
+
+```
+src/
+├── nginx.conf                           # content_by_lua_block: 路由 /healthz + /
+├── public/
+│   └── index.html                       # 静态首页
+└── README.md
+```
+
+**`nginx.conf`**：
+
+```nginx
+events { worker_connections 1024; }
+http {
+    server {
+        listen {{.Port}};
+        location /healthz {
+            default_type application/json;
+            content_by_lua_block { ngx.say('{"status":"ok"}') }
+        }
+        location / {
+            default_type application/json;
+            content_by_lua_block { ngx.say('{"service":"{{.Name}}","status":"ok"}') }
+        }
+    }
+}
+```
+
 ---
 
 ## 六、模板变量体系
@@ -909,11 +1339,11 @@ type templateVars struct {
 
 func deriveResourcePresets(lang string) (cpuReq, memReq, cpuLimit, memLimit string) {
     switch lang {
-    case "java":
+    case "java", "kotlin":
         return "500m", "512Mi", "2000m", "1024Mi"
-    case "python":
+    case "python", "ts", "php", "lua":
         return "200m", "256Mi", "1000m", "512Mi"
-    default: // go, rust, cpp
+    default: // go, rust, cpp, cs, zig, swift
         return "100m", "128Mi", "500m", "256Mi"
     }
 }
@@ -1058,6 +1488,13 @@ func renderTemplate(content []byte, vars templateVars) []byte {
 | `TestInit_Java` | `kp init --lang java --name test` | 核层 + Java 壳，验证 `pom.xml` + `Application.java` 存在 |
 | `TestInit_Rust` | `kp init --lang rust --name test` | 核层 + Rust 壳，验证 `Cargo.toml` + `main.rs` 存在 |
 | `TestInit_Cpp` | `kp init --lang cpp --name test` | 核层 + C++ 壳，验证 `CMakeLists.txt` + `main.cpp` 存在 |
+| `TestInit_CSharp` | `kp init --lang cs --name test` | 核层 + C# 壳，验证 `.csproj` + `Program.cs` 存在 |
+| `TestInit_Zig` | `kp init --lang zig --name test` | 核层 + Zig 壳，验证 `build.zig` + `main.zig` 存在 |
+| `TestInit_Kotlin` | `kp init --lang kotlin --name test` | 核层 + Kotlin 壳，验证 `build.gradle.kts` + `Application.kt` 存在 |
+| `TestInit_TypeScript` | `kp init --lang ts --name test` | 核层 + TS 壳，验证 `package.json` + `index.js` 存在 |
+| `TestInit_PHP` | `kp init --lang php --name test` | 核层 + PHP 壳，验证 `composer.json` + `Caddyfile` 存在 |
+| `TestInit_Swift` | `kp init --lang swift --name test` | 核层 + Swift 壳，验证 `Package.swift` + `main.swift` 存在 |
+| `TestInit_Lua` | `kp init --lang lua --name test` | 核层 + Lua 壳，验证 `nginx.conf` + `index.html` 存在 |
 | `TestInit_InvalidLang` | `kp init --lang cobol --name test` | 报错 `unsupported language`，exit code != 0 |
 | `TestInit_InvalidType` | `kp init --type daemonset --name test` | 报错 `unsupported workload type` |
 | `TestInit_TypeGrpc` | `kp init --name test --type grpc` | Helm template 含 gRPC port 定义 |
@@ -1103,8 +1540,9 @@ kp init --name demo-naked --no-app --force && cd demo-naked && make deploy.build
 | Step 2 | Go 向后兼容验证：golden file 测试确保改造前后一致 | ~0.5 天 |
 | Step 3 | `--lang` flag + Python 模板 | ~0.5 天 |
 | Step 4 | Java + Rust + C++ 模板 | ~1 天 |
-| Step 5 | `--no-app` flag + `--type` flag | ~0.5 天 |
-| Step 6 | 全量测试 + 文档更新 | ~0.5 天 |
+| Step 5 | C# + Zig + Kotlin + TS/JS + PHP + Swift + Lua 模板 | ~1.5 天 |
+| Step 6 | `--no-app` flag + `--type` flag | ~0.5 天 |
+| Step 7 | 全量测试（12 种语言）+ 文档更新 | ~1 天 |
 
 ---
 
@@ -1143,4 +1581,12 @@ kp init --name demo-naked --no-app --force && cd demo-naked && make deploy.build
     - 模板变量策略最终决策：物理文件拆分（不用 text/template）
     - GPU Dockerfile 提示（python/cpp 基础镜像替换指引）
     - 幂等性测试：同目录重复 init 行为验证 + --force 保护
+
+2026-05-01 v1.2  qc + DeepSeek 语言矩阵扩展
+    - 新增 7 种语言：C#(AOT) / Zig / Kotlin(Ktor) / TS/JS(Express) / PHP(FrankenPHP) / Swift(Vapor) / Lua(OpenResty)
+    - 12 种语言完整 Dockerfile + 业务骨架 + 构建文件
+    - 资源预设从 3 档扩展为覆盖 12 语言的 3 档（原生/解释型/JVM）
+    - 测试用例从 14 个扩展为 21 个
+    - 实施 Step 5 新增（7 语言模板 ~1.5 天）
+    - 编辑记录作者修正：qc + DeepSeek 😈
 ```
