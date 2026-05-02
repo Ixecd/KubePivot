@@ -1,0 +1,37 @@
+docs(design): 乾枢 v3.1 GPU 调度 + v3.2 时空闭环 — 加维度不改架构
+
+v3.0 乾枢调度器完成 CPU/Mem 维度。v3.1 在现有框架上加 GPU 维度。
+v3.2 展望空间（GPU 共享）和时间（碳感知）双维度利用率闭环。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+v3.1 GPU 整卡调度
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  - Sizing: 2D → 3D DP, Pod × (CPU, Mem, GPU_Mem, GPU_Count)
+  - BinPack: NVLink 拓扑碎片评分 (GPUNodeScore) + 同 NVSwitch domain 3x 权重
+  - Rescheduler: GPU Pod 粘滞策略 (Sticky) + 硬件故障 Xid 48/61/94 强制驱逐
+  - Metrics: DCGM exporter → PrometheusClient + Staleness 阈值 60s 保守回退
+  - 显存量化对齐: A100/H100 推荐值对齐 MIG 分区大小 (5/10/20/40GB)
+  - resources.yaml gpu 字段激活 + kp init GPU Dockerfile 提示
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+v3.2 展望: 时空双维度闭环
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  空间维度: MPS / TimeSlicing / MIG Auto-Config
+    - GPU Utilization 40% → 85%
+    - RecommendedGPU 从整数扩展为浮点数 (0.1 粒度)
+    - MIG 硬件分区动态重组 (首次"写硬件"能力)
+
+  时间维度: 碳感知调度
+    - Cost = ResourceUsage × CarbonIntensity(t)
+    - coordinator Waiting Queue, 非紧急 Job 延迟到低碳窗口
+    - WattTime / CarbonSDK 数据源
+
+  resources.yaml schedulingPolicy:
+    carbonSensitivity: High | sharingPreference: MPS
+
+变更:
+  docs/design/gpu-scheduling-draft.md   新增 ~500 行
+
+合计: 1 个新文件
