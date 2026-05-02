@@ -417,7 +417,159 @@ kp etcd cleanup-member   # preStop hook 调用，判断缩容 vs 滚动更新
 
 ---
 
-## 九、测试计划
+## 九、etcd IAM 集成
+
+etcd learner 集群不能裸奔。`localhost:2379` 在不启用 auth 的情况下，集群内任何 Pod 都可以读写 etcd。对于多租户或多项目共享的 Controller，必须对接已有的 IAM 体系。
+
+### 9.1 etcd auth 方案
+
+etcd 3.4+ 内置 auth 支持三种模式：
+
+| 模式 | 复杂度 | 适用场景 |
+|---|---|---|
+| 用户名/密码 | 低 | 内部组件间通信 |
+| 客户端证书 (TLS) | 中 | 跨网络 / 外部访问 |
+| JWT token | 高 | OIDC 集成 |
+
+KubePivot 选用**用户名/密码**：etcd 仅通过 `localhost:2379` 被同 Pod 内的 kp-controller 访问。不需要 TLS（不跨网络），不需要 JWT（不暴露到集群外）。简单、可控、零额外依赖。
+
+### 9.2 证书跟 RBAC 的关系
+
+这里存在一个**隐式信任边界**：
+
+- KubePivot IAM 的 `teams.yaml` 控制的是 **"谁能调 `kp deploy`"**
+- etcd auth 控制的是 **"谁能在 etcd 里读写 key"**
+
+两者不是同一层。IAM 检查在 CLI 入口（`mustCheck`），etcd auth 检查在数据层。对应的 actor 不同：
+
+```
+用户 alice@x.com 调 kp deploy
+  → mustCheck("alice@x.com", "kp-prod", PermDeploy) ← IAM 层
+  → 通过
+  → kp controller 写 etcd
+  → etcd auth: "kubepivot-controller" 用户有写权限 ← etcd auth 层
+```
+
+**结论**：etcd auth 的用户不是"alice@x.com"，而是"kubepivot-controller"这个系统账户。etcd 层的 IAM 是**服务账户 IAM**——控制哪个 kp 组件能读写哪些 key 前缀。
+
+### 9.3 自举时的 auth 初始化
+
+```go
+// internal/etcdmanager/auth.go
+
+func (m *EtcdManager) InitAuth(ctx context.Context) error {
+    // Step 1: 创建 root 用户（仅在 etcd 首次启动时，后续幂等）
+    etcdctl("user", "add", "root", "--interactive=false", "--new-user-password="+rootPassword)
+    etcdctl("user", "add", "kubepivot-controller", "--interactive=false", "--new-user-password="+kpPassword)
+
+    // Step 2: 创建 root 角色（全权限，仅用于管理操作）
+    etcdctl("role", "add", "root")
+    etcdctl("role", "grant-permission", "root", "readwrite", "", "")  // 全部 key
+
+    // Step 3: 创建 kp-controller 角色（限制 key 前缀）
+    etcdctl("role", "add", "kp-controller")
+    etcdctl("role", "grant-permission", "kp-controller", "readwrite",
+        "/kubepivot/", "")       // kp 状态和配置
+    etcdctl("role", "grant-permission", "kp-controller", "readwrite",
+        "/kubepivot/global/", "") // leader election
+
+    // Step 4: 绑定用户-角色
+    etcdctl("user", "grant-role", "root", "root")
+    etcdctl("user", "grant-role", "kubepivot-controller", "kp-controller")
+
+    // Step 5: 启用 auth
+    etcdctl("auth", "enable")
+
+    return nil
+}
+```
+
+**密钥存储**：`rootPassword` 和 `kpPassword` 由 Bootstrap 阶段随机生成（`openssl rand -hex 32`），写入 K8s Secret：
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kubepivot-etcd-auth
+  namespace: kubepivot-system
+data:
+  root-password: <base64>
+  kp-password:   <base64>
+```
+
+kp-controller 启动时从 Secret 读取密码，注入 etcd client。
+
+### 9.4 kp-controller 的 client 配置
+
+```go
+// 当前: ETCD_ENDPOINTS=localhost:2379
+// 升级: ETCD_ENDPOINTS=kubepivot-controller:2379?user=kubepivot-controller&password=<from-secret>
+```
+
+或通过环境变量：
+
+```yaml
+env:
+  - name: ETCD_ENDPOINTS
+    value: "localhost:2379"
+  - name: ETCD_USER
+    value: "kubepivot-controller"
+  - name: ETCD_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: kubepivot-etcd-auth
+        key: kp-password
+```
+
+### 9.5 Key 前缀权限隔离
+
+```
+/                         # root 用户可读写
+├── /kubepivot/           # kp-controller 用户可读写
+│   ├── /global/          #   全局 leader election / config
+│   │   ├── /leader/
+│   │   └── /shards/
+│   ├── /projects/        #   项目状态
+│   │   ├── /kp-prod/
+│   │   └── /kp-staging/
+│   └── /sandbox/         #   沙盒会话
+└── /other-app/           # kp-controller 无权限（隔离）
+```
+
+**v3.0 当前状态**：所有操作用 auto-detect 的单 etcd 连接，无 key 前缀隔离。v3.1 升级到 Learner 集群后，auth 和 key 前缀隔离一起上。
+
+### 9.6 与已有 IAM 的交互
+
+| 层级 | 系统 | Actor | 控制什么 |
+|---|---|---|---|
+| CLI 层 | `mustCheck()` + `teams.yaml` | 用户 email | 谁能调 `kp deploy` |
+| 数据层 | etcd auth + key 前缀 | 系统账户 | 哪个组件能读写哪些 etcd key |
+| 审计层 | `audit.Record()` | 用户 email | 谁在什么时候做了什么 |
+
+三层不重叠，各管各的。用户 Alice `kp deploy` → CLI 层检查通过 → kp-controller 以系统账户写 etcd → 审计记录"Alice initiated deploy"。
+
+---
+
+## 十、Shadow CRD IAM 字段
+
+在 `KubePivotStatus.status.etcd` 中补充 auth 状态：
+
+```yaml
+status:
+  etcd:
+    auth:
+      enabled: true
+      users:
+        - name: root
+          roles: [root]
+        - name: kubepivot-controller
+          roles: [kp-controller]
+      lastRotated: "2026-05-01T00:00:00Z"
+```
+
+---
+
+## 十一、测试计划（追加 etcd IAM 用例）
 
 | 测试 | 覆盖 |
 |---|---|
@@ -432,10 +584,15 @@ kp etcd cleanup-member   # preStop hook 调用，判断缩容 vs 滚动更新
 | `TestShadowCRD_PhaseTransition` | Bootstrap → Running → 写 KubePivotStatus |
 | `TestShadowCRD_Degraded` | 一个 etcd 节点不可达 → phase=Degrading |
 | `TestPeerDiscovery_DifferentNamespace` | 非默认 namespace，K8s API 依然发现 peer |
+| `TestEtcdAuth_InitOnBootstrap` | 首次启动时自动创建 root + kp-controller 用户 → 启用 auth |
+| `TestEtcdAuth_Idempotent` | auth 已存在时重复调用 InitAuth → 幂等不报错 |
+| `TestEtcdAuth_UnauthorizedAccess` | 无用户密码 → etcdctl get → permission denied |
+| `TestEtcdAuth_KeyPrefixIsolation` | kp-controller 用户读写 `/kubepivot/` → OK，读写 `/other/` → denied |
+| `TestEtcdAuth_Rotation` | root 密码轮转后 kp-controller 仍能读写（不受影响） |
 
 ---
 
-## 十、风险与约束
+## 十二、风险与约束
 
 1. **StatefulSet 启动顺序**：`OrderedReady` 意味着 Pod-0 必须先 Ready 才能启动 Pod-1。冷启动时间 = Pod-0 启动 + etcd 自举 + Pod-1 Learner 追赶 + promote + ... 大约 30-60 秒起步，在预期范围内。
 2. **PV 后端性能**：etcd 对磁盘延迟敏感。推荐 `local-storage` 或 `hostPath` 而非 NFS。如果 PV 后端是网络存储（Ceph/Gluster），etcd 写入延迟可能飙到 100ms+，触发 Leader 选举超时。
@@ -445,7 +602,7 @@ kp etcd cleanup-member   # preStop hook 调用，判断缩容 vs 滚动更新
 
 ---
 
-## 十一、实施步骤
+## 十三、实施步骤
 
 | Step | 内容 | 估计 |
 |---|---|---|
@@ -458,7 +615,7 @@ kp etcd cleanup-member   # preStop hook 调用，判断缩容 vs 滚动更新
 
 ---
 
-## 十二、编辑记录
+## 十四、编辑记录
 
 ```
 2026-05-01  qc + DeepSeek 起草
@@ -474,4 +631,12 @@ kp etcd cleanup-member   # preStop hook 调用，判断缩容 vs 滚动更新
     - Shadow CRD KubePivotStatus 完整 schema
     - 11 个测试用例
     - "假 Pod-0" 陷阱防御
+
+2026-05-01 v1.1  qc + DeepSeek etcd IAM 集成
+    - etcd auth 用户名/密码方案（与已有 KubePivot IAM 对接）
+    - 自举时 auth 初始化：root + kp-controller 用户，key 前缀权限隔离
+    - Key 前缀映射 `/kubepivot/` 权限模型
+    - Shadow CRD etcd.auth 状态字段
+    - CLI 层 IAM × 数据层 etcd auth × 审计层 audit.Record 三层关系
+    - 5 个 IAM 测试用例追加（auth 初始化、幂等、未授权、key 隔离、密码轮转）
 ```

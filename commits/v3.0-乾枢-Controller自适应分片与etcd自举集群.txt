@@ -1,4 +1,4 @@
-docs(design): 乾枢 v3.1 基础设施自举 — Controller 自适应分片 + etcd Learner 集群
+docs(design): 乾枢 v3.0 基础设施自举 — Controller 自适应分片 + etcd Learner 集群
 
 两份设计草案，覆盖 KubePivot Controller 从"外部依赖"到"零依赖闭环"的两个核心能力。
 

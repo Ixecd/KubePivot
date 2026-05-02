@@ -1,0 +1,24 @@
+docs(design): 乾枢 v3.0 IAM 系统设计文档 — Auth + RBAC + Audit 三包联动
+
+从 v2.8/v3.0 代码反推的完整 IAM 架构文档。Identity (Auth) → Access (RBAC) → Management (Audit)
+三包解耦设计，通过 mustCheck 一行接入串联。
+
+设计核心:
+  - Auth: OAuth2 + PKCE, 3 Providers (Google/GitHub/Dex), 凭证 YAML 存储 (0600)
+  - RBAC: teams.yaml + Checker 接口 + 17 Permissions, 黑名单绝对优先 (Q-B1.C)
+  - Audit: 三档降级 Actor 解析, deny write-through, 不 import auth 避免循环依赖
+  - 串联: kp login → audit.ResolveActor → mustCheck → audit denied
+  - Q-B5 向后兼容: 无 teams.yaml → 全权限
+  - 14 个写命令接入清单 + 读命令不入清单
+  - 5 个已知局限 (诚实标注)
+  - D1-D5 设计决策 + 与 Casbin/OPA/Keycloak 对比
+
+同时补充 etcd-learner-bootstrap-draft v1.1:
+  - etcd IAM 集成 (用户名/密码, key 前缀隔离, CLI×数据×审计三层关系)
+  - 5 个 IAM 测试用例追加
+
+变更:
+  docs/design/iam-draft.md                     新增 ~470 行
+  docs/design/etcd-learner-bootstrap-draft.md  追加 ~150 行 (etcd IAM 章)
+
+合计: 2 个文件变更, ~620 行
