@@ -113,8 +113,8 @@ func TestKubectlMetricsClient_GetPodMetrics_Success(t *testing.T) {
 	if !contains(mock.gotArgs, "top") || !contains(mock.gotArgs, "pod") || !contains(mock.gotArgs, "myapp-abc") {
 		t.Errorf("kubectl args 错误: %v", mock.gotArgs)
 	}
-	if !contains(mock.gotArgs, "-o") || !contains(mock.gotArgs, "json") {
-		t.Errorf("kubectl args 缺 -o json: %v", mock.gotArgs)
+	if !contains(mock.gotArgs, "--output") || !contains(mock.gotArgs, "json") {
+		t.Errorf("kubectl args 缺 --output json: %v", mock.gotArgs)
 	}
 }
 

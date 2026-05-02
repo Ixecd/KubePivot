@@ -223,7 +223,7 @@ func (c *KubectlMetricsClient) kubectlTop(ctx context.Context, resource, name, n
 	if namespace != "" && resource == "pod" {
 		args = append(args, "-n", namespace)
 	}
-	args = append(args, "-o", "json")
+	args = append(args, "--output", "json")
 
 	out, err := c.kubectl(ctx, c.kubeconfig, args...)
 	if err != nil {

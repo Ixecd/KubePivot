@@ -121,6 +121,8 @@ func main() {
 		}
 	case "team":
 		runTeam(os.Args[2:])
+	case "whoami":
+		runWhoami(os.Args[2:])
 	default:
 		// 未知命令 → 尝试作为插件执行
 		execPlugin(os.Args[1], os.Args[2:])
@@ -184,7 +186,7 @@ func printUsage() {
   kp down     [--namespace] [--context] [--kubeconfig]   彻底下线服务
   kp resume   [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
   kp rollback [--namespace <ns>] [--context <ctx>] [--kubeconfig <path>]
-  kp release  --version <v1.2.3> [--deploy] [--no-push] 
+  kp release  --version <v1.2.3> [--deploy]
   kp scan     [--severity CRITICAL,HIGH] [--image img:tag]   扫描镜像 CVE
   kp promote  [--service <name>] [--namespace <ns>]   切换蓝绿流量到新版本
   kp migrate  status [--database-url] [--service] [--migration-tool]  查看 DB 迁移状态
@@ -298,18 +300,4 @@ func printPlan(plan []planner.Plan) {
 		fmt.Printf("- %s: replicas=%d cpu=%s memory=%s storage=%s\n",
 			item.Name, item.Replicas, item.CPU, item.Memory, item.Storage)
 	}
-}
-
-func buildResourceArgs(cpu, memory, storage string) string {
-	parts := []string{}
-	if cpu != "" {
-		parts = append(parts, "cpu="+cpu)
-	}
-	if memory != "" {
-		parts = append(parts, "memory="+memory)
-	}
-	if storage != "" {
-		parts = append(parts, "ephemeral-storage="+storage)
-	}
-	return strings.Join(parts, ",")
 }

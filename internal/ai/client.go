@@ -46,6 +46,8 @@ func NewLLMClient() (LLMClient, error) {
 	switch provider {
 	case "claude":
 		return newClaudeClient(apiKey, model, endpoint), nil
+	case "deepseek":
+		return newDeepSeekClient(apiKey, model, endpoint), nil
 	case "openai":
 		return newOpenAIClient(apiKey, model, endpoint), nil
 	case "doubao":
@@ -139,6 +141,16 @@ func newOpenAIClient(apiKey, model, endpoint string) *openAIClient {
 	}
 	if endpoint == "" {
 		endpoint = "https://api.openai.com/v1/chat/completions"
+	}
+	return &openAIClient{apiKey: apiKey, model: model, endpoint: endpoint}
+}
+
+func newDeepSeekClient(apiKey, model, endpoint string) *openAIClient {
+	if model == "" {
+		model = "deepseek-chat"
+	}
+	if endpoint == "" {
+		endpoint = "https://api.deepseek.com/v1/chat/completions"
 	}
 	return &openAIClient{apiKey: apiKey, model: model, endpoint: endpoint}
 }

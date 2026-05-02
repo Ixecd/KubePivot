@@ -1,0 +1,29 @@
+fix: CLI 34 命令全量验证 — 修 5 个 bug
+
+34 个命令逐批烟雾测试通过。修复过程中发现的 5 个问题：
+
+bug 1: kp whoami 路由漏接
+  main.go switch 缺 case "whoami" → runWhoami() 从未被调用
+  修复: 加 case "whoami"
+
+bug 2: kp release --no-push 假 flag
+  main.go 帮助文本写了 --no-push，但 release.go 从未实现
+  修复: 删帮助文本中的 [--no-push]
+
+bug 3: kubectl -o json 兼容性
+  kubectl v1.33 废弃 -o 短格式，只认 --output
+  修复: kubectl.go:226 "-o" → "--output" + 对应单测
+
+bug 4: kp ai-plan 覆盖 components.yaml 丢基础设施组件
+  LLM 生成只含业务服务，覆盖时 postgres/etcd 丢失
+  修复: 写入前读已有文件，保留 Image="" 的基础设施组件
+
+bug 5: kp ai-plan 缺 DeepSeek provider
+  修复: client.go 加 case "deepseek" + deepseek-chat 默认 endpoint
+
+变更:
+  cmd/kp/main.go                 +1 case, -1 help text
+  cmd/kp/ai_plan.go              +35 行
+  internal/ai/client.go          +10 行
+  internal/metrics/kubectl.go    -o→--output
+  internal/metrics/kubectl_test.go  同步

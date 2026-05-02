@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/Ixecd/kubepivot/internal/ai"
+	"github.com/Ixecd/kubepivot/internal/planner"
+	"gopkg.in/yaml.v3"
 )
 
 func runAIPlan(args []string) {
@@ -98,8 +100,45 @@ func runAIPlan(args []string) {
 	}
 
 	// 生成 YAML 内容
+	// 第 101-127 行区域替换为：
+
 	yamlContent := ai.RenderComponentsYAML(plan)
 	componentsPath := filepath.Join(root, "configs", "components.yaml")
+
+	// 保护已有基础设施组件（无 image 的 StatefulSet）
+	var mergedComponents []planner.Component
+	if existingData, err := os.ReadFile(componentsPath); err == nil {
+		var existing struct {
+			Components []planner.Component `yaml:"components"`
+		}
+		if yaml.Unmarshal(existingData, &existing) == nil {
+			for _, c := range existing.Components {
+				if c.Image == "" {
+					mergedComponents = append(mergedComponents, c)
+				}
+			}
+		}
+	}
+	// 追加 LLM 生成的业务组件
+	for _, c := range plan.Components {
+		mergedComponents = append(mergedComponents, planner.Component{
+			Name:     c.Name,
+			Port:     c.Port,
+			Image:    c.Image,
+			Replicas: c.Replicas,
+			CPU:      c.CPU,
+			Memory:   c.Memory,
+			Storage:  c.Storage,
+		})
+	}
+
+	// 重新渲染完整的 components.yaml
+	var wrapper struct {
+		Components []planner.Component `yaml:"components"`
+	}
+	wrapper.Components = mergedComponents
+	data, _ := yaml.Marshal(&wrapper)
+	yamlContent = string(data)
 
 	fmt.Println("生成的 components.yaml：")
 	fmt.Println()
