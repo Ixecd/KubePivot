@@ -21,27 +21,27 @@ type LLMClient interface {
 //
 // 环境变量：
 //
-//	DTK_LLM_PROVIDER  = claude | openai | doubao（默认 claude）
-//	DTK_LLM_API_KEY   = 对应 provider 的 API key
-//	DTK_LLM_MODEL     = 模型名，有默认值
-//	DTK_LLM_ENDPOINT  = 私有化部署时指定，覆盖默认 API 地址
+//	KP_LLM_PROVIDER  = claude | openai | doubao（默认 claude）
+//	KP_LLM_API_KEY   = 对应 provider 的 API key
+//	KP_LLM_MODEL     = 模型名，有默认值
+//	KP_LLM_ENDPOINT  = 私有化部署时指定，覆盖默认 API 地址
 func NewLLMClient() (LLMClient, error) {
-	provider := strings.ToLower(os.Getenv("DTK_LLM_PROVIDER"))
+	provider := strings.ToLower(os.Getenv("KP_LLM_PROVIDER"))
 	if provider == "" {
 		provider = "claude"
 	}
 
-	apiKey := os.Getenv("DTK_LLM_API_KEY")
+	apiKey := os.Getenv("KP_LLM_API_KEY")
 	if apiKey == "" {
 		return nil, fmt.Errorf(
-			"DTK_LLM_API_KEY 未配置，请设置环境变量\n"+
-				"  export DTK_LLM_API_KEY=your-api-key\n"+
-				"  export DTK_LLM_PROVIDER=%s  # 可选，默认 claude", provider,
+			"KP_LLM_API_KEY 未配置，请设置环境变量\n"+
+				"  export KP_LLM_API_KEY=your-api-key\n"+
+				"  export KP_LLM_PROVIDER=%s  # 可选，默认 claude", provider,
 		)
 	}
 
-	model := os.Getenv("DTK_LLM_MODEL")
-	endpoint := os.Getenv("DTK_LLM_ENDPOINT")
+	model := os.Getenv("KP_LLM_MODEL")
+	endpoint := os.Getenv("KP_LLM_ENDPOINT")
 
 	switch provider {
 	case "claude":

@@ -1,0 +1,20 @@
+chore: 全局清理 dtk 遗留引用 — dtk→kp, DTK_→KP_
+
+项目 v2.0 时从 dtk (dev-toolkit) 改名为 KubePivot (kp)，
+但多处遗留引用存活至今。本次全面清理:
+
+变更:
+  internal/scaffold/scaffold.go    dtk init→kp init, dtk→kp (4处)
+  internal/ai/prompt.go            dtk→kp (2处, LLM prompt + YAML注释)
+  internal/ai/client.go            DTK_LLM_*→KP_LLM_* (10处, 环境变量)
+  cmd/kp/ai_plan.go                DTK_→KP_ (错误提示)
+  internal/state/store.go          ~/.dtk/state→~/.kp/state (数据路径)
+  internal/state/state_test.go     .dtk→.kp (测试断言)
+
+最多 5 个文件, 零逻辑变更
+
+验证:
+  [✓] make dev → 全 PASS
+  [✓] kp init --name test → 生成正常, 无 dtk 字样
+  [✓] grep -r "dtk" internal/ cmd/ --include="*.go" | grep -v "_test.go" → 0 matches
+  [✓] grep -r "DTK_" internal/ cmd/ --include="*.go" → 0 matches

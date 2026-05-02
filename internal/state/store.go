@@ -178,7 +178,7 @@ func localPath(project, namespace string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("获取 home 目录失败: %w", err)
 	}
-	return filepath.Join(home, ".dtk", "state", project, namespace+".json"), nil
+	return filepath.Join(home, ".kp", "state", project, namespace+".json"), nil
 }
 
 // autoMigrateToEtcd 检测到 etcd 可用且本地有状态时，自动迁移

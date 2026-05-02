@@ -55,7 +55,7 @@ func BuildPrompt(ctx *RepoContext) string {
 - cpu：轻量服务 100m，中等业务 200-500m，高负载 1000m+
 - memory：最小 64Mi，普通服务 128-256Mi，有缓存或高并发 512Mi+
 - storage：有持久化需求时填写，纯无状态服务填 "0"
-- image：如果是纯 CLI 工具（不对外提供 HTTP 服务）填空字符串，dtk 会跳过 build/push
+- image：如果是纯 CLI 工具（不对外提供 HTTP kp 会跳过 build/push
 - 不要把 postgres/etcd/controller 等基础设施组件列进来，只列业务服务
 
 `)
@@ -161,7 +161,7 @@ func ParsePlan(raw string) (*AIPlan, error) {
 // RenderComponentsYAML 把 AIPlan 渲染成 components.yaml 格式
 func RenderComponentsYAML(plan *AIPlan) string {
 	var sb strings.Builder
-	sb.WriteString("# 由 dtk ai-plan 自动生成\n")
+	sb.WriteString("# 由 kp ai-plan 自动生成\n")
 	sb.WriteString("# LLM 分析依据：" + plan.Reasoning + "\n\n")
 	sb.WriteString("components:\n")
 

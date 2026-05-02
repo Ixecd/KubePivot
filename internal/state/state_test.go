@@ -685,7 +685,7 @@ func TestNewAutoStore_EmptyEndpoints_ReturnsLocalStore(t *testing.T) {
 func TestLocalPath_Format(t *testing.T) {
 	path, err := localPath("myapp", "production")
 	require.NoError(t, err)
-	assert.Contains(t, path, ".dtk")
+	assert.Contains(t, path, ".kp")
 	assert.Contains(t, path, "myapp")
 	assert.Contains(t, path, "production.json")
 }

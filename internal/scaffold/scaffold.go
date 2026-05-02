@@ -193,7 +193,7 @@ ETCD_ENDPOINTS=
 	if err := renameDir(filepath.Join(outputDir, "build", "docker", "helloworld"), filepath.Join(outputDir, "build", "docker", kebabName)); err != nil {
 		return err
 	}
-	if err := renameDir(filepath.Join(outputDir, "build", "docker", "dtk"), filepath.Join(outputDir, "build", "docker", name)); err != nil {
+	if err := renameDir(filepath.Join(outputDir, "build", "docker", "kp"), filepath.Join(outputDir, "build", "docker", name)); err != nil {
 		// ignore if not exist
 	}
 	if err := renameDir(filepath.Join(outputDir, "deployments", "project"), filepath.Join(outputDir, "deployments", kebabName)); err != nil {
@@ -248,7 +248,7 @@ ETCD_ENDPOINTS=
 	if err := runInDir(outputDir, "git", "add", "."); err != nil {
 		fmt.Fprintf(opts.Stdout, "[WARN] git add 失败，请手动执行\n")
 	}
-	if err := runInDir(outputDir, "git", "commit", "-m", "chore: init project by dtk"); err != nil {
+	if err := runInDir(outputDir, "git", "commit", "-m", "chore: init project by kp"); err != nil {
 		fmt.Fprintf(opts.Stdout, "[WARN] git commit 失败，请手动执行\n")
 	}
 	if err := runInDir(outputDir, "go", "get", "github.com/stretchr/testify@latest"); err != nil {
@@ -403,7 +403,7 @@ func ensureOutputDir(path string, force bool, name string) error {
 		}
 		return fmt.Errorf("输出目录已存在：%s\n\n"+
 			"   请使用其他路径，或加 --force 强制覆盖：\n"+
-			"     dtk init --name %s --output %s --force",
+			"     kp init --name %s --output %s --force",
 			friendlyPath(path), name, friendlyPath(path)) // 这里 name 是 InitProject 里的局部变量
 	}
 	return nil
@@ -652,7 +652,7 @@ func printDryRun(opts InitOptions) {
 		module = opts.Name
 	}
 
-	fmt.Fprintf(opts.Stdout, "[dry-run] dtk init --name %s --module %s\n\n", opts.Name, module)
+	fmt.Fprintf(opts.Stdout, "[dry-run] kp init --name %s --module %s\n\n", opts.Name, module)
 	fmt.Fprintf(opts.Stdout, "将生成项目：%s\n", outputDir)
 	fmt.Fprintf(opts.Stdout, "  模块路径：%s\n", module)
 	fmt.Fprintf(opts.Stdout, "  前端骨架：%s\n\n", map[bool]string{true: "是", false: "否"}[opts.WithFrontend])
