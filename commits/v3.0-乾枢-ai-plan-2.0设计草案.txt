@@ -1,0 +1,24 @@
+docs(design): 乾枢 ai-plan 2.0 — 从"LLM 猜"到"证据链决策"
+
+v1.0 ai-plan 仅靠 LLM 静态猜测资源。2.0 把 KubePivot 的 sizing、GPU 检测、
+Prometheus 数据接入决策链，LLM 从"唯一决策者"变成"框架构建者"。
+
+设计核心:
+  - 五阶段 Pipeline: 扫描 → LLM 分析 → Sizing 验证 → GPU 感知 → Dry-run + Deploy
+  - LLM 角色转变: 组件拓扑+profile (70%) + 数值交给 KubePivot 填充
+  - Sizing 反馈环: 冷启动(维持LLM) vs 热更新(Prometheus P95/P99修正)
+  - Code-Metric Correlation: 代码 Checksum vs Pod image tag 不一致 → Sizing 降权
+  - OOMKilled 感知: 48h 内 OOM → limits.memory 强制 +30-50%
+  - GPU 三层检测: 代码 import × 环境依赖 × Dockerfile 镜像
+  - GPU 型号推断: vllm→A100, torch→T4, diffusers→A10
+  - Cluster Capability Scan: 无 GPU→warn, 型号不匹配→自动降级, MIG→优先推荐
+  - Confidence Score: 每个决策因子附带信任分 + 终端展示
+  - GPU 信任分层: vllm=100% / torch=60% / triton=30%
+  - Resource Quota Warning: dry-run 前检查 namespace Quota
+  - 🧠 替换 🤖 表情 (Phase 2 LLM analysis)
+
+变更:
+  docs/design/ai-plan-2.0-draft.md   新增 ~320 行
+  cmd/kp/ai_plan.go                  改 1 行 (emoji 🤖→🧠)
+
+合计: 2 个文件变更

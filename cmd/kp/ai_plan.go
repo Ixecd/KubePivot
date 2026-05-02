@@ -53,7 +53,7 @@ func runAIPlan(args []string) {
 	P.Done(fmt.Sprintf("发现 %d 个服务：%s", len(repoCtx.Services), strings.Join(names, ", ")))
 
 	// 调用 LLM
-	P.Start("🤖", "LLM 分析中")
+	P.Start("🧠", "LLM 分析中")
 	prompt := ai.BuildPrompt(repoCtx)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
