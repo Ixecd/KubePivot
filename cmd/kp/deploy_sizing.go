@@ -228,24 +228,7 @@ func computeSizingForPod(plan *planner.Plan, promURL, namespace, kubeconfig stri
 	if err != nil {
 		return nil, fmt.Errorf("sizing compute failed: %w", err)
 	}
-
-	// 5. 返回建议 (由调用方决定是否写入)
-	//    注意: Confidence 已在 sizing.Compute 内计算，这里直接透传
-	//    👇 Level5: 生成 VPA 建议 (只读模式，输出独立文件)
-	//    注意: 不自动应用，保持 GitOps 原则 (建议可审计 + 人类最终确认)
-	//    输出路径: <Root>/configs/vpa-suggestion.yaml (可配置)
-	//    简化: 先硬编码路径，Level6 支持命令行参数
-	// vpaPath := filepath.Join(Root, "configs", "vpa-suggestion.yaml")
-	// if err := sizing.WriteVPASuggestion(vpaPath, namespace, plan.Name, sug, "Off"); err != nil {
-	//     // 记录警告但不阻断: VPA 建议生成失败不影响 sizing 核心功能
-	//     slog.Warn("failed to write VPA suggestion", "err", err, "pod", plan.Name)
-	// }
-
-	// 简化: 先不写入文件，只返回 sug，调用方在 runSizingHook 中统一处理
-	// Level6: 支持 --vpa-output 参数 + 批量生成
-
-	_ = namespace // 占位，后续集成时移除
-	_ = plan.Name // 占位，后续集成时移除
+	
 	return sug, nil
 }
 

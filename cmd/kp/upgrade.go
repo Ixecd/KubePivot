@@ -205,8 +205,7 @@ func runUpgrade(args []string) {
 
 	// ── Step 4: 部署服务 ──────────────────────────────────────────────────────
 	P.Info("⛵", "Step 3/4 部署服务")
-	deployArgs := []string{}
-	if err := runDeployInternal(deployArgs, root, env, *service); err != nil {
+	if err := runDeployInternal(root, env, *service); err != nil {
 		fmt.Println()
 		P.Fail(fmt.Sprintf("服务部署失败: %v", err))
 		restoreAfterMigrateFail(upgradeCfg, root, hadSnapshot)
@@ -219,7 +218,7 @@ func runUpgrade(args []string) {
 		P.Info("🔍", "Step 4/4 升级后健康校验")
 		cfg := &deployConfig{}
 		resolveDeployConfig(cfg, env, root)
-		if err := healthCheckAllServices(cfg, root, env, *service); err != nil {
+		if err := healthCheckAllServices(cfg, root, *service); err != nil {
 			P.Fail(fmt.Sprintf("健康校验失败: %v", err))
 			fmt.Printf("%s 运行 kp rollback 回滚服务\n", colorize(colorYellow, "💡"))
 			os.Exit(1)
@@ -232,7 +231,7 @@ func runUpgrade(args []string) {
 }
 
 // runDeployInternal 内部调用 deploy 逻辑
-func runDeployInternal(args []string, root string, env map[string]string, serviceFilter string) error {
+func runDeployInternal(root string, env map[string]string, serviceFilter string) error {
 	cfg := &deployConfig{}
 	resolveDeployConfig(cfg, env, root)
 
@@ -268,7 +267,7 @@ func runDeployInternal(args []string, root string, env map[string]string, servic
 }
 
 // healthCheckAllServices 检查所有有 image 的服务 /healthz
-func healthCheckAllServices(cfg *deployConfig, root string, env map[string]string, serviceFilter string) error {
+func healthCheckAllServices(cfg *deployConfig, root string, serviceFilter string) error {
 	plans, err := planner.BuildPlan(filepath.Join(root, "configs/components.yaml"))
 	if err != nil {
 		return err

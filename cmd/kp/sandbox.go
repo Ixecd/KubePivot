@@ -172,7 +172,7 @@ func runSandboxStart(args []string) {
 	if !simOK {
 		P.Fail("迁移模拟失败，触发 RESTORING")
 		sm.Transition(state.StateRestoring, "sandbox: 迁移模拟失败")
-		runSandboxRestore(cfg, root, env, sandboxID)
+		runSandboxRestore(cfg)
 		sm.Transition(state.StateIdle, "sandbox: 已恢复")
 		cleanSandboxSession(sandboxID, root)
 		os.Exit(1)
@@ -186,7 +186,7 @@ func runSandboxStart(args []string) {
 	if !commitOK {
 		P.Fail("Commit 失败，触发 RESTORING")
 		sm.Transition(state.StateRestoring, "sandbox: commit 失败")
-		runSandboxRestore(cfg, root, env, sandboxID)
+		runSandboxRestore(cfg)
 		sm.Transition(state.StateIdle, "sandbox: 已恢复")
 		cleanSandboxSession(sandboxID, root)
 		os.Exit(1)
@@ -197,7 +197,7 @@ func runSandboxStart(args []string) {
 	if err := runBlueGreenSwitch(cfg, root, fromEnvTraffic); err != nil {
 		P.Fail(fmt.Sprintf("流量切换失败，触发 RESTORING: %v", err))
 		sm.Transition(state.StateRestoring, "sandbox: 蓝绿切换失败")
-		runSandboxRestore(cfg, root, env, sandboxID)
+		runSandboxRestore(cfg)
 		sm.Transition(state.StateIdle, "sandbox: 已恢复")
 		cleanSandboxSession(sandboxID, root)
 		os.Exit(1)
@@ -415,13 +415,13 @@ spec:
 	// 先创建 migrations ConfigMap
 	if !createMigrationsConfigMap(cfg, jobName+"-migrations", migDir, sandboxID) {
 		P.Info("⚠️ ", "创建迁移 ConfigMap 失败，降级为 dry-run 模式")
-		return runMigrationSimDryRun(root, env)
+		return runMigrationSimDryRun()
 	}
 
 	// apply Job
 	f, err := os.CreateTemp("", "kp-sim-job-*.yaml")
 	if err != nil {
-		return runMigrationSimDryRun(root, env)
+		return runMigrationSimDryRun()
 	}
 	defer os.Remove(f.Name())
 	f.WriteString(jobYAML)
@@ -431,7 +431,7 @@ spec:
 	args = append(args, "apply", "-f", f.Name())
 	if _, err := runOutput(args...); err != nil {
 		P.Info("⚠️ ", "Job 创建失败，降级为 dry-run 模式")
-		return runMigrationSimDryRun(root, env)
+		return runMigrationSimDryRun()
 	}
 
 	// 等待 Job 完成（最多 5 分钟）
@@ -487,7 +487,7 @@ func createMigrationsConfigMap(cfg *deployConfig, name, migDir, sandboxID string
 }
 
 // runMigrationSimDryRun dry-run 降级模式
-func runMigrationSimDryRun(root string, env map[string]string) bool {
+func runMigrationSimDryRun() bool {
 	P.Info("💡", "使用 dry-run 降级模式（不创建 K8s Job）")
 	_, err := runOutput("kp", "migrate", "run", "--dry-run")
 	return err == nil
@@ -515,7 +515,7 @@ func runSandboxCommit(cfg *deployConfig, root string, env map[string]string, ver
 	return err == nil
 }
 
-func runSandboxRestore(cfg *deployConfig, root string, env map[string]string, sandboxID string) {
+func runSandboxRestore(cfg *deployConfig) {
 	P.Start("⏪", "恢复 PVC 快照 + helm rollback")
 	// kp pvc restore
 	runOutput("kp", "pvc", "restore", "--namespace", cfg.namespace)

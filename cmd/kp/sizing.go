@@ -8,8 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/Ixecd/kubepivot/internal/audit"
@@ -114,64 +112,4 @@ func runSizingRecommend(args []string) {
 	if sug.Confidence < 0.7 {
 		P.Info("⚠", fmt.Sprintf("Low confidence (%.2f): consider collecting more samples or checking data quality", sug.Confidence))
 	}
-}
-
-// // samplePodMetrics 封装采样逻辑 (复用 internal/sizing/dp.go 的私有函数)
-// // 注意: 实际应提取到 internal/sizing/sample.go 供 dp.go + sizing.go 共用
-// // Level1 先内联，避免跨包依赖复杂化
-// func samplePodMetrics(ctx context.Context, client metrics.MetricsClient, namespace, name string, count int, interval time.Duration) ([]*metrics.PodMetrics, error) {
-// 	var samples []*metrics.PodMetrics
-// 	for i := 0; i < count; i++ {
-// 		m, err := client.GetPodMetrics(ctx, namespace, name)
-// 		if err != nil {
-// 			if len(samples) == 0 {
-// 				return nil, fmt.Errorf("initial sample failed: %w", err)
-// 			}
-// 			// 已有样本则容忍单次失败
-// 			// P.Warn("⚠", fmt.Sprintf("sample %d/%d failed: %v", i+1, count, err))
-// 			break
-// 		}
-// 		samples = append(samples, m)
-// 		if i < count-1 {
-// 			select {
-// 			case <-time.After(interval):
-// 			case <-ctx.Done():
-// 				return samples, ctx.Err()
-// 			}
-// 		}
-// 	}
-// 	// 按时间排序
-// 	// sort.Slice(samples, func(i, j int) bool { return samples[i].Timestamp.Before(samples[j].Timestamp) })
-// 	return samples, nil
-// }
-
-// parseMemoryResource 解析 Plan.Memory string → bytes (int64)
-// 复用 metrics.Quantity 解析逻辑，避免重复造轮子
-// 支持: "512Mi", "1Gi", "256Ki", "1073741824" (bytes)
-func parseMemoryResource(s string) (int64, error) {
-	// 简化: 硬编码常见格式
-	// 实际: 复用 k8s.io/apimachinery/pkg/api/resource.ParseQuantity
-	if strings.HasSuffix(s, "Gi") {
-		val, err := strconv.ParseInt(strings.TrimSuffix(s, "Gi"), 10, 64)
-		if err != nil {
-			return 0, err
-		}
-		return val * 1024 * 1024 * 1024, nil
-	}
-	if strings.HasSuffix(s, "Mi") {
-		val, err := strconv.ParseInt(strings.TrimSuffix(s, "Mi"), 10, 64)
-		if err != nil {
-			return 0, err
-		}
-		return val * 1024 * 1024, nil
-	}
-	if strings.HasSuffix(s, "Ki") {
-		val, err := strconv.ParseInt(strings.TrimSuffix(s, "Ki"), 10, 64)
-		if err != nil {
-			return 0, err
-		}
-		return val * 1024, nil
-	}
-	// 默认按 bytes 解析
-	return strconv.ParseInt(s, 10, 64)
 }

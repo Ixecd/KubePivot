@@ -29,7 +29,7 @@ func goVersion() string {
 	return strings.TrimSpace(string(out))
 }
 
-func runSelfUpdate(args []string) {
+func runSelfUpdate() {
 	P.Info("🔍", fmt.Sprintf("当前版本: %s", kpVersion))
 
 	// 从 GitHub releases API 获取最新版本

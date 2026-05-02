@@ -81,16 +81,16 @@ func checkHelmReleaseState(cfg *deployConfig, env map[string]string, sm *state.M
 
 	switch result.Info.Status {
 	case "pending-rollback":
-		return handlePendingRollback(cfg, env, sm, releaseName)
+		return handlePendingRollback(cfg, sm, releaseName)
 	case "pending-install":
 		return handlePendingInstall(cfg, releaseName)
 	case "failed":
-		return handleFailed(cfg, env, sm, releaseName)
+		return handleFailed(cfg, sm, releaseName)
 	}
 	return nil
 }
 
-func handlePendingRollback(cfg *deployConfig, env map[string]string, sm *state.Machine, releaseName string) error {
+func handlePendingRollback(cfg *deployConfig, sm *state.Machine, releaseName string) error {
 	fmt.Println("⚠️  检测到 helm release 卡在 pending-rollback 状态")
 	fmt.Println("   这通常是 controller 和 kp deploy 并发操作导致的。")
 	fmt.Println()
@@ -140,7 +140,7 @@ func handlePendingInstall(cfg *deployConfig, releaseName string) error {
 	return nil
 }
 
-func handleFailed(cfg *deployConfig, env map[string]string, sm *state.Machine, releaseName string) error {
+func handleFailed(cfg *deployConfig, sm *state.Machine, releaseName string) error {
 	fmt.Println("⚠️  检测到 helm release 处于 failed 状态")
 	fmt.Println("   上次部署失败，可以选择回滚到上一个版本或重新部署。")
 	fmt.Println()
@@ -199,37 +199,5 @@ func deletePendingSecret(cfg *deployConfig, releaseName, status string) error {
 		return fmt.Errorf("删除 secret 失败: %w", err)
 	}
 	fmt.Printf("✓ 已删除 %s secret: %s\n", status, secretName)
-	return nil
-}
-
-// deletePendingRollbackSecret 删除 helm pending-rollback 状态的 secret
-func deletePendingRollbackSecret(cfg *deployConfig, releaseName string) error {
-	// 找到 pending-rollback 的 secret 名字
-	args := kubectlBaseArgs(cfg.kubeconfig, cfg.context, cfg.namespace)
-	args = append(args,
-		"get", "secret",
-		"-l", fmt.Sprintf("owner=helm,name=%s", releaseName),
-		"-o", `jsonpath={.items[?(@.metadata.labels.status=="pending-rollback")].metadata.name}`,
-	)
-
-	out, err := runOutput(args...)
-	if err != nil {
-		return fmt.Errorf("查询 secret 失败: %w", err)
-	}
-
-	secretName := strings.TrimSpace(string(out))
-	if secretName == "" {
-		// 没找到 secret，可能已经被清理了
-		return nil
-	}
-
-	// 删除
-	delArgs := kubectlBaseArgs(cfg.kubeconfig, cfg.context, cfg.namespace)
-	delArgs = append(delArgs, "delete", "secret", secretName)
-	if _, err := runOutput(delArgs...); err != nil {
-		return fmt.Errorf("删除 secret 失败: %w", err)
-	}
-
-	fmt.Printf("✓ 已删除 pending-rollback secret: %s\n", secretName)
 	return nil
 }

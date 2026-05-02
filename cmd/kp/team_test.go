@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -209,9 +210,9 @@ func TestE2E_AddListShowMemberAddCheckRemove(t *testing.T) {
 
 	user := &rbac.UserContext{Email: "alice@x.com"}
 	// alice 应能 deploy 到 kp-backend-prod
-	require.NoError(t, checker.Check(nil, user, "kp-backend-prod", rbac.PermDeploy))
-	// alice 没 controller-uninstall 权限
-	err = checker.Check(nil, user, "kp-backend-prod", rbac.PermControllerUninstall)
+	require.NoError(t, checker.Check(context.TODO(), user, "kp-backend-prod", rbac.PermDeploy))
+	// alice 没 controller-uninstall 权
+	err = checker.Check(context.TODO(), user, "kp-backend-prod", rbac.PermControllerUninstall)
 	require.Error(t, err)
 
 	// 6. 模拟 kp team remove backend

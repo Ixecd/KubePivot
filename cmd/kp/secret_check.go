@@ -4,11 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 )
-
-var secretKeyRefPattern = regexp.MustCompile(`secretKeyRef:\s*\n\s*name:\s*(\S+)`)
 
 // checkRequiredSecrets 扫描 deployments/ 下所有 yaml 里的 secretKeyRef，
 // 检查对应 secret 是否在 K8s 里存在，缺失时打印警告。

@@ -171,3 +171,18 @@ func runAIPlan(args []string) {
 	fmt.Println("  kp deploy            # 直接用 AI 规划部署")
 	fmt.Println("  kp deploy --dry-run  # 先预览规划再部署")
 }
+
+func printPlan(plan []planner.Plan) {
+	fmt.Println("AI 规划结果:")
+	for _, item := range plan {
+		if item.Name == "" {
+			continue
+		}
+		if item.Image == "" {
+			fmt.Printf("- %s: skip (no image)\n", item.Name)
+			continue
+		}
+		fmt.Printf("- %s: replicas=%d cpu=%s memory=%s storage=%s\n",
+			item.Name, item.Replicas, item.CPU, item.Memory, item.Storage)
+	}
+}

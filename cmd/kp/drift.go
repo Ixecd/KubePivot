@@ -30,30 +30,6 @@ var exemptedFields = []string{
 	"spec.replicas", // 可能由 HPA 管理
 }
 
-// classifyDriftField 判断漂移字段的级别
-func classifyDriftField(field string, managers []string) DriftLevel {
-	// 是否由外部 manager 管理（Istio、HPA 等）
-	for _, m := range managers {
-		if m != "kubepivot" && m != "helm" {
-			// 外部 manager 持有的字段
-			return DriftExternal
-		}
-	}
-	// 是否豁免字段
-	for _, f := range exemptedFields {
-		if strings.Contains(field, f) {
-			return DriftManaged
-		}
-	}
-	// kp 拥有所有权
-	for _, f := range kubepivotOwnedFields {
-		if strings.Contains(field, f) {
-			return DriftHard
-		}
-	}
-	return DriftExternal
-}
-
 // driftResult 单个服务的漂移检测结果
 type driftResult struct {
 	service  string

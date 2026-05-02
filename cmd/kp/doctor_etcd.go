@@ -27,7 +27,7 @@ type etcdEndpointStatus struct {
 }
 
 // checkEtcdAll 运行所有 etcd 健康检查，返回多个 checkResult
-func checkEtcdAll(root string, env map[string]string) []checkResult {
+func checkEtcdAll(env map[string]string) []checkResult {
 	var results []checkResult
 
 	// 1. etcdctl 是否安装

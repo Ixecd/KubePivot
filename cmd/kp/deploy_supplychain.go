@@ -15,10 +15,7 @@ import (
 
 // hasSupplyChainPolicy 判断是否启用供应链策略
 // 优先级: 命令行 > env > project.env > 默认(false)
-func hasSupplyChainPolicy(cfg *deployConfig, env map[string]string) bool {
-	// 1. 命令行显式启用/禁用 (预留未来 flag)
-	// if cfg.enforceSupplyChain != nil { return *cfg.enforceSupplyChain }
-
+func hasSupplyChainPolicy(env map[string]string) bool {
 	// 2. 环境变量覆盖 (CI/CD 注入)
 	if v := os.Getenv("KP_SUPPLY_CHAIN_ENFORCE"); v != "" {
 		return v == "true" || v == "1"
@@ -34,14 +31,7 @@ func hasSupplyChainPolicy(cfg *deployConfig, env map[string]string) bool {
 }
 
 // verifySupplyChainPolicy 执行部署前的供应链策略验证
-func verifySupplyChainPolicy(cfg *deployConfig, plan []planner.Plan, root string, env map[string]string) error {
-	// 1. 逃生阀: 显式跳过
-	//    注意: runDeploy 已处理 --skip-supply-chain, 这里是二次防护
-	// if cfg.skipSupplyChain {
-	//     P.Warn("⚠", "Supply chain policy check skipped (--skip-supply-chain)")
-	//     return nil
-	// }
-
+func verifySupplyChainPolicy(plan []planner.Plan, env map[string]string) error {
 	// 2. 收集待验证镜像 (去重)
 	images := make(map[string]bool)
 	for _, p := range plan {
@@ -94,16 +84,12 @@ func verifySupplyChainPolicy(cfg *deployConfig, plan []planner.Plan, root string
 	// 4. 逐个验证镜像 (串行, 简化; Level4 可升级并发)
 	ctx := context.Background()
 	for image := range images {
-		// Level4: 合并 per-resource 策略
-		// resourcePolicy := loadResourceSupplyChain(root, image)
-		// effectivePolicy := globalPolicy.Clone(); effectivePolicy.Merge(resourcePolicy)
-
 		if err := supplychain.ValidatePolicy(ctx, image, globalPolicy); err != nil {
 			return fmt.Errorf("image %q: %w", image, err)
 		}
 	}
 
 	// 5. 全部通过 (可选日志)
-	// P.Info("✓", fmt.Sprintf("Supply chain policy passed for %d images", len(images)))
+	P.Info("✓", fmt.Sprintf("Supply chain policy passed for %d images", len(images)))
 	return nil
 }

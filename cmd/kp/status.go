@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,7 +42,7 @@ func runStatus(args []string) {
 		}
 	}
 	if *allEnvs {
-		runStatusAllEnvs(args)
+		runStatusAllEnvs()
 		return
 	}
 	root, err := Root()
@@ -312,7 +313,7 @@ func helmReleaseInfo(cfg *deployConfig, releaseName string) releaseInfo {
 }
 
 // runStatusAllEnvs 跨集群统一视图
-func runStatusAllEnvs(args []string) {
+func runStatusAllEnvs() {
 	entries, err := os.ReadDir(kpEnvsDir())
 	if err != nil {
 		P.Info("⏭ ", "暂无已配置的环境，运行 kp context add 添加")
@@ -342,8 +343,7 @@ func runStatusAllEnvs(args []string) {
 	var rows []row
 
 	localState := getEnvState(projectName,
-		envOrDefault(baseEnv, "KUBE_NAMESPACE", projectName),
-		"", "", baseEnv)
+		envOrDefault(baseEnv, "KUBE_NAMESPACE", projectName), baseEnv)
 	rows = append(rows, row{"local", localState.namespace, localState.state,
 		localState.version, localState.updatedAt})
 
@@ -362,17 +362,25 @@ func runStatusAllEnvs(args []string) {
 		if ns == "" {
 			ns = envOrDefault(baseEnv, "KUBE_NAMESPACE", projectName)
 		}
-		s := getEnvState(projectName, ns, kpEnv.Kubeconfig, kpEnv.Context, envMap)
+		s := getEnvState(projectName, ns, envMap)
 		rows = append(rows, row{name, s.namespace, s.state, s.version, s.updatedAt})
 	}
 
 	// 计算各列最大宽度
 	w0, w1, w2, w3 := 8, 20, 10, 10
 	for _, r := range rows {
-		if len(r.env) > w0       { w0 = len(r.env) }
-		if len(r.namespace) > w1 { w1 = len(r.namespace) }
-		if len(r.state) > w2     { w2 = len(r.state) }
-		if len(r.version) > w3   { w3 = len(r.version) }
+		if len(r.env) > w0 {
+			w0 = len(r.env)
+		}
+		if len(r.namespace) > w1 {
+			w1 = len(r.namespace)
+		}
+		if len(r.state) > w2 {
+			w2 = len(r.state)
+		}
+		if len(r.version) > w3 {
+			w3 = len(r.version)
+		}
 	}
 
 	// header
@@ -386,7 +394,9 @@ func runStatusAllEnvs(args []string) {
 	// rows
 	for i, r := range rows {
 		envColor := colorGray
-		if i > 0 { envColor = colorCyan }
+		if i > 0 {
+			envColor = colorCyan
+		}
 		fmt.Printf("  %s  %-*s  %s  %-*s  %s\n",
 			pad(colorize(envColor, r.env), r.env, w0),
 			w1, r.namespace,
@@ -400,7 +410,9 @@ func runStatusAllEnvs(args []string) {
 // pad 为带 ANSI 码的字符串按视觉宽度补空格
 func pad(colored, raw string, width int) string {
 	p := width - len(raw)
-	if p < 0 { p = 0 }
+	if p < 0 {
+		p = 0
+	}
 	return colored + strings.Repeat(" ", p)
 }
 
@@ -411,7 +423,7 @@ type envStateResult struct {
 	updatedAt string
 }
 
-func getEnvState(project, namespace, kubeconfig, context string, env map[string]string) envStateResult {
+func getEnvState(project, namespace string, env map[string]string) envStateResult {
 	store := state.NewAutoStore(env["ETCD_ENDPOINTS"])
 	sm, err := state.New(store, project, namespace, "")
 	if err != nil {
@@ -451,8 +463,6 @@ func stateColorized(s string) string {
 
 func copyMap(m map[string]string) map[string]string {
 	out := make(map[string]string, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
+	maps.Copy(out, m)
 	return out
 }

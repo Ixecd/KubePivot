@@ -22,9 +22,9 @@ func runPreviewGen(cfg *deployConfig, plan planner.Plan, root, projectName, slot
 
 	switch trafficLayer {
 	case "istio":
-		generateIstioVirtualService(cfg, plan, root, projectName, slot, outDir)
+		generateIstioVirtualService(cfg, plan, projectName, slot, outDir)
 	case "nginx":
-		generateNginxIngressCanary(cfg, plan, root, projectName, slot, outDir)
+		generateNginxIngressCanary(cfg, plan, projectName, slot, outDir)
 	default:
 		generatePreviewReadme(plan, slot, outDir)
 	}
@@ -55,8 +55,7 @@ func detectTrafficLayer(cfg *deployConfig) string {
 }
 
 // generateIstioVirtualService 生成 Istio VirtualService Header 路由模板
-func generateIstioVirtualService(cfg *deployConfig, plan planner.Plan,
-	root, projectName, slot, outDir string) {
+func generateIstioVirtualService(cfg *deployConfig, plan planner.Plan, projectName, slot, outDir string) {
 
 	inactiveSlot := slot
 	activeSlot := "blue"
@@ -115,8 +114,7 @@ spec:
 }
 
 // generateNginxIngressCanary 生成 Nginx Ingress canary 注解模板
-func generateNginxIngressCanary(cfg *deployConfig, plan planner.Plan,
-	root, projectName, slot, outDir string) {
+func generateNginxIngressCanary(cfg *deployConfig, plan planner.Plan, projectName, slot, outDir string) {
 
 	yaml := fmt.Sprintf(`# 自动生成 by kp deploy --preview
 # ⚠️  请审查后手动 kubectl apply，kp 不会自动应用此文件
@@ -323,7 +321,7 @@ func patchTrafficWeight(cfg *deployConfig, service string, weight int, layer str
 	case "istio":
 		return patchIstioWeight(cfg, service, inactiveSlot, weight, activeSlot, activeWeight)
 	case "nginx":
-		return patchNginxWeight(cfg, service, inactiveSlot, weight)
+		return patchNginxWeight(cfg, service, weight)
 	default:
 		P.Info("💡", fmt.Sprintf("请手动更新 %s 流量权重到 %d%%（%s）", service, weight, layer))
 		return nil
@@ -348,7 +346,7 @@ func patchIstioWeight(cfg *deployConfig, service, inactiveSlot string,
 }
 
 // patchNginxWeight patch Nginx Ingress canary weight
-func patchNginxWeight(cfg *deployConfig, service, inactiveSlot string, weight int) error {
+func patchNginxWeight(cfg *deployConfig, service string, weight int) error {
 	patch := fmt.Sprintf(
 		`{"metadata":{"annotations":{`+
 			`"nginx.ingress.kubernetes.io/canary-weight":"%d"}}}`,
@@ -404,19 +402,19 @@ func sampleErrorRate(cfg *deployConfig, service string) float64 {
 		return -1
 	}
 	valStr := result[idx+2:]
-	end := strings.Index(valStr, `"`)
-	if end < 0 {
+	rateStr, _, found := strings.Cut(valStr, `"`)
+	if !found {
 		return -1
 	}
 	var rate float64
-	fmt.Sscanf(valStr[:end], "%f", &rate)
+	fmt.Sscanf(rateStr, "%f", &rate)
 	return rate
 }
 
 // parseIntList 解析逗号分隔的整数列表
 func parseIntList(s string) []int {
 	var result []int
-	for _, p := range strings.Split(s, ",") {
+	for p := range strings.SplitSeq(s, ",") {
 		p = strings.TrimSpace(p)
 		var v int
 		fmt.Sscanf(p, "%d", &v)
@@ -430,7 +428,7 @@ func parseIntList(s string) []int {
 // parseDurationList 解析逗号分隔的时间列表
 func parseDurationList(s string) []time.Duration {
 	var result []time.Duration
-	for _, p := range strings.Split(s, ",") {
+	for p := range strings.SplitSeq(s, ",") {
 		p = strings.TrimSpace(p)
 		if d, err := time.ParseDuration(p); err == nil {
 			result = append(result, d)

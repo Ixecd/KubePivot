@@ -109,7 +109,7 @@ func runSecretRotate(args []string) {
 
 	switch *strategy {
 	case "graceful":
-		runGracefulRotate(cfg, *secretName, refs, root, env)
+		runGracefulRotate(cfg, *secretName, refs)
 	default:
 		runImmediateRotate(cfg, *secretName, refs)
 	}
@@ -137,7 +137,7 @@ func runImmediateRotate(cfg pvcConfig, secretName string, refs []SecretRef) {
 }
 
 // runGracefulRotate 优雅轮转：双密码过渡期
-func runGracefulRotate(cfg pvcConfig, secretName string, refs []SecretRef, root string, env map[string]string) {
+func runGracefulRotate(cfg pvcConfig, secretName string, refs []SecretRef) {
 	P.Info("🌿", "优雅轮转模式（双密码过渡期，适用于 DB 类 Secret）")
 	fmt.Println()
 
@@ -362,24 +362,17 @@ func extractServiceFromPath(path string, content []byte) (string, string) {
 // extractKindFromYAML 从 YAML 字节中提取顶层 kind 字段
 // 不依赖 yaml.v3，用行扫描，因为只需要顶层的 kind: xxx
 func extractKindFromYAML(data []byte) string {
-	// 只扫前 30 行即可，kind 通常在文件头部
 	lines := bytes.Split(data, []byte("\n"))
-	maxLines := 30
-	if len(lines) < maxLines {
-		maxLines = len(lines)
-	}
-	for i := 0; i < maxLines; i++ {
+	for i := range min(len(lines), 30) {
 		line := strings.TrimSpace(string(lines[i]))
-		if strings.HasPrefix(line, "kind:") {
-			kind := strings.TrimSpace(strings.TrimPrefix(line, "kind:"))
-			// 去掉可能的引号
-			kind = strings.Trim(kind, `"'`)
+		if _, kind, ok := strings.Cut(line, "kind:"); ok {
+			kind = strings.Trim(kind, `"' `)
 			if kind != "" {
 				return kind
 			}
 		}
 	}
-	return "" // 没找到，走 fallback
+	return ""
 }
 
 // workloadKinds 支持 kubectl rollout restart 的资源类型

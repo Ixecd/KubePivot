@@ -334,7 +334,7 @@ func buildHelmArgs(cfg *deployConfig, release, chartPath string, env map[string]
 		"--wait",
 		"--force-conflicts",
 		"--timeout", "120s",
-		"--history-max", "10",   // ← 加这行，防 revision 堆积
+		"--history-max", "10", // ← 加这行，防 revision 堆积
 	}
 	if cfg.kubeconfig != "" {
 		args = append(args, "--kubeconfig", cfg.kubeconfig)
@@ -471,9 +471,10 @@ func checkMigrationCompatibility(cfg *deployConfig, root string, env map[string]
 		files[i].Operations = analyzeSQLFile(files[i].Path)
 		for _, op := range files[i].Operations {
 			msg := fmt.Sprintf("版本 %d | %s", files[i].Version, op.Statement)
-			if op.Risk == RiskDestructive {
+			switch op.Risk {
+			case RiskDestructive:
 				destructive = append(destructive, msg)
-			} else if op.Risk == RiskPotential {
+			case RiskPotential:
 				potential = append(potential, msg)
 			}
 		}

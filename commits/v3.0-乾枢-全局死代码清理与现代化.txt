@@ -1,0 +1,71 @@
+refactor(cmd-kp): 全局死代码清理 + Go 1.22+ 现代化
+
+cmd/kp 目录系统性清理，包含四类改动：
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. 死代码删除（~300 行）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  deploy.go:
+    - updateComponentsSizing() (0 callers, 被 updateComponentsSizingBatch 替代)
+    - resumeFromValidating() (0 callers)
+    - detectActualState() (0 callers, controller.DetectActualState 覆盖)
+  sizing.go:
+    - parseMemoryResource() (0 callers, internal/metrics 有完整实现)
+    - 注释掉的 samplePodMetrics 块
+  supplychain.go:
+    - shortDigest() (0 callers, 用 internal/supplychain.ShortDigest)
+  diff.go:
+    - formatDiffSymbol() (0 callers)
+  controller/drift.go:
+    - classifyDriftField() (0 callers)
+  preflight.go:
+    - deletePendingRollbackSecret() (0 callers)
+  secret_check.go:
+    - secretKeyRefPattern var (0 引用)
+  deploy_sizing.go:
+    - VPA 注释块 (逻辑已迁到 runSizingHook)
+    - _ = namespace / _ = plan.Name 占位符
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. 未用参数清理（~20 个函数）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  env 参数: ensureSecret, handlePendingRollback, handleFailed,
+            runMigrationSimDryRun, runSandboxRestore, runGracefulRotate,
+            healthCheckAllServices
+  cfg 参数:  hasSupplyChainPolicy, verifySupplyChainPolicy
+  root 参数: verifySupplyChainPolicy, generateIstioVirtualService,
+             generateNginxIngressCanary, runMigrationSimDryRun,
+             runSandboxRestore, runGracefulRotate
+  args 参数: runStatusAllEnvs, runDeployInternal, runSelfUpdate
+  inactiveSlot: patchNginxWeight
+  kubeconfig/context: getEnvState
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. main.go 路由修复 + 清理
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  + case "login"  → runLogin()   (login.go 存在但从未接入)
+  + case "whoami" → runWhoami()  (same)
+  - [--no-push] 帮助文本 (release.go 从未实现)
+  runInit() → init.go 独立文件
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. Go 1.22+ 现代化
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  sort.Slice → slices.Sort
+  for i := 0; i < N → for range N
+  strings.Index + TrimPrefix → strings.Cut / strings.CutPrefix
+  strings.Split → strings.SplitSeq (iterator, no alloc)
+  map[string]interface{} → map[string]any
+  for k,v := range m { out[k]=v } → maps.Copy
+  if/else → switch on op.Risk / f.MaxRisk
+  nil → context.TODO() in test
+
+bug fix:
+  writeToFile() TODO stub → os.WriteFile (SBOM 文件输出修复)
+  kubectl -o json → --output json (kubectl v1.33 兼容)
+
+变更范围: cmd/kp/ 下 ~30 个文件, internal/metrics/kubectl.go + _test.go

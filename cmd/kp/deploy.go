@@ -16,9 +16,7 @@ import (
 	"github.com/Ixecd/kubepivot/internal/executor"
 	"github.com/Ixecd/kubepivot/internal/planner"
 	"github.com/Ixecd/kubepivot/internal/rbac"
-	"github.com/Ixecd/kubepivot/internal/sizing"
 	"github.com/Ixecd/kubepivot/internal/state"
-	"gopkg.in/yaml.v3"
 )
 
 // deployConfig 部署参数
@@ -125,7 +123,7 @@ func runDeploy(args []string) {
 
 	// Secret 检测：不存在则自动创建 dev Secret
 	if !cfg.dryRun {
-		if err := ensureSecret(cfg, env, projectName); err != nil {
+		if err := ensureSecret(cfg, projectName); err != nil {
 			P.Info("⚠️ ", fmt.Sprintf("Secret 检测失败: %v", err))
 		}
 	} else {
@@ -398,8 +396,8 @@ func executeDeploy(sm *state.Machine, cfg *deployConfig, env map[string]string, 
 	// 1. 收集待验证镜像 + 策略 (简化: 先用全局配置，Level4 支持 per-resource)
 	//    实际项目: 遍历 plan 提取 image + 合并 resource.SupplyChain 配置
 	// -----------------------------------------------------------------
-	if !cfg.skipSupplyChain && hasSupplyChainPolicy(cfg, env) {
-		if err := verifySupplyChainPolicy(cfg, plan, root, env); err != nil {
+	if !cfg.skipSupplyChain && hasSupplyChainPolicy(env) {
+		if err := verifySupplyChainPolicy(plan, env); err != nil {
 			P.Fail("✗ Supply chain policy check failed")
 			fmt.Fprintf(os.Stderr, "  Details: %v\n", err)
 			P.Info("💡", "Use --skip-supply-chain to bypass (emergency only)")
@@ -580,48 +578,6 @@ func handleDeployError(sm *state.Machine, cfg *deployConfig, env map[string]stri
 	return fmt.Errorf("部署失败: %w", err)
 }
 
-// resumeFromValidating 从 VALIDATING 阶段恢复
-func resumeFromValidating(sm *state.Machine, cfg *deployConfig, env map[string]string, plan []planner.Plan, root string) {
-	if err := sm.ResumeFromValidating("resume: 重新验证"); err != nil {
-		fmt.Fprintln(os.Stderr, "ResumeFromValidating 失败:", err)
-		return
-	}
-
-	for _, item := range plan {
-		if item.Image == "" {
-			continue
-		}
-		if err := state.ValidateDeployment(
-			cfg.kubeconfig, cfg.context, cfg.namespace,
-			item.Name, item.Port, 120*time.Second,
-		); err != nil {
-			fmt.Fprintln(os.Stderr, "验证失败:", err)
-			sm.Transition(state.StateRollingBack, "resume 验证失败")
-			release := envOrDefault(env, "PROJECT_NAME", "")
-			helmRollback(cfg.kubeconfig, cfg.context, cfg.namespace, release)
-			sm.Transition(state.StateRunning, "回滚完成")
-			return
-		}
-	}
-	sm.Transition(state.StateRunning, "resume 验证通过")
-	P.Info("✅", "恢复成功，状态: RUNNING")
-}
-
-// detectActualState 通过 kubectl 检查 plan 里的服务是否存在
-func detectActualState(cfg *deployConfig, plan []planner.Plan) state.State {
-	for _, item := range plan {
-		if item.Image == "" {
-			continue
-		}
-		args := kubectlBaseArgs(cfg.kubeconfig, cfg.context, cfg.namespace)
-		args = append(args, "get", "deployment", item.Name)
-		if _, err := runOutput(args...); err == nil {
-			return state.StateRunning
-		}
-	}
-	return state.StateIdle
-}
-
 // kubectlBaseArgs 构建 kubectl 基础参数
 func kubectlBaseArgs(kubeconfig, context, namespace string) []string {
 	var args []string
@@ -709,7 +665,7 @@ func envOrDefault(env map[string]string, key, fallback string) string {
 }
 
 // ensureSecret 检测 Secret 是否存在，不存在则自动创建 dev Secret
-func ensureSecret(cfg *deployConfig, env map[string]string, projectName string) error {
+func ensureSecret(cfg *deployConfig, projectName string) error {
 	secretName := projectName + "-secret"
 	args := kubectlBaseArgs(cfg.kubeconfig, cfg.context, cfg.namespace)
 	args = append(args, "get", "secret", secretName,
@@ -836,53 +792,6 @@ func autoSyncResourcesIfEnrolled(cfg *deployConfig) error {
 	}
 
 	P.Info("🔄", fmt.Sprintf("resources.yaml 已同步到 controller（sha256=%s...）", hash[:8]))
-	return nil
-}
-
-// updateComponentsSizing 原地修改 components.yaml 的 sizing 建议
-// Level1 实现: 解析 → 修改内存结构 → yaml.Marshal → os.WriteFile
-// 注意: 普通 Marshal 会丢失原始 YAML 注释，Level2 可升级 yaml.v3 Node API
-func updateComponentsSizing(path, podName string, sug *sizing.Suggestion) error {
-	// 1. 读取文件
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("read components: %w", err)
-	}
-
-	// 2. 解析 YAML (复用 planner 既有模式)
-	var raw struct {
-		Components []planner.Component `yaml:"components"`
-	}
-	if err := yaml.Unmarshal(data, &raw); err != nil {
-		return fmt.Errorf("parse components: %w", err)
-	}
-
-	// 3. 修改目标组件的 CPU / Memory
-	//    注意: Suggestion 返回的是 int64 (millicores/bytes)，需转回 string 格式
-	found := false
-	for i := range raw.Components {
-		if raw.Components[i].Name == podName {
-			// 转回 K8s 资源格式: "500m" / "512Mi"
-			raw.Components[i].CPU = fmt.Sprintf("%dm", sug.RecommendedCPU)
-			raw.Components[i].Memory = fmt.Sprintf("%dMi", sug.RecommendedMem>>20) // bytes → MiB
-			found = true
-			break
-		}
-	}
-	if !found {
-		return fmt.Errorf("component %q not found in components.yaml", podName)
-	}
-
-	// 4. 序列化 + 写回 (简化: 直接覆盖，Level2 升级原子写入)
-	//    注意: yaml.v3 Marshal 默认不保留注释，但结构正确性优先
-	newData, err := yaml.Marshal(&raw)
-	if err != nil {
-		return fmt.Errorf("marshal components: %w", err)
-	}
-	if err := os.WriteFile(path, newData, 0644); err != nil {
-		return fmt.Errorf("write components: %w", err)
-	}
-
 	return nil
 }
 

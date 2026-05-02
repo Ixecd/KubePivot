@@ -169,14 +169,6 @@ Exit codes:
   2  Tool error (cosign not found, network timeout, etc.)`)
 }
 
-// shortDigest 截断 sha256:xxx 为前 12 位，方便终端阅读
-func shortDigest(digest string) string {
-	if strings.HasPrefix(digest, "sha256:") && len(digest) > 19 {
-		return digest[7:19]
-	}
-	return digest
-}
-
 // runSupplyChainSbom 实现 kp supply-chain sbom <IMAGE> [--format cyclonedx|spdx|table] [--output PATH]
 func runSupplyChainSbom(args []string) {
 	// 1. 参数解析
@@ -362,7 +354,7 @@ func writeToFile(path, content string) error {
 
 	// 更健壮实现（推荐）：
 	// 参考 internal/scaffold/scaffold.go 的 writeIfChanged 模式
-	return fmt.Errorf("TODO: implement writeToFile with project file utils")
+	return os.WriteFile(path, []byte(content), 0644)
 }
 
 func printSupplyChainSbomHelp() {

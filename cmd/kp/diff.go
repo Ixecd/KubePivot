@@ -223,19 +223,6 @@ func getHelmHistory(cfg *deployConfig, releaseName string) ([]struct {
 	return history, nil
 }
 
-// formatDiffLine 格式化差异输出
-func formatDiffSymbol(symbol string) string {
-	switch symbol {
-	case "+":
-		return "  \033[32m+\033[0m"
-	case "-":
-		return "  \033[31m-\033[0m"
-	case "~":
-		return "  \033[33m~\033[0m"
-	}
-	return "  " + symbol
-}
-
 // printMigrateSuggestions 分析待执行迁移并给出升级建议
 func printMigrateSuggestions(root string, env map[string]string) {
 	fmt.Printf("── 迁移建议 %s\n\n", strings.Repeat("─", 50))
@@ -285,9 +272,10 @@ func printMigrateSuggestions(root string, env map[string]string) {
 			}
 		}
 		riskStr := colorize(colorGreen, "✅ 安全")
-		if f.MaxRisk == RiskPotential {
+		switch f.MaxRisk {
+		case RiskPotential:
 			riskStr = colorize(colorYellow, "⚠️  潜在风险")
-		} else if f.MaxRisk == RiskDestructive {
+		case RiskDestructive:
 			riskStr = colorize(colorRed, "❌ 破坏性")
 			hasDestructive = true
 		}
@@ -394,7 +382,7 @@ func runEnvDiff(baseCfg *deployConfig, root string, baseEnv map[string]string,
 }
 
 // getHelmValues 获取指定环境最新 revision 的 values
-func getHelmValues(cfg *deployConfig, release string) (map[string]interface{}, error) {
+func getHelmValues(cfg *deployConfig, release string) (map[string]any, error) {
 	args := []string{"helm", "get", "values", release,
 		"--namespace", cfg.namespace,
 		"--output", "yaml",
@@ -409,10 +397,10 @@ func getHelmValues(cfg *deployConfig, release string) (map[string]interface{}, e
 	if err != nil {
 		return nil, err
 	}
-	var vals map[string]interface{}
+	var vals map[string]any
 	yaml.Unmarshal(out, &vals)
 	if vals == nil {
-		vals = make(map[string]interface{})
+		vals = make(map[string]any)
 	}
 	return vals, nil
 }

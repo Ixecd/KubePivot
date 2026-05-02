@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"time"
 )
 
@@ -11,7 +11,7 @@ func checkApiserverLatency(kubeconfig, context string) checkResult {
 	const samples = 10
 	var latencies []time.Duration
 
-	for i := 0; i < samples; i++ {
+	for range samples {
 		start := time.Now()
 		args := kubectlBaseArgs(kubeconfig, context, "")
 		args = append(args, "get", "nodes", "--request-timeout=5s", "-o", "name")
@@ -19,13 +19,11 @@ func checkApiserverLatency(kubeconfig, context string) checkResult {
 		latencies = append(latencies, time.Since(start))
 	}
 
-	sort.Slice(latencies, func(i, j int) bool {
-		return latencies[i] < latencies[j]
-	})
+	slices.Sort(latencies)
 
 	p50 := latencies[samples/2]
-	// p99idx := int(float64(samples-1) * 0.99)
 	p99 := latencies[samples-1]
+
 	if p99 == 0 {
 		p99 = latencies[samples-1]
 	}
