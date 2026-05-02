@@ -1,0 +1,10 @@
+docs: README 重生 — v2.3→v3.0 全景更新
+
+从 v2.3 时代的旧 README 重写为当前 v3.0 面貌：
+
+  - 版本 v2.3→v3.0, Go 1.21→1.25, 26→34 命令
+  - 新增: Event Stream benchmark, 乾枢调度, GPU 路线图, IAM, 12 语言脚手架
+  - 删: Cloud 项目, A2 Controller 旧架构, 过时引用
+  - 统计表: 41K 代码, 780 测试, 6 依赖, 30MB
+  - 10 份设计文档索引
+  - 谦虚: 不吹 0 fix commit 😌
