@@ -19,17 +19,6 @@ const (
 	DriftExternal                   // ℹ️ 外部注入，完全忽略
 )
 
-// kp 声明所有权的字段前缀
-var kubepivotOwnedFields = []string{
-	"spec.template.spec.containers",
-	"spec.replicas",
-}
-
-// 豁免字段（不强制同步，但透明展示）
-var exemptedFields = []string{
-	"spec.replicas", // 可能由 HPA 管理
-}
-
 // driftResult 单个服务的漂移检测结果
 type driftResult struct {
 	service  string

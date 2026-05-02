@@ -110,7 +110,7 @@ func runMigrateRun(args []string) {
 		if err := executeMigrationFile(db, f, tool); err != nil {
 			fmt.Println()
 			printMigrateFailure(f, err)
-			restoreAfterMigrateFail(migrCfg, root, hadSnapshot)
+			restoreAfterMigrateFail(migrCfg, hadSnapshot)
 			os.Exit(1)
 		}
 	}

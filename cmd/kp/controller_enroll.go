@@ -31,7 +31,6 @@ func runControllerEnrollReal(args []string) {
 	namespace := flags.String("namespace", "", "项目 namespace（默认读 configs/project.env 的 KUBE_NAMESPACE）")
 	resourcesFile := flags.String("resources", "", "resources.yaml 路径（默认 configs/resources.yaml）")
 	kubeconfig := flags.String("kubeconfig", "", "kubeconfig 路径")
-	context_ := flags.String("context", "", "kube context")
 	if err := flags.Parse(args); err != nil {
 		os.Exit(1)
 	}
@@ -79,14 +78,14 @@ func runControllerEnrollReal(args []string) {
 	kubeconfigExp := expandHome(*kubeconfig)
 
 	// 4. 确保 namespace 存在（自动创建）
-	if err := ensureNamespace(ctx, kubeconfigExp, *context_, ns); err != nil {
+	if err := ensureNamespace(ctx, kubeconfigExp, ns); err != nil {
 		P.Fail(fmt.Sprintf("确保 namespace 存在失败: %v", err))
 		os.Exit(1)
 	}
 
 	// 5. 打 label
 	P.Start("🏷 ", fmt.Sprintf("标记 namespace %s 为 managed", ns))
-	if err := labelNamespace(ctx, kubeconfigExp, *context_, ns, "kubepivot.io/managed=true"); err != nil {
+	if err := labelNamespace(ctx, kubeconfigExp, ns, "kubepivot.io/managed=true"); err != nil {
 		P.Fail(fmt.Sprintf("label namespace 失败: %v", err))
 		os.Exit(1)
 	}
@@ -95,7 +94,7 @@ func runControllerEnrollReal(args []string) {
 	// 6. 创建/更新 kubepivot-resources ConfigMap
 	P.Start("📋", "同步 resources.yaml 到 ConfigMap")
 	hash := sha256Hex(resourcesData)
-	if err := syncResourcesConfigMap(ctx, kubeconfigExp, *context_, ns, string(resourcesData), hash); err != nil {
+	if err := syncResourcesConfigMap(ctx, kubeconfigExp, ns, string(resourcesData), hash); err != nil {
 		P.Fail(fmt.Sprintf("同步 ConfigMap 失败: %v", err))
 		os.Exit(1)
 	}
@@ -118,7 +117,6 @@ func runControllerUnenrollReal(args []string) {
 	flags := flag.NewFlagSet("controller unenroll", flag.ExitOnError)
 	namespace := flags.String("namespace", "", "项目 namespace（默认读 configs/project.env 的 KUBE_NAMESPACE）")
 	kubeconfig := flags.String("kubeconfig", "", "kubeconfig 路径")
-	context_ := flags.String("context", "", "kube context")
 	if err := flags.Parse(args); err != nil {
 		os.Exit(1)
 	}
@@ -161,7 +159,7 @@ func runControllerUnenrollReal(args []string) {
 
 	// 2. 移除 namespace label
 	P.Start("🏷 ", "移除 namespace managed label")
-	if err := labelNamespace(ctx, kubeconfigExp, *context_, ns, "kubepivot.io/managed-"); err != nil {
+	if err := labelNamespace(ctx, kubeconfigExp, ns, "kubepivot.io/managed-"); err != nil {
 		P.Fail(fmt.Sprintf("移除 label 失败: %v", err))
 		os.Exit(1)
 	}
@@ -239,7 +237,7 @@ func runControllerProjectsReal(args []string) {
 // ── 辅助函数 ──────────────────────────────────────────────────────────────────
 
 // ensureNamespace 幂等创建 namespace
-func ensureNamespace(ctx context.Context, kubeconfig, kubeContext, ns string) error {
+func ensureNamespace(ctx context.Context, kubeconfig, ns string) error {
 	exec := executor.GetExecutor()
 	// kubectl create namespace <ns> --dry-run=client -o yaml | kubectl apply -f -
 	createArgs := []string{"create", "namespace", ns,
@@ -259,7 +257,7 @@ func ensureNamespace(ctx context.Context, kubeconfig, kubeContext, ns string) er
 // labelNamespace 给 namespace 打（或移除）label
 // label="kubepivot.io/managed=true" → 打
 // label="kubepivot.io/managed-"    → 移除
-func labelNamespace(ctx context.Context, kubeconfig, kubeContext, ns, label string) error {
+func labelNamespace(ctx context.Context, kubeconfig, ns, label string) error {
 	exec := executor.GetExecutor()
 	args := []string{"label", "namespace", ns, label, "--overwrite"}
 	out, err := exec.Kubectl(ctx, kubeconfig, args...)
@@ -283,7 +281,7 @@ func labelNamespace(ctx context.Context, kubeconfig, kubeContext, ns, label stri
 //	data:
 //	  resources.yaml: |
 //	    resources: [...]
-func syncResourcesConfigMap(ctx context.Context, kubeconfig, kubeContext, ns, content, hash string) error {
+func syncResourcesConfigMap(ctx context.Context, kubeconfig, ns, content, hash string) error {
 	exec := executor.GetExecutor()
 
 	// 1. 用 kubectl create --dry-run 生成基础 CM

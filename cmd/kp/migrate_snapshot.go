@@ -40,7 +40,7 @@ func tryPVCBackupBeforeMigrate(cfg *deployConfig) bool {
 // restoreAfterMigrateFail 迁移失败后双层回滚：
 // 1. kp pvc restore（有快照才执行）
 // 2. kp rollback（helm rollback）
-func restoreAfterMigrateFail(cfg *deployConfig, root string, hadSnapshot bool) {
+func restoreAfterMigrateFail(cfg *deployConfig, hadSnapshot bool) {
 	P.Info("⏪", "迁移失败，触发双层回滚")
 
 	// Layer 1：PVC 恢复
@@ -75,7 +75,7 @@ func restoreAfterMigrateFail(cfg *deployConfig, root string, hadSnapshot bool) {
 }
 
 // runMigrateFixDirty 交互式修复 dirty 状态
-func runMigrateFixDirty(args []string) {
+func runMigrateFixDirty() {
 	root, err := Root()
 	if err != nil {
 		fmt.Println("找不到项目根目录:", err)

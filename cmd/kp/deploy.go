@@ -786,7 +786,7 @@ func autoSyncResourcesIfEnrolled(cfg *deployConfig) error {
 
 	// 3. 同步到 ConfigMap
 	hash := sha256Hex(data)
-	if err := syncResourcesConfigMap(ctx, cfg.kubeconfig, cfg.context,
+	if err := syncResourcesConfigMap(ctx, cfg.kubeconfig,
 		cfg.namespace, string(data), hash); err != nil {
 		return fmt.Errorf("sync ConfigMap: %w", err)
 	}

@@ -308,7 +308,7 @@ func deployService(cfg *deployConfig, env map[string]string, plan planner.Plan, 
 
 		// HPA 集成：声明了 min/max replicas 且 target_cpu > 0 时自动创建
 		if plan.TargetCPU > 0 && plan.MaxReplicas > 0 {
-			if err := applyHPA(cfg, plan, projectName, cfg.namespace); err != nil {
+			if err := applyHPA(cfg, plan, cfg.namespace); err != nil {
 				P.Info("⚠️ ", fmt.Sprintf("HPA 创建失败（不阻断）: %v", err))
 			} else {
 				P.Done(fmt.Sprintf("%s HPA 已创建（min=%d max=%d cpu=%d%%）",

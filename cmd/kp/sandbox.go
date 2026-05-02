@@ -158,7 +158,7 @@ func runSandboxStart(args []string) {
 	// Step 2: SNAPSHOTTING
 	P.Start("📸", "触发 PVC 快照")
 	sm.Transition(state.StateSnapshotting, "sandbox: 开始快照")
-	snapshotOK := trySandboxSnapshot(cfg, root, env)
+	snapshotOK := trySandboxSnapshot(cfg)
 	if !snapshotOK {
 		P.Info("⚠️ ", "PVC 快照跳过（无 CSI 或快照失败），继续执行")
 	} else {
@@ -182,7 +182,7 @@ func runSandboxStart(args []string) {
 	// Step 4: COMMITTING
 	P.Start("🚀", "执行真实迁移 + 部署（COMMITTING，此阶段禁止 force-unlock）")
 	sm.Transition(state.StateCommitting, "sandbox: 开始 commit")
-	commitOK := runSandboxCommit(cfg, root, env, version)
+	commitOK := runSandboxCommit(cfg, root, env)
 	if !commitOK {
 		P.Fail("Commit 失败，触发 RESTORING")
 		sm.Transition(state.StateRestoring, "sandbox: commit 失败")
@@ -329,7 +329,7 @@ func runSandboxUnlock(args []string) {
 
 // ── 内部实现 ──────────────────────────────────────────────────────────────────
 
-func trySandboxSnapshot(cfg *deployConfig, root string, env map[string]string) bool {
+func trySandboxSnapshot(cfg *deployConfig) bool {
 	// 检查是否有 CSI VolumeSnapshot 能力
 	args := kubectlBaseArgs(cfg.kubeconfig, cfg.context, "")
 	args = append(args, "get", "crd", "volumesnapshots.snapshot.storage.k8s.io",
@@ -493,7 +493,7 @@ func runMigrationSimDryRun() bool {
 	return err == nil
 }
 
-func runSandboxCommit(cfg *deployConfig, root string, env map[string]string, version string) bool {
+func runSandboxCommit(cfg *deployConfig, root string, env map[string]string) bool {
 	// 真实迁移
 	dbURL := resolveDatabaseURL(&migrateConfig{}, root, env)
 	if dbURL != "" {

@@ -8,7 +8,7 @@ import (
 )
 
 // applyHPA 为服务创建或更新 HPA
-func applyHPA(cfg *deployConfig, plan planner.Plan, projectName, namespace string) error {
+func applyHPA(cfg *deployConfig, plan planner.Plan, namespace string) error {
 	minReplicas := plan.MinReplicas
 	if minReplicas <= 0 {
 		minReplicas = 1

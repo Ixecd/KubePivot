@@ -184,7 +184,7 @@ func runUpgrade(args []string) {
 						if err := executeMigrationFile(db2, f, tool); err != nil {
 							fmt.Println()
 							printMigrateFailure(f, err)
-							restoreAfterMigrateFail(upgradeCfg, root, hadSnapshot)
+							restoreAfterMigrateFail(upgradeCfg, hadSnapshot)
 							os.Exit(1)
 						}
 					}
@@ -208,7 +208,7 @@ func runUpgrade(args []string) {
 	if err := runDeployInternal(root, env, *service); err != nil {
 		fmt.Println()
 		P.Fail(fmt.Sprintf("服务部署失败: %v", err))
-		restoreAfterMigrateFail(upgradeCfg, root, hadSnapshot)
+		restoreAfterMigrateFail(upgradeCfg, hadSnapshot)
 		os.Exit(1)
 	}
 	fmt.Println()

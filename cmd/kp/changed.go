@@ -74,16 +74,6 @@ func printChangedSummary(all []planner.Plan, changed map[string]bool) {
 	}
 }
 
-// gitRoot 获取 git 仓库根目录
-func gitRoot(path string) string {
-	ctx := context.Background()
-	out, err := executor.GetExecutor().Generic(ctx, "git", "", "-C", path, "rev-parse", "--show-toplevel")
-	if err != nil {
-		return path
-	}
-	return strings.TrimSpace(string(out))
-}
-
 // hasGitHistory 检查是否有足够的 git 历史（至少 2 个 commit）
 func hasGitHistory(root string) bool {
 	ctx := context.Background()

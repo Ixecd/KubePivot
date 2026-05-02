@@ -29,7 +29,7 @@ func runMigrate(args []string) {
 	case "plan":
 		runMigratePlan(args[1:])
 	case "fix-dirty":
-		runMigrateFixDirty(args[1:])
+		runMigrateFixDirty()
 	case "run":
 		runMigrateRun(args[1:])
 	default:
