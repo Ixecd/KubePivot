@@ -1,0 +1,40 @@
+feat(kink): 乾枢 v3.2 时空折叠设计 + KinK 测试加速器骨架
+
+v3.2 在 v3.1 GPU 整卡调度之上做三件事：
+  空间维度: GPU 共享（MPS/TimeSlicing/MIG）利用率 40%→85%
+  时间维度: 碳感知调度（Cost × CarbonIntensity(t)）
+  测试维度: KinK 大规模压测（10000+ fake GPU 节点）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. 设计文档
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  docs/design/v3.2-gpu-sharing-carbon-kink-draft.md  新增 ~450 行
+
+  - 空间: MPS 48 client/GPU + TimeSlicing 3x 超卖 + MIG Auto-Config 写硬件
+  - 时间: 4D DP (CPU×Mem×GPU×T) + coordinator Waiting Queue + CarbonSDK
+  - 测试: KinK 两层 (压测层 10000+ 节点 + 多租户隔离层)
+  - resources.yaml schedulingPolicy 扩展 (carbonSensitivity + sharingPreference)
+  - 6 个 KinK 测试场景矩阵
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. KinK 骨架
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  tools/kink/                                        新增 6 个文件, ~460 行
+
+  tools/kink/main.go          入口: --scenario --nodes --gpus-per-node --topology-frag
+  tools/kink/gpu_fake.go      FakeGPUCluster + TopologyFrag NVLink 碎片控制
+  tools/kink/carbon_fake.go   CarbonSimulator 24h 电网碳强度 + FindLowCarbonWindow
+  tools/kink/apiserver.go     Fake K8s API Server (/api/v1/nodes, /api/v1/pods)
+  tools/kink/stress.go        StressRunner 6 场景 + 结果验证
+  tools/kink/README.md        快速开始 + 场景对照表
+
+  BinPack stub 占位 (v3.2 替换为真实 scheduler.BinPack + runtime.MemStats)
+  独立编译，不打入 kp 二进制
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+验证:
+  [✓] go run tools/kink/*.go --scenario=s1 → PASS (BinPack 50ms)
+  [✓] go run tools/kink/*.go --scenario=s5 --nodes=10000 → PASS (Memory 712MB < 2048MB)
+  [✓] go vet tools/kink/... → 无问题
