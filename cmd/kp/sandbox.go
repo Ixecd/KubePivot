@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
+	"crypto/rand"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,12 +13,11 @@ import (
 	"time"
 
 	"github.com/Ixecd/kubepivot/internal/audit"
-	"github.com/Ixecd/kubepivot/internal/rbac"
 	"github.com/Ixecd/kubepivot/internal/controller"
 	"github.com/Ixecd/kubepivot/internal/executor"
+	"github.com/Ixecd/kubepivot/internal/rbac"
 	"github.com/Ixecd/kubepivot/internal/route"
 	"github.com/Ixecd/kubepivot/internal/state"
-	"github.com/google/uuid"
 )
 
 // SandboxSession 沙盒会话
@@ -93,7 +94,9 @@ func runSandboxStart(args []string) {
 		os.Exit(1)
 	}
 
-	sandboxID := uuid.New().String()[:8]
+	b := make([]byte, 4)
+	rand.Read(b)
+	sandboxID := hex.EncodeToString(b)
 	session := &SandboxSession{
 		ID:        sandboxID,
 		Project:   projectName,

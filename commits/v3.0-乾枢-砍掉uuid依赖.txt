@@ -1,0 +1,18 @@
+refactor(sandbox): 移除 google/uuid 依赖 — crypto/rand + hex 替代
+
+google/uuid 仅用于 sandbox ID 生成（uuid.New().String()[:8]），
+150KB 的库只为 4 字节随机数。用标准库 crypto/rand + encoding/hex 替代。
+
+变更:
+  cmd/kp/sandbox.go    -1 import (google/uuid) +2 import (crypto/rand, encoding/hex)
+                         sandboxID 从 uuid.New().String()[:8] → rand.Read + hex
+
+依赖精简:
+  - github.com/google/uuid (移除)
+  直接依赖: 7 → 6
+  间接依赖: 26 个 (来自 etcd/gRPC 18 + prometheus 6 + testify 2)
+
+验证:
+  [✓] make dev → 全 PASS
+  [✓] go mod tidy → 无新增
+  [✓] sandbox ID 行为不变（8 位 hex，碰撞概率 ~1/2³²）
