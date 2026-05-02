@@ -1,0 +1,11 @@
+docs(cmd): CLI 全命令逐批验证清单 — 7 批 34 命令
+
+按项目生命周期排列：init → version → deploy → sandbox → secret → ...
+每个命令有具体 bash 用例和验收标准。
+
+变更:
+  docs/cmd/TESTING-ORDER.md   新增 ~280 行
+
+验证:
+  ✅ kp init
+  ✅ kp version → v3.0.0, go1.25.7
