@@ -1,0 +1,38 @@
+feat(scaffold): 12-language init system with embed.FS templates
+
+kp init --lang <lang> now supports 12 languages with auto-generated
+Dockerfiles, build files, and business code skeletons.
+
+Architecture: Shell + Core (from design doc)
+- Phase 1 (Core): shared deployment layer (Helm, scripts, resources.yaml)
+- Phase 2 (Shell): language switch with embed.FS template emission
+- Phase 3: success message with controller enrollment guide
+
+12 languages:
+  go       - full internal skeleton + go.mod (hardcoded, mature)
+  python   - FastAPI + uvicorn + pyproject.toml
+  java     - Spring Boot + Maven + pom.xml
+  rust     - Actix-web + Cargo.toml
+  cpp      - Drogon + CMake
+  cs       - ASP.NET + .csproj
+  zig      - std.http + build.zig
+  kotlin   - Ktor + Gradle Kotlin DSL
+  ts       - Express + package.json
+  php      - Nginx + Caddy + composer.json
+  swift    - Vapor + Package.swift
+  lua      - OpenResty + nginx.conf
+
+Details:
+- 46 template files across 11 languages (Go uses hardcoded generation)
+- templates/<lang>/ flat layout (no templates/app/ indirection)
+- embed.FS per language: //go:embed all:templates/<lang>
+- walkEmbedDir: recursive embed.FS walk with {{name}}/{{.Port}} replacement
+- emitAppFromFS: single call site pattern, all 11 non-Go languages unified
+- Python migrated from standalone emitPythonApp to emitAppFromFS
+- Deleted: emitPythonApp, copyPythonDir (redundant, absorbed by walkEmbedDir)
+- New flags: --lang (default go), --no-app (skip business skeleton)
+- flags.go updated: FlagLang, FlagNoApp constants
+
+Verification: tools/test_multi_lang.sh — 12/12 pass
+- kp init --name test-<lang> --lang <lang> (directory + build files)
+- kp deploy --dry-run (Helm chart validation)

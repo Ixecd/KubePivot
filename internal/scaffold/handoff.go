@@ -45,7 +45,7 @@ func renderHandoff(name, module string, withFrontend bool) string {
 	b.WriteString("**定位**：<!-- 一句话说清楚这个项目是什么、解决什么问题 -->\n\n")
 
 	b.WriteString("**命令全览**：\n\n")
-	b.WriteString(buildCommands(name, withFrontend))
+	b.WriteString(buildCommands(name))
 	b.WriteString("\n\n")
 
 	b.WriteString("**目录结构**：\n\n")
@@ -134,7 +134,7 @@ func buildDirTree(name string, withFrontend bool) string {
 	return b.String()
 }
 
-func buildCommands(name string, withFrontend bool) string {
+func buildCommands(name string) string {
 	var b strings.Builder
 	b.WriteString("```\n")
 	b.WriteString("kp init       --name " + name + " --module <module> [--with-frontend]\n")

@@ -140,6 +140,8 @@ func runInit(args []string) {
 	force := flags.Bool("force", false, "allow non-empty output directory")
 	withFrontend := flags.Bool("with-frontend", false, "generate React + Vite + Tailwind frontend skeleton")
 	dryRun := flags.Bool("dry-run", false, "print what would be generated, do not execute")
+	lang := flags.String("lang", "go", "application language: go | python | java | rust | cpp | cs | zig | kotlin | ts | php | swift | lua")
+	noApp := flags.Bool("no-app", false, "skip application skeleton, generate deployment layer only")
 
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "解析参数失败:", err)
@@ -167,6 +169,8 @@ func runInit(args []string) {
 		Stdout:       os.Stdout,
 		WithFrontend: *withFrontend,
 		DryRun:       *dryRun,
+		Lang:         *lang,
+		NoApp:        *noApp,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, "初始化失败:", err)
 		os.Exit(1)

@@ -339,7 +339,7 @@ func Init() {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
-func writeTestSkeleton(outputDir, name, module string) error {
+func writeTestSkeleton(outputDir, name string) error {
 	camel := toCamel(name)
 
 	files := map[string]string{
@@ -636,7 +636,7 @@ echo ""
 	return os.WriteFile(path, []byte(content), 0o755)
 }
 
-func writeGoMod(templatePath, outputPath, module string) error {
+func writeGoMod(outputPath, module string) error {
 	// 直接硬编码 go.mod 模板，不依赖外部文件
 	content := fmt.Sprintf("module %s\n\ngo 1.25\n", module)
 	return os.WriteFile(outputPath, []byte(content), 0o644)

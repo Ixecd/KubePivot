@@ -10,6 +10,39 @@ import (
 //go:embed all:embedded_templates
 var embeddedTemplates embed.FS
 
+//go:embed all:templates/python
+var pythonAppTemplates embed.FS
+
+//go:embed all:templates/java
+var javaAppTemplates embed.FS
+
+//go:embed all:templates/rust
+var rustAppTemplates embed.FS
+
+//go:embed all:templates/cpp
+var cppAppTemplates embed.FS
+
+//go:embed all:templates/cs
+var csAppTemplates embed.FS
+
+//go:embed all:templates/zig
+var zigAppTemplates embed.FS
+
+//go:embed all:templates/kotlin
+var kotlinAppTemplates embed.FS
+
+//go:embed all:templates/ts
+var tsAppTemplates embed.FS
+
+//go:embed all:templates/php
+var phpAppTemplates embed.FS
+
+//go:embed all:templates/swift
+var swiftAppTemplates embed.FS
+
+//go:embed all:templates/lua
+var luaAppTemplates embed.FS
+
 // extractEmbeddedTemplates 把内嵌模板解压到临时目录，返回路径
 func ExtractEmbeddedTemplates() (string, error) {
 	tmpDir, err := os.MkdirTemp("", "kp-templates-*")
