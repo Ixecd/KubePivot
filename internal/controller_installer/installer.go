@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Ixecd/kubepivot/internal/etcdmanager"
 	"github.com/Ixecd/kubepivot/internal/executor"
 )
 
@@ -54,7 +55,22 @@ func (i *Installer) Install(ctx context.Context) error {
 	rendered := i.render(manifests)
 
 	// 3. kubectl apply（合并成一个 stream，一次 apply）
-	return i.apply(ctx, rendered)
+	if err := i.apply(ctx, rendered); err != nil {
+		return err
+	}
+
+	// 4. 生成 etcd TLS CA 证书 → 写入 Secret（方案 B — Controller 负责证书分发）
+	if err := i.ensureCertsSecret(ctx); err != nil {
+		return fmt.Errorf("生成 etcd CA 证书失败: %w", err)
+	}
+
+	return nil
+}
+
+// ensureCertsSecret Controller 安装时预生成 etcd CA 证书并写入 Secret。
+// 所有 etcd Pod 启动时只读此 Secret，不需要写权限。
+func (i *Installer) ensureCertsSecret(ctx context.Context) error {
+	return etcdmanager.CreateCertsSecret(ctx, etcdmanager.DefaultCertConfig(), i.cfg.Namespace, false)
 }
 
 // Uninstall 卸载全局 controller
@@ -86,6 +102,9 @@ func (i *Installer) Uninstall(ctx context.Context) error {
 		return fmt.Errorf("删除 namespace %s 失败: %w", i.cfg.Namespace, err)
 	}
 
+	// 提醒：如果 etcd 用了 hostPath，需手动清理 /data/etcd
+	fmt.Printf("💡 提示：如果 etcd 数据持久化在 hostPath，请手动清理节点上的 /data/etcd 目录\n")
+	fmt.Printf("   否则下次 Install 时旧数据会导致集群以 existing 状态启动\n")
 	return nil
 }
 

@@ -32,6 +32,8 @@ func runController(args []string) {
 		runControllerUnenroll(args[1:])
 	case "projects":
 		runControllerProjects(args[1:])
+	case "rotate-certs":
+		runControllerRotateCerts(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "未知子命令: %s\n", args[0])
 		printControllerUsage()

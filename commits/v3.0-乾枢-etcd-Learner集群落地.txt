@@ -1,0 +1,73 @@
+feat(etcdmanager): Learner 自举集群 v1.3 落地 — Bootstrap + HTTPS + CA 分发 + 鲁棒性补丁
+
+从设计草案到代码落地。etcd Learner 集群自举 + HTTPS TLS + Controller CA 分发。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. internal/etcdmanager/ 包 (6 文件, ~1100 行)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  doc.go           包说明
+  types.go         Peer / BootstrapConfig / ClusterState / CertConfig
+  bootstrap.go     DiscoverPeers / DetectClusterState / BootstrapSeed
+                   JoinAsLearner / WaitForCatchUp / PromoteLearner
+                   buildETCDArgs / etcdctlArgs (TLS 构建器)
+  manager.go       EtcdManager / compactLoop / safeDefrag / isLeader
+                   GracefulShutdown / execEtcdctl
+  cert.go          CreateCertsSecret / EnsureCerts / generateCA
+                   generateNodeCerts / readCAFromSecret / writeCertsToSecret
+  errors.go        ErrClusterNotFound / ErrCatchUpTimeout
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. 核心技术决策
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  HTTPS 全链路: crypto/x509 自签 CA, 8 个 etcd TLS flag, 0 外部依赖
+  方案 B CA 分发: Controller install 预生成 Secret → Pod 只读不写
+  PodIndex 门禁: 只有 Pod-0 可 ColdStart, 防止脑裂
+  isLeader 修正: RaftTerm>0 → Leader==MemberId (精确比较)
+  Learner 幂等: JoinAsLearner Step 0 查 getMemberRole, Voter 跳过
+  PromoteLearner 幂等: promote 前查角色, 已 Voter 则跳过
+  自适应轮询: lag<1000→200ms, lag≥1000→2s, 稳定窗口动态缩放
+  safeDefrag: Leader 跳过 → Follower 做 → move-leader 转移
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. 六项鲁棒性补丁
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  CA 轮转幂等: Secret 已存在且未 force-rotate → 跳过
+  peerHasData: 区分 kubectl exec 失败(不可达) vs 文件不存在(无数据)
+  Defrag 预检: clusterHealthy() 只剩 2/3 节点时跳过
+  Uninstall 清理提示: hostPath 数据需手动清理 /data/etcd
+  Base64 TrimSpace: kubectl jsonpath 可能带不可见字符
+  证书权限: server-key.pem 0600
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. kp controller rotate-certs 新命令
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  kp controller rotate-certs [--namespace] [--kubeconfig]
+    → CreateCertsSecret(forceRotate=true)
+    → kubectl rollout restart statefulset/kubepivot-controller
+    → WaitReady(300s)
+    - RBAC: PermControllerInstall
+    - 确认交互: y/N 二次确认
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. 单测 (18 cases)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  bootstrap_test.go (13): DetectClusterState_Pod0/NonPod0, ClusterState_String,
+    DefaultConfig, PodIndexFromName(7), LocalHasData, AdaptivePolling, StableWindow
+  cert_test.go (5): GenerateCA, GenerateNodeCerts, DecodeCA, Base64RoundTrip,
+    TrimSpace
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. 文档
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  docs/design/etcd-learner-bootstrap-draft.md  v1.3 更新
+    - 状态 📝 draft → ✅ v1.3 代码落地
+    - 新增 §15 实施记录: 交付清单、HTTPS 决策、六项补丁、自适应轮询
+
+变更: 内部 9 文件 (+~1100 行) + 外部 3 文件 (+~50 行) + 设计文档更新
+验证: ✅ make dev 全 PASS, ✅ 18 单测全绿

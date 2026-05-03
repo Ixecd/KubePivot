@@ -1,6 +1,6 @@
 # KubePivot 内嵌 etcd Learner 集群 — 设计草案
 
-> 状态：📝 draft — 待 qc 拍板
+> 状态：✅ v1.3 代码落地，make dev 全绿
 > 关联：[sharding](../../internal/sharding/shard.go) / [controller_installer](../../internal/controller_installer/installer.go) / [state](../../internal/state/)
 > 背景：v3.0 KubePivot Controller 依赖外部 etcd。v3.1 目标：零外部依赖闭环，
 >       利用 etcd Learner 机制实现与 controller 同生命周期的自举集群
@@ -615,7 +615,90 @@ status:
 
 ---
 
-## 十四、编辑记录
+---
+
+## 十五、v1.3 实施记录：从草案到代码落地
+
+### 15.1 交付清单
+
+| 模块 | 文件 | 状态 |
+|---|---|---|
+| 包骨架 | `internal/etcdmanager/doc.go` | ✅ |
+| 类型定义 | `internal/etcdmanager/types.go` | ✅ |
+| Bootstrap | `internal/etcdmanager/bootstrap.go` (~260 行) | ✅ |
+| 运行时管理 | `internal/etcdmanager/manager.go` (~230 行) | ✅ |
+| TLS 证书 | `internal/etcdmanager/cert.go` (~260 行) | ✅ |
+| 错误定义 | `internal/etcdmanager/errors.go` | ✅ |
+| CLI 子命令 | `cmd/kp/controller_rotate_certs.go` | ✅ |
+| Controller 安装 | `internal/controller_installer/installer.go` (改) | ✅ |
+| 单测 | `bootstrap_test.go` (13 cases) + `cert_test.go` (5 cases) | ✅ |
+
+### 15.2 实施中修正的设计决策
+
+#### HTTPS 全链路（设计外新增）
+
+原设计走 HTTP localhost。实施时决定全量 HTTPS——`crypto/x509` 标准库自签 CA，零外部依赖。etcd 启动加 `--cert-file`/`--key-file`/`--trusted-ca-file` 等 8 个 TLS flag。
+
+#### 方案 B CA 分发落地
+
+```
+kp controller install
+  → CreateCertsSecret() 生成 CA → kubectl create secret kubepivot-etcd-certs
+  → Pod 启动: EnsureCerts() 从 Secret 读 CA → 签自己的 server+peer cert
+```
+
+Pod 对 Secret 只读不写，最小权限原则。`--force-rotate` 留给 `kp controller rotate-certs`。
+
+#### 六项鲁棒性补丁
+
+| 补丁 | 位置 | 内容 |
+|---|---|---|
+| CA 轮转幂等 | `cert.go:CreateCertsSecret` | Secret 已存在且未 force-rotate → 跳过 |
+| peerHasData 假阴性 | `bootstrap.go` | 区分 `kubectl exec` 失败(不可达) vs 文件不存在(无数据) |
+| PromoteLearner 幂等 | `bootstrap.go` | `promote` 前查 `getMemberRole`，已是 Voter 则跳过 |
+| Defrag 集群健康度 | `manager.go:clusterHealthy` | 只剩 2/3 节点时跳过 defrag |
+| Uninstall 清理提醒 | `installer.go` | hostPath 数据需手动清理 `/data/etcd` |
+| Base64 TrimSpace | `cert.go:readCAFromSecret` | `kubectl jsonpath` 可能带不可见字符 |
+
+#### 自适应轮询（WaitForCatchUp）
+
+```
+lag < 1000  → ticker.Reset(200ms)   加速收尾
+lag >= 1000 → ticker.Reset(2s)      省 CPU
+
+稳定窗口动态缩放:
+  3 节点 → 5s
+  5 节点 → 8s
+  7+ 节点 → 10s
+```
+
+#### Leader 判定修正
+
+`isLeader` 从 `RaftTerm > 0`（误判 Follower）修正为 `Leader == MemberId`（精确比较）。
+
+### 15.3 新增 kp controller 子命令
+
+```
+kp controller rotate-certs [--namespace] [--kubeconfig]
+  → CreateCertsSecret(forceRotate=true)
+  → kubectl rollout restart statefulset/kubepivot-controller
+  → WaitReady(300s)
+```
+
+### 15.4 api-plan 2.0 ai-plan 2.0 五阶段升级
+
+```
+kp ai-plan (v2.0)
+  🔍 Phase 1: 仓库扫描（加多语言依赖 + GPU 库检测）
+  🧠 Phase 2: LLM 分析（输出框架+profile，不填具体数值）
+  📊 Phase 3: Sizing 验证（Prometheus 实测 vs LLM 推荐 → 用实测值修正）
+  🔥 Phase 4: GPU 感知（代码 import × 环境依赖 × Dockerfile 镜像 + 集群能力预检）
+  ✅ Phase 5: 生成 + Dry-run + Quota Warning → 一键 Deploy
+```
+
+详见 `docs/design/ai-plan-2.0-draft.md`。
+
+## 十六、编辑记录
 
 ```
 2026-05-01  qc + DeepSeek 起草
@@ -638,5 +721,14 @@ status:
     - Key 前缀映射 `/kubepivot/` 权限模型
     - Shadow CRD etcd.auth 状态字段
     - CLI 层 IAM × 数据层 etcd auth × 审计层 audit.Record 三层关系
-    - 5 个 IAM 测试用例追加（auth 初始化、幂等、未授权、key 隔离、密码轮转）
+    - 5 个 IAM 测试用例追加
+
+2026-05-03 v1.3  qc + DeepSeek 代码落地 + HTTPS + 鲁棒性补丁
+    - 全量 HTTPS：crypto/x509 自签 CA，etcdctl 全链路 TLS
+    - 方案 B CA 分发：Controller install 预生成 Secret → Pod 只读
+    - kp controller rotate-certs 命令
+    - 六项鲁棒性补丁：CA 幂等、peerHasData、PromoteLearner 幂等、Defrag 预检、Uninstall 清理、Base64 TrimSpace
+    - 自适应轮询：lag<1000→200ms，稳定窗口动态缩放
+    - Leader 判定修正：RaftTerm>0→Leader==MemberId
+    - 18 个单测全 PASS
 ```
