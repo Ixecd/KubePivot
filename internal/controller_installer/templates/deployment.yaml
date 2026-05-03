@@ -7,6 +7,10 @@ metadata:
     app.kubernetes.io/name: kubepivot-controller
     app.kubernetes.io/managed-by: kp
 data:
+  # 分片数量
+  shards: "10"
+  # Controller副本数量
+  replicas: "3" 
   # Worker Pool 大小（可被 KUBEPIVOT_WORKER_POOL_SIZE env 覆盖）
   worker_pool_size: "20"
   # Leader Election 参数
