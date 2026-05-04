@@ -1,0 +1,23 @@
+feat(sizing): decision metadata in components.yaml + kp explain traceability
+
+Sizing decision metadata:
+  - Suggestion.SampleCount field added (len of metrics samples used)
+  - components.yaml comments enriched with full decision metadata
+    Format: # Reason: sizing: profile=web confidence=0.85 samples=672
+            cpu=500m→320m(-36%) mem=512Mi→384Mi(-25%) at=2026-05-04T11:00:00Z
+  - Parsed by kp explain to display Layer 2 decision trace
+
+kp explain (decision-stack.md §4.3):
+  - kp explain — project overview, lists all components with sizing history
+  - kp explain --pod <name> — per-pod trace with profile/confidence/samples/cpu/mem
+  - kp explain --list-pods — shell completion data source
+  - Layer 3 section marked as "not yet available (planned v3.0)"
+  - tools/kp-completion.bash — bash completion with zero external dependencies
+
+Dead code cleanup:
+  - internal/sizing/dp.go: removed toMillicores, toBytes, samplePodMetrics (dup)
+  - compute() no longer takes unused ctx parameter
+  - Removed unused sort/time imports
+
+Watcher noise reduction:
+  - internal/controller/watcher.go: WARN→INFO for stream reconnect + heartbeat

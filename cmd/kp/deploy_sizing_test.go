@@ -130,11 +130,13 @@ components:
 		"api-server": {
 			RecommendedCPU: 250,               // 500m -> 250m
 			RecommendedMem: 128 * 1024 * 1024, // 512Mi -> 128Mi
+			Confidence:     0.85,
+			SampleCount:    672,
 		},
 	}
-	// 构造推荐理由 (Level5 注入)
+	// 构造推荐理由 (Level5 注入, v3.0 富元数据格式)
 	reasons := map[string]string{
-		"api-server": "low CPU usage detected",
+		"api-server": "sizing: profile=web confidence=0.85 samples=672 cpu=500m→250m(-50%) mem=512Mi→128Mi(-75%) at=2026-05-04T00:00:00Z",
 	}
 
 	// 执行修改
@@ -157,7 +159,7 @@ components:
 	if !strings.Contains(content, `memory: "128Mi"`) {
 		t.Errorf("Memory not updated correctly, got:\n%s", content)
 	}
-	if !strings.Contains(content, `# Reason: low CPU usage detected`) {
+	if !strings.Contains(content, `# Reason: sizing: profile=web`) {
 		t.Errorf("Comment not injected, got:\n%s", content)
 	}
 
@@ -292,4 +294,3 @@ func TestSizingCompute_WithFallbackSamples(t *testing.T) {
 	t.Logf("Fallback test passed: CPU Rec=%dm, Mem Rec=%dMi, Confidence=%.2f",
 		sug.RecommendedCPU, sug.RecommendedMem>>20, sug.Confidence)
 }
-

@@ -92,6 +92,8 @@ func main() {
 			// CLI 管理命令：install / uninstall / status / enroll / projects
 			runController(os.Args[2:])
 		}
+	case "explain":
+		runExplain(os.Args[2:])
 	case "login":
 		runLogin(os.Args[2:])
 	case "team":

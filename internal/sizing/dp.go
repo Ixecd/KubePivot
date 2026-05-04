@@ -7,67 +7,12 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"sort"
-	"time"
 
 	"github.com/Ixecd/kubepivot/internal/metrics"
 )
 
 // =============================================================================
-// 1. Quantity 转换辅助（对齐真实 metrics/quantity.go）
-// =============================================================================
-
-// toMillicores CPU Quantity → millicores (int64)
-// 因 Quantity.Value 已是标准化 millicores，直接返回
-func toMillicores(q metrics.Quantity) int64 {
-	return q.Value
-}
-
-// toBytes Memory Quantity → bytes (int64)
-// 因 Quantity.Value 已是标准化 bytes，直接返回
-func toBytes(q metrics.Quantity) int64 {
-	return q.Value
-}
-
-// =============================================================================
-// 2. 采样层：模拟"历史"数据（Level1 方案，Level5 无变更）
-// =============================================================================
-
-// samplePodMetrics 采集 N 次瞬时指标，模拟短期历史
-// 间隔建议: 2-5s (避免太近噪声 / 太远漂移)
-// 返回: 按时间排序的 []*metrics.PodMetrics
-func samplePodMetrics(ctx context.Context, client metrics.MetricsClient, namespace, name string, count int, interval time.Duration) ([]*metrics.PodMetrics, error) {
-	var samples []*metrics.PodMetrics
-	for i := 0; i < count; i++ {
-		m, err := client.GetPodMetrics(ctx, namespace, name)
-		if err != nil {
-			// 单次失败不中断，容忍瞬时抖动
-			// 若首个样本就失败，直接返回错误
-			if len(samples) == 0 {
-				return nil, fmt.Errorf("initial sample failed: %w", err)
-			}
-			// 已有样本则记录警告 + 继续
-			// P.Warn("⚠", fmt.Sprintf("sample %d/%d failed: %v", i+1, count, err))
-			break
-		}
-		samples = append(samples, m)
-		if i < count-1 {
-			select {
-			case <-time.After(interval):
-			case <-ctx.Done():
-				return samples, ctx.Err()
-			}
-		}
-	}
-	// 按时间排序确保计算顺序一致
-	sort.Slice(samples, func(i, j int) bool {
-		return samples[i].Timestamp.Before(samples[j].Timestamp)
-	})
-	return samples, nil
-}
-
-// =============================================================================
-// 3. Profile + 权重系统（Level5 扩展：导出 + 自定义权重）
+// 1. Profile + 权重系统（Level5 扩展：导出 + 自定义权重）
 // =============================================================================
 
 // Profile 业务模板，驱动得分权重 (设计拍板 Q2=B)
@@ -133,6 +78,7 @@ type Suggestion struct {
 	Profile        Profile
 	SavingsCPU     float64 // 节省百分比 (负值=增加)
 	SavingsMem     float64
+	SampleCount    int // 参与计算的采样点数量
 }
 
 // =============================================================================
@@ -142,11 +88,11 @@ type Suggestion struct {
 // Compute 单 Pod 最优 sizing (维度 B: Pod × CPU × Memory)
 //
 // 核心逻辑:
-//   1. 聚合采样点: 指数衰减加权 + 估算 P95 (avg + 1.5*std)
-//   2. DP 状态空间: 混合离散化 (CPU 50m 步长, Mem 64Mi 步长)
-//   3. 成本函数: 加权资源成本 + 浪费惩罚 (请求 > P95 的部分)
-//   4. 约束: P95 <= request * (1 - headroom), headroom=20%
-//   5. 输出: 最小成本状态 + 置信度 (基于样本数 + 离散度)
+//  1. 聚合采样点: 指数衰减加权 + 估算 P95 (avg + 1.5*std)
+//  2. DP 状态空间: 混合离散化 (CPU 50m 步长, Mem 64Mi 步长)
+//  3. 成本函数: 加权资源成本 + 浪费惩罚 (请求 > P95 的部分)
+//  4. 约束: P95 <= request * (1 - headroom), headroom=20%
+//  5. 输出: 最小成本状态 + 置信度 (基于样本数 + 离散度)
 //
 // 参数:
 //   - ctx: 控制超时/取消
@@ -165,7 +111,7 @@ type Suggestion struct {
 // Level5 备注: 如需自定义权重，请使用 ComputeWithWeights
 func Compute(ctx context.Context, samples []*metrics.PodMetrics, profile Profile) (*Suggestion, error) {
 	cpuW, memW := GetWeights(profile)
-	return compute(ctx, samples, profile, cpuW, memW)
+	return compute(samples, profile, cpuW, memW)
 }
 
 // ComputeWithWeights 支持自定义权重的 sizing 计算 (Level5 新增)
@@ -194,12 +140,12 @@ func ComputeWithWeights(ctx context.Context, samples []*metrics.PodMetrics, prof
 		cpuW /= sum
 		memW /= sum
 	}
-	return compute(ctx, samples, profile, cpuW, memW)
+	return compute(samples, profile, cpuW, memW)
 }
 
 // compute 核心 DP 逻辑 (内部复用，不导出)
 // 参数 cpuW/memW 为已归一化的权重，直接用于成本计算
-func compute(ctx context.Context, samples []*metrics.PodMetrics, profile Profile, cpuW, memW float64) (*Suggestion, error) {
+func compute(samples []*metrics.PodMetrics, profile Profile, cpuW, memW float64) (*Suggestion, error) {
 	// --- 前置校验 ---
 	if len(samples) == 0 {
 		return nil, fmt.Errorf("no metrics samples: cannot compute sizing without data")
@@ -348,8 +294,9 @@ func compute(ctx context.Context, samples []*metrics.PodMetrics, profile Profile
 		Profile: profile,
 
 		// 节省率 (正=节省, 负=增加; 基于历史 avg 基准)
-		SavingsCPU: savCPU,
-		SavingsMem: savMem,
+		SavingsCPU:  savCPU,
+		SavingsMem:  savMem,
+		SampleCount: len(samples),
 	}, nil
 }
 

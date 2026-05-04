@@ -108,7 +108,13 @@ func runSizingHook(cfg *deployConfig, plan []planner.Plan, Root, kubeconfig, nam
 				}
 				mu.Lock()
 				updates[t.plan.Name] = sug
-				reasons[t.plan.Name] = fmt.Sprintf("sizing optimized (profile=%s, confidence=%.2f)", sug.Profile, sug.Confidence)
+				reasons[t.plan.Name] = fmt.Sprintf(
+					"sizing: profile=%s confidence=%.2f samples=%d cpu=%dm→%dm(%+.0f%%) mem=%dMi→%dMi(%+.0f%%) at=%s",
+					sug.Profile, sug.Confidence, sug.SampleCount,
+					sug.CurrentCPU, sug.RecommendedCPU, sug.SavingsCPU*100,
+					sug.CurrentMem>>20, sug.RecommendedMem>>20, sug.SavingsMem*100,
+					time.Now().UTC().Format(time.RFC3339),
+				)
 				mu.Unlock()
 			}
 		}(t)
@@ -228,7 +234,7 @@ func computeSizingForPod(plan *planner.Plan, promURL, namespace, kubeconfig stri
 	if err != nil {
 		return nil, fmt.Errorf("sizing compute failed: %w", err)
 	}
-	
+
 	return sug, nil
 }
 
