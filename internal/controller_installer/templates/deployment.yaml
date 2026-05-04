@@ -10,7 +10,7 @@ data:
   # 分片数量
   shards: "10"
   # Controller副本数量
-  replicas: "3" 
+  replicas: "3"
   # Worker Pool 大小（可被 KUBEPIVOT_WORKER_POOL_SIZE env 覆盖）
   worker_pool_size: "20"
   # Leader Election 参数
@@ -20,8 +20,29 @@ data:
   # ConfigMap watcher resync 周期（silent failure 保护）
   watcher_resync_seconds: "30"
 ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubepivot-controller
+  namespace: kubepivot-system
+  labels:
+    app: kubepivot-controller
+    app.kubernetes.io/name: kubepivot-controller
+    app.kubernetes.io/managed-by: kp
+spec:
+  clusterIP: None  # headless — StatefulSet 需要稳定网络标识
+  selector:
+    app: kubepivot-controller
+  ports:
+    - name: etcd-client
+      port: 2379
+      targetPort: 2379
+    - name: etcd-peer
+      port: 2380
+      targetPort: 2380
+---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: kubepivot-controller
   namespace: kubepivot-system
@@ -31,11 +52,12 @@ metadata:
     app.kubernetes.io/managed-by: kp
 spec:
   replicas: 3
-  strategy:
+  serviceName: kubepivot-controller
+  podManagementPolicy: OrderedReady  # pod-0 先起 → etcd 自举
+  updateStrategy:
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 1
-      maxSurge: 1
   selector:
     matchLabels:
       app: kubepivot-controller
@@ -50,6 +72,62 @@ spec:
         runAsUser: 65532
         fsGroup: 65532
       containers:
+        # ── etcd Learner Sidecar ──────────────────────────────────────
+        # 每个 Pod 内嵌一个 etcd 实例，构成 Learner 集群。
+        # Pod-0 冷启动自举，Pod-N 以 Learner 身份加入再 promote。
+        # kp 通过 localhost:2379 连接本地 etcd。
+        - name: etcd
+          image: quay.io/coreos/etcd:v3.5.18
+          imagePullPolicy: IfNotPresent
+          command:
+            - etcd
+          args:
+            - --name=$(POD_NAME)
+            - --listen-client-urls=http://0.0.0.0:2379
+            - --advertise-client-urls=http://$(POD_NAME).kubepivot-controller.kubepivot-system.svc:2379
+            - --listen-peer-urls=http://0.0.0.0:2380
+            - --initial-advertise-peer-urls=http://$(POD_NAME).kubepivot-controller.kubepivot-system.svc:2380
+            - --initial-cluster-state=new
+            - --initial-cluster-token=kubepivot-etcd
+            - --data-dir=/var/lib/etcd
+            - --snapshot-count=10000
+            - --auto-compaction-mode=periodic
+            - --auto-compaction-retention=1h
+            - --max-request-bytes=10485760
+            - --quota-backend-bytes=8589934592
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          ports:
+            - containerPort: 2379
+              name: client
+            - containerPort: 2380
+              name: peer
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+          volumeMounts:
+            - name: etcd-data
+              mountPath: /var/lib/etcd
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 2379
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 2379
+            initialDelaySeconds: 5
+            periodSeconds: 10
+        # ── Controller ────────────────────────────────────────────────
         - name: controller
           image: __IMAGE__
           imagePullPolicy: IfNotPresent
@@ -75,6 +153,8 @@ spec:
                   key: shards
             - name: LEADER_KEY
               value: "/kubepivot/global/leader"
+            - name: ETCD_ENDPOINTS
+              value: "http://localhost:2379"
           resources:
             requests:
               cpu: 100m
@@ -89,3 +169,11 @@ spec:
         - name: tmp
           emptyDir:
             medium: Memory
+  volumeClaimTemplates:
+    - metadata:
+        name: etcd-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 8Gi

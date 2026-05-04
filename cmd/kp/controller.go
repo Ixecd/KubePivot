@@ -66,7 +66,7 @@ func runControllerInstall(args []string) {
 	image := flags.String("image", "", "controller 镜像（默认 qingchun22/kubepivot-controller:<kpVersion>）")
 	kubeconfig := flags.String("kubeconfig", "", "kubeconfig 路径")
 	kubeContext := flags.String("context", "", "kube context")
-	wait := flags.Bool("wait", true, "等待 Deployment ready")
+	wait := flags.Bool("wait", true, "等待 Controller ready")
 	waitTimeout := flags.Duration("wait-timeout", 120*time.Second, "等待超时")
 	if err := flags.Parse(args); err != nil {
 		os.Exit(1)
@@ -100,7 +100,7 @@ func runControllerInstall(args []string) {
 	P.Done("Manifests apply 完成")
 
 	if *wait {
-		P.Start("⏳", "等待 Deployment ready")
+		P.Start("⏳", "等待 Controller ready")
 		waitCtx, waitCancel := context.WithTimeout(context.Background(), *waitTimeout)
 		defer waitCancel()
 		if err := inst.WaitReady(waitCtx, *waitTimeout); err != nil {
@@ -196,7 +196,7 @@ func runControllerStatus(args []string) {
 	}
 	fmt.Printf("  %s 已安装\n", colorize(colorGreen, "✓"))
 	fmt.Printf("  %-20s %s\n", "Namespace:", st.Namespace)
-	fmt.Printf("  %-20s %s\n", "Deployment Ready:", st.DeploymentReady)
+	fmt.Printf("  %-20s %s\n", "Controller Ready:", st.ControllerReady)
 	fmt.Printf("  %-20s %d 个\n", "Managed Projects:", st.ManagedNamespaces)
 	fmt.Println()
 }

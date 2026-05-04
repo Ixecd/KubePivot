@@ -17,3 +17,6 @@ teams:
         - promote
         - supply-chain
         - sizing
+        - controller-update
+        - controller-install
+        - controller-uninstall

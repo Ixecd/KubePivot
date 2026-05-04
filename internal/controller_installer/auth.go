@@ -13,7 +13,7 @@ import (
 //
 // 需要三项权限：
 //   - patch configmaps in <namespace>
-//   - update deployments/scale in <namespace>
+//   - update statefulsets/scale in <namespace>
 //   - delete leases in <namespace>
 func (i *Installer) checkAccessReview(ctx context.Context) error {
 	checks := []struct {
@@ -21,7 +21,7 @@ func (i *Installer) checkAccessReview(ctx context.Context) error {
 		resource string
 	}{
 		{"patch", "configmaps"},
-		{"update", "deployments/scale"},
+		{"update", "statefulsets/scale"},
 		{"delete", "leases"},
 	}
 

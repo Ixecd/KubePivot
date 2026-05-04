@@ -1,0 +1,20 @@
+feat(controller): StatefulSet migration with embedded etcd Learner sidecar
+
+Convert controller from Deployment to StatefulSet with embedded etcd
+Learner cluster (pod-0 bootstrap + pod-N Learner join).
+
+Template changes:
+  - Deployment → StatefulSet + headless Service + OrderedReady
+  - etcd Learner sidecar container (quay.io/coreos/etcd:v3.5.18)
+  - POD_NAME via downward API for stable etcd peer identity
+  - ETCD_ENDPOINTS=http://localhost:2379 injected to controller
+  - volumeClaimTemplates: 8Gi PVC for etcd data persistence
+
+Code changes:
+  - All kubectl deployment/ → statefulset/ (scale, rollout, sizing info)
+  - deployments/scale → statefulsets/scale (access review)
+  - DeploymentReady → ControllerReady (status struct + CLI output)
+  - 等待 Deployment ready → 等待 Controller ready (install progress)
+  - watcher stream WARN → INFO (normal reconnect noise suppression)
+
+Design: docs/design/etcd-learner-bootstrap-draft.md

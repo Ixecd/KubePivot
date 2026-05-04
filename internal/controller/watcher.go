@@ -148,7 +148,7 @@ func (w *KubectlWatcher) Watch(ctx context.Context, onEvent func(WatchEvent)) er
 
 		// 发生错误（或 kubectl 自然退出）→ 重连
 		if err != nil {
-			slog.Warn("watcher stream 结束，准备重连",
+			slog.Info("watcher stream 结束，准备重连",
 				"resource", w.Resource,
 				"namespace", w.Namespace,
 				"err", err,
@@ -248,7 +248,7 @@ func (w *KubectlWatcher) heartbeatGuard(ctx context.Context, cancelStream contex
 			probeCancel()
 
 			if err != nil {
-				slog.Warn("🫀 watcher 心跳探活失败，触发重连",
+				slog.Info("🫀 watcher 心跳探活失败，触发重连",
 					"resource", w.Resource,
 					"since_last_event", time.Since(last).Round(time.Second),
 					"err", err)

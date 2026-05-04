@@ -16,7 +16,7 @@ import (
 //  0.5. etcd 健康度预检
 //  0.6. 快照旧状态（回滚用）
 //  1. Patch ConfigMap
-//  2. Scale Deployment
+//  2. Scale StatefulSet
 //  3. WaitReady
 //  4. 清理孤儿 Lease（若 S 减少，WaitReady 成功后安全清理）
 //
@@ -27,7 +27,7 @@ func (i *Installer) ApplySizing(ctx context.Context, info *SizingInfo, shards, r
 	if err := i.checkAccessReview(ctx); err != nil {
 		return fmt.Errorf("权限不足: %w\n\n请联系集群管理员授予以下权限：\n"+
 			"  - patch configmaps in namespace %s\n"+
-			"  - update deployments/scale in namespace %s\n"+
+			"  - update statefulsets/scale in namespace %s\n"+
 			"  - delete leases in namespace %s\n"+
 			"  或使用具有 cluster-admin 权限的 kubeconfig。", err, i.cfg.Namespace, i.cfg.Namespace, i.cfg.Namespace)
 	}
@@ -51,13 +51,13 @@ func (i *Installer) ApplySizing(ctx context.Context, info *SizingInfo, shards, r
 		return fmt.Errorf("update ConfigMap: %w", err)
 	}
 
-	// 2. Scale Deployment
+	// 2. Scale StatefulSet
 	_, err = exec.Kubectl(ctx, i.cfg.Kubeconfig,
-		"scale", "deployment", "kubepivot-controller",
+		"scale", "statefulset", "kubepivot-controller",
 		"-n", i.cfg.Namespace, fmt.Sprintf("--replicas=%d", replicas))
 	if err != nil {
 		// Scale 失败 → 进入回滚流程
-		slog.Error("scale deployment 失败，开始回滚", "error", err)
+		slog.Error("scale statefulset 失败，开始回滚", "error", err)
 		return rollbackSizing(ctx, i, oldShards, oldReplicas, err)
 	}
 
@@ -107,14 +107,14 @@ func rollbackSizing(ctx context.Context, i *Installer, oldShards, oldReplicas in
 
 	// 回滚 replicas
 	_, err2 := exec.Kubectl(ctx, i.cfg.Kubeconfig,
-		"scale", "deployment", "kubepivot-controller",
+		"scale", "statefulset", "kubepivot-controller",
 		"-n", i.cfg.Namespace, fmt.Sprintf("--replicas=%d", oldReplicas))
 
 	if err1 != nil || err2 != nil {
 		return fmt.Errorf(
 			"回滚失败！请手动恢复:\n"+
 				"  kubectl patch configmap kubepivot-controller-config -n %s --type=merge -p '{\"data\":{\"shards\":\"%d\"}}'\n"+
-				"  kubectl scale deployment kubepivot-controller -n %s --replicas=%d\n"+
+				"  kubectl scale statefulset kubepivot-controller -n %s --replicas=%d\n"+
 				"原始错误: %v\n回滚错误: ConfigMap=%v, Scale=%v",
 			i.cfg.Namespace, oldShards, i.cfg.Namespace, oldReplicas, originalErr, err1, err2)
 	}

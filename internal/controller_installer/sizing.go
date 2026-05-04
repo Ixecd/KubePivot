@@ -104,7 +104,7 @@ func (i *Installer) GetSizingInfo(ctx context.Context) (*SizingInfo, error) {
 
 	// 1. 读取当前 replicas
 	out, err := exec.Kubectl(ctx, i.cfg.Kubeconfig,
-		"get", "deployment", "kubepivot-controller",
+		"get", "statefulset", "kubepivot-controller",
 		"-n", i.cfg.Namespace,
 		"-o", "jsonpath={.spec.replicas}")
 	if err != nil {
@@ -112,7 +112,7 @@ func (i *Installer) GetSizingInfo(ctx context.Context) (*SizingInfo, error) {
 	}
 	info.CurrentReplicas, _ = strconv.Atoi(strings.TrimSpace(string(out)))
 
-	// 2. 读取当前 shards：ConfigMap 优先，其次 Deployment env
+	// 2. 读取当前 shards：ConfigMap 优先，其次 StatefulSet env
 	out, err = exec.Kubectl(ctx, i.cfg.Kubeconfig,
 		"get", "configmap", "kubepivot-controller-config",
 		"-n", i.cfg.Namespace,
@@ -122,9 +122,9 @@ func (i *Installer) GetSizingInfo(ctx context.Context) (*SizingInfo, error) {
 	}
 	cmShards := strings.TrimSpace(string(out))
 
-	// 检查 Deployment 是否通过 env 直接覆盖了 shards
+	// 检查 StatefulSet 是否通过 env 直接覆盖了 shards
 	out, err = exec.Kubectl(ctx, i.cfg.Kubeconfig,
-		"get", "deployment", "kubepivot-controller",
+		"get", "statefulset", "kubepivot-controller",
 		"-n", i.cfg.Namespace,
 		"-o",
 		`jsonpath={.spec.template.spec.containers[?(@.name=="controller")].env[?(@.name=="KUBEPIVOT_SHARDS")].value}`)
@@ -135,7 +135,7 @@ func (i *Installer) GetSizingInfo(ctx context.Context) (*SizingInfo, error) {
 
 	if envShards != "" && cmShards != "" && envShards != cmShards {
 		return nil, fmt.Errorf(
-			"KUBEPIVOT_SHARDS conflict: ConfigMap says %s, Deployment env says %s. "+
+			"KUBEPIVOT_SHARDS conflict: ConfigMap says %s, StatefulSet env says %s. "+
 				"Remove the env override or update ConfigMap to match.", cmShards, envShards)
 	}
 	if envShards != "" {

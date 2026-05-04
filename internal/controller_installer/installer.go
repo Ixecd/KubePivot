@@ -112,7 +112,7 @@ func (i *Installer) Uninstall(ctx context.Context) error {
 type Status struct {
 	Installed         bool
 	Namespace         string
-	DeploymentReady   string // "3/3"
+	ControllerReady   string // "3/3"
 	LeaderPod         string // pod name
 	ManagedNamespaces int    // label=managed 的 ns 数量
 }
@@ -130,16 +130,16 @@ func (i *Installer) Status(ctx context.Context) (*Status, error) {
 		return st, nil // namespace 不存在
 	}
 
-	// 2. 检查 Deployment ready
+	// 2. 检查 StatefulSet ready
 	out, err := exec.Kubectl(ctx, i.cfg.Kubeconfig,
-		"get", "deployment", "kubepivot-controller",
+		"get", "statefulset", "kubepivot-controller",
 		"-n", i.cfg.Namespace,
 		"-o", "jsonpath={.status.readyReplicas}/{.spec.replicas}",
 		"--ignore-not-found",
 	)
 	if err == nil && len(strings.TrimSpace(string(out))) > 0 {
 		st.Installed = true
-		st.DeploymentReady = strings.TrimSpace(string(out))
+		st.ControllerReady = strings.TrimSpace(string(out))
 	}
 
 	// 3. 统计被管理的 namespace 数量
@@ -224,11 +224,11 @@ func (i *Installer) apply(ctx context.Context, yaml string) error {
 	return nil
 }
 
-// WaitReady 等待 Deployment ready（供 install 命令可选调用）
+// WaitReady 等待 StatefulSet ready（供 install 命令可选调用）
 func (i *Installer) WaitReady(ctx context.Context, timeout time.Duration) error {
 	exec := executor.GetExecutor()
 	out, err := exec.Kubectl(ctx, i.cfg.Kubeconfig,
-		"rollout", "status", "deployment/kubepivot-controller",
+		"rollout", "status", "statefulset/kubepivot-controller",
 		"-n", i.cfg.Namespace,
 		fmt.Sprintf("--timeout=%ds", int(timeout.Seconds())),
 	)
