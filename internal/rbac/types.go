@@ -38,6 +38,7 @@ package rbac
 //	PermStatus              ↔ kp status / kp diff / kp drift (只读)
 //	PermControllerInstall   ↔ kp controller install (controller 安装)
 //	PermControllerUninstall ↔ kp controller uninstall (危险操作)
+//	PermControllerUpdate    ↔ kp controller update (分片/副本调整)
 //	PermAll                 ↔ "*" 通配符
 type Permission string
 
@@ -49,17 +50,18 @@ const (
 	PermControllerInstall   Permission = "controller-install"
 	PermControllerUninstall Permission = "controller-uninstall"
 	PermAll                 Permission = "*"
-	PermDriftSync           Permission = "drift-sync"    // controller drift force-sync
-	PermHeal                Permission = "heal"          // controller 资源 healing
-	PermSandboxGC           Permission = "sandbox-gc"    // sandbox 超期清理
-	PermSweeperLease        Permission = "sweeper-lease" // 孤儿 lease 清理
-	PermMigrate             Permission = "migrate"       // kp migrate run
-	PermPVC                 Permission = "pvc"           // kp pvc backup/restore
-	PermSecret              Permission = "secret"        // kp secret rotate/seal/sync
-	PermChaos               Permission = "chaos"         // kp chaos inject/stop
-	PermPromote             Permission = "promote"       // kp promote
-	PermSupplyChain         Permission = "supply-chain"  // kp supply-chain verify/sbom
-	PermSizing              Permission = "sizing"        // kp sizing recommend
+	PermDriftSync           Permission = "drift-sync"        // controller drift force-sync
+	PermHeal                Permission = "heal"              // controller 资源 healing
+	PermSandboxGC           Permission = "sandbox-gc"        // sandbox 超期清理
+	PermSweeperLease        Permission = "sweeper-lease"     // 孤儿 lease 清理
+	PermMigrate             Permission = "migrate"           // kp migrate run
+	PermPVC                 Permission = "pvc"               // kp pvc backup/restore
+	PermSecret              Permission = "secret"            // kp secret rotate/seal/sync
+	PermChaos               Permission = "chaos"             // kp chaos inject/stop
+	PermPromote             Permission = "promote"           // kp promote
+	PermSupplyChain         Permission = "supply-chain"      // kp supply-chain verify/sbom
+	PermSizing              Permission = "sizing"            // kp sizing recommend
+	PermControllerUpdate    Permission = "controller-update" // kp controller update (分片/副本调整)
 )
 
 // String 实现 fmt.Stringer.
@@ -75,7 +77,7 @@ func (p Permission) IsValid() bool {
 	case PermDeploy, PermSandbox, PermRollback, PermStatus,
 		PermControllerInstall, PermControllerUninstall, PermAll,
 		PermMigrate, PermPVC, PermSecret, PermChaos,
-		PermPromote, PermSupplyChain, PermSizing:
+		PermPromote, PermSupplyChain, PermSizing, PermControllerUpdate:
 		return true
 	}
 	return false
@@ -97,6 +99,7 @@ func AllPermissions() []Permission {
 		PermPromote,
 		PermSupplyChain,
 		PermSizing,
+		PermControllerUpdate,
 	}
 }
 

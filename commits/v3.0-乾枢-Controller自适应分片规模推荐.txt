@@ -1,0 +1,34 @@
+feat(controller): adaptive sizing recommendation with kp controller update
+
+kp controller update 读取集群状态，基于 P→S→C 三维关系推导最优
+(shards, replicas) 组合，dry-run 展示 diff + 压力趋势表，--apply 写入。
+
+Core algorithm: Recommend()
+  S = clamp(ceil(P/4), 3, 50)
+  C = clamp(ceil(S/3), 2, 10)
+  No-downscale: replicas >= current unless --force-downscale
+  Warnings: rebalancing storm (ΔS≥50% && P≥50), shard overload (P/S>10)
+
+Edge case protection (design doc §4.1-4.5):
+  1. Orphan lease cleanup — delete leases in [newS, oldS) after WaitReady
+  2. Rebalancing storm warning — ΔS≥50%+P≥50 triggers reconciliation storm alert
+  3. Atomicity + rollback — scale failure auto-rolls back ConfigMap+replicas
+  4. P count precision — excludes kubepivot.io/phase=Error|Paused projects
+  5. AccessReview pre-check — kubectl auth can-i before --apply
+  6. Terminating namespace inclusion — finalizer stall risk, S shouldn't shrink
+  7. Pressure trend table in dry-run output
+
+New files:
+  internal/controller_installer/sizing.go       Recommend + GetSizingInfo
+  internal/controller_installer/sizing_test.go  18 unit tests
+  internal/controller_installer/apply.go        ApplySizing + rollbackSizing
+  internal/controller_installer/cleanup.go      cleanupOrphanedLeases
+  internal/controller_installer/auth.go         checkAccessReview + checkEtcdHealth
+
+Modified:
+  cmd/kp/controller.go    + case "update" + runControllerUpdate + printSizingDiff
+  internal/rbac/types.go  + PermControllerUpdate
+
+Design: docs/design/controller-update-sizing-draft.md
+
+Tests: 18 Recommend() unit tests covering all algorithm boundaries

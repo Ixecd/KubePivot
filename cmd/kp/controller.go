@@ -34,6 +34,8 @@ func runController(args []string) {
 		runControllerProjects(args[1:])
 	case "rotate-certs":
 		runControllerRotateCerts(args[1:])
+	case "update":
+		runControllerUpdate(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "未知子命令: %s\n", args[0])
 		printControllerUsage()
@@ -47,6 +49,7 @@ func printControllerUsage() {
 	fmt.Println("集群级管理：")
 	fmt.Println("  kp controller install    [--namespace kubepivot-system] [--image xxx:tag] [--wait]")
 	fmt.Println("  kp controller uninstall  [--force]")
+	fmt.Println("  kp controller update     [--dry-run] [--apply] [--shards N] [--replicas N] [--force-downscale]")
 	fmt.Println("  kp controller status")
 	fmt.Println("  kp controller projects")
 	fmt.Println()
@@ -203,3 +206,196 @@ func runControllerProjects(args []string) { runControllerProjectsReal(args) }
 func runControllerEnroll(args []string)   { runControllerEnrollReal(args) }
 
 func runControllerUnenroll(args []string) { runControllerUnenrollReal(args) }
+
+// ── kp controller update ──────────────────────────────────────────────────────
+
+func runControllerUpdate(args []string) {
+	flags := flag.NewFlagSet("controller update", flag.ExitOnError)
+	dryRun := flags.Bool("dry-run", true, "预览建议，不实际修改")
+	apply := flags.Bool("apply", false, "实际应用推荐配置")
+	shardsFlag := flags.Int("shards", 0, "手动指定分片数（跳过自动推导）")
+	replicasFlag := flags.Int("replicas", 0, "手动指定副本数（跳过自动推导）")
+	forceDownscale := flags.Bool("force-downscale", false, "允许推荐值低于当前值")
+	namespace := flags.String("namespace", "kubepivot-system", "controller 部署 namespace")
+	kubeconfig := flags.String("kubeconfig", "", "kubeconfig 路径")
+	if err := flags.Parse(args); err != nil {
+		os.Exit(1)
+	}
+
+	if *apply {
+		*dryRun = false
+	}
+
+	// RBAC: controller update (PermControllerUpdate)
+	mustCheck(audit.ResolveActor(), *namespace, rbac.PermControllerUpdate)
+
+	inst := controller_installer.New(controller_installer.Config{
+		Namespace:  *namespace,
+		Kubeconfig: expandHome(*kubeconfig),
+	})
+
+	// 父 ctx 超时：apply 模式给 600s（WaitReady 自适应最长 10min），dry-run 给 60s
+	parentTimeout := 60 * time.Second
+	if *apply {
+		parentTimeout = 600 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), parentTimeout)
+	defer cancel()
+
+	// 采集当前状态
+	info, err := inst.GetSizingInfo(ctx)
+	if err != nil {
+		P.Fail(fmt.Sprintf("读取集群状态失败: %v", err))
+		os.Exit(1)
+	}
+
+	// 手动指定时跳过算法
+	var shards, replicas int
+	var reason string
+	var warnings []string
+
+	if *shardsFlag > 0 && *replicasFlag > 0 {
+		shards = *shardsFlag
+		replicas = *replicasFlag
+		reason = "手动指定分片数和副本数"
+	} else if *shardsFlag > 0 {
+		shards = *shardsFlag
+		replicas, _, reason, warnings = controller_installer.Recommend(
+			info.ProjectCount, info.CurrentShards, info.CurrentReplicas, *forceDownscale)
+		// 手动指定 shards 时不替换
+		reason = fmt.Sprintf("手动指定分片数 S=%d, C=%d 由算法推导", shards, replicas)
+	} else if *replicasFlag > 0 {
+		shards, _, reason, warnings = controller_installer.Recommend(
+			info.ProjectCount, info.CurrentShards, info.CurrentReplicas, *forceDownscale)
+		replicas = *replicasFlag
+		reason = fmt.Sprintf("C=%d 手动指定, S=%d 由算法推导", replicas, shards)
+	} else {
+		shards, replicas, reason, warnings = controller_installer.Recommend(
+			info.ProjectCount, info.CurrentShards, info.CurrentReplicas, *forceDownscale)
+	}
+
+	// dry-run 模式 — 展示 diff
+	if *dryRun {
+		printSizingDiff(info, shards, replicas, reason, warnings)
+		return
+	}
+
+	// apply 模式
+	P.Info("🔧", "应用推荐配置...")
+
+	if err := inst.ApplySizing(ctx, info, shards, replicas); err != nil {
+		P.Fail(fmt.Sprintf("应用失败: %v", err))
+		os.Exit(1)
+	}
+	P.Done("Controller 规模调整完成")
+}
+
+func printSizingDiff(info *controller_installer.SizingInfo, shards, replicas int, reason string, warnings []string) {
+	sep := fmt.Sprintf("%s", colorize(colorCyan, "─────────────────────────────────────────"))
+
+	fmt.Println()
+	fmt.Printf("%s KubePivot Controller 规模分析\n", colorize(colorCyan, "📊"))
+	fmt.Println()
+
+	// 当前状态
+	fmt.Printf("  %s:\n", colorize(colorGray, "当前状态"))
+	fmt.Printf("    %-22s %d\n", "Managed Projects:", info.ProjectCount)
+	fmt.Printf("    %-22s %d\n", "Shards:", info.CurrentShards)
+	fmt.Printf("    %-22s %d\n", "Controller Pods:", info.CurrentReplicas)
+	fmt.Printf("    %-22s %.1f\n", "Projects/Shard:", float64(info.ProjectCount)/float64(max(info.CurrentShards, 1)))
+	currQuota := float64(info.CurrentShards) / float64(max(info.CurrentReplicas, 1))
+	fmt.Printf("    %-22s %.0f\n", "Shards/Pod (quota):", currQuota)
+	fmt.Println()
+
+	// 推荐配置
+	fmt.Printf("  %s:\n", colorize(colorGreen, "推荐配置"))
+	if shards != info.CurrentShards {
+		fmt.Printf("    %-22s %s\n", "Shards:", fmt.Sprintf("%d → %d", info.CurrentShards, shards))
+	} else {
+		fmt.Printf("    %-22s %d (不变)\n", "Shards:", shards)
+	}
+	if replicas != info.CurrentReplicas {
+		fmt.Printf("    %-22s %s\n", "Controller Pods:", fmt.Sprintf("%d → %d", info.CurrentReplicas, replicas))
+	} else {
+		fmt.Printf("    %-22s %d (不变)\n", "Controller Pods:", replicas)
+	}
+	newPS := float64(info.ProjectCount) / float64(max(shards, 1))
+	fmt.Printf("    %-22s %.1f → %.1f\n", "Projects/Shard:", float64(info.ProjectCount)/float64(max(info.CurrentShards, 1)), newPS)
+	newSC := float64(shards) / float64(max(replicas, 1))
+	fmt.Printf("    %-22s %.0f → %.0f\n", "Shards/Pod (quota):", currQuota, newSC)
+
+	// 压力变化趋势表
+	fmt.Println()
+	fmt.Printf("  %s:\n", colorize(colorGray, "压力变化趋势"))
+	fmt.Println(sep)
+	fmt.Printf("  %-22s %-10s %-10s %-8s\n", "维度", "当前值", "推荐值", "变化")
+	fmt.Println(sep)
+	fmt.Printf("  %-22s %-10.1f %-10.1f %-8s\n",
+		"单分片承载 (P/S)",
+		float64(info.ProjectCount)/float64(max(info.CurrentShards, 1)),
+		newPS,
+		trendArrow(info.CurrentShards, shards),
+	)
+	fmt.Printf("  %-22s %-10.1f %-10.1f %-8s\n",
+		"单 Pod 承载 (S/C)",
+		currQuota,
+		newSC,
+		trendArrow(info.CurrentReplicas, replicas),
+	)
+	fmt.Printf("  %-22s %-10d %-10d %-8s\n",
+		"Lease 总数",
+		info.CurrentShards,
+		shards,
+		pctChange(info.CurrentShards, shards),
+	)
+	fmt.Printf("  %-22s %-10d %-10d %-8s\n",
+		"Controller Pod 开销",
+		info.CurrentReplicas,
+		replicas,
+		pctChange(info.CurrentReplicas, replicas),
+	)
+	fmt.Println(sep)
+
+	// 理由
+	if reason != "" {
+		fmt.Println()
+		fmt.Printf("  %s\n", colorize(colorGray, "理由:"))
+		fmt.Printf("  %s\n", reason)
+	}
+
+	// 警告
+	if len(warnings) > 0 {
+		fmt.Println()
+		for _, w := range warnings {
+			fmt.Printf("  %s\n", colorize(colorYellow, w))
+		}
+	}
+
+	fmt.Println()
+	fmt.Printf("%s 运行 %s 应用此推荐\n",
+		colorize(colorGreen, "💡"),
+		colorize(colorGreen, "kp controller update --apply"))
+	fmt.Println()
+}
+
+func trendArrow(curr, rec int) string {
+	if rec > curr {
+		return "↑"
+	} else if rec < curr {
+		return "↓"
+	}
+	return "—"
+}
+
+func pctChange(curr, new int) string {
+	if curr == 0 {
+		return "—"
+	}
+	delta := float64(new-curr) / float64(curr) * 100
+	if delta > 0 {
+		return fmt.Sprintf("↑ %.0f%%", delta)
+	} else if delta < 0 {
+		return fmt.Sprintf("↓ %.0f%%", -delta)
+	}
+	return "—"
+}
