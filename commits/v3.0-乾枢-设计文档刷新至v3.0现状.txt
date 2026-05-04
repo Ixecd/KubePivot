@@ -1,0 +1,17 @@
+docs: 设计文档全面刷新至 v3.0 实现现状
+
+decision-stack.md:
+  - Layer 2 状态 ⏳→🟡，新增 §2.6 代码归档
+  - Layer 3 状态 ⏳→🟡，新增 §3.4 代码归档
+  - 全项目扫描后准确反映三层实现度
+
+sharding-tuning.md:
+  - 状态 🚧→✅，自适应分片替代手动查表
+  - 新增 §1 自适应分片使用方式 + 代码归档
+  - 保留环境约束 + 运维经验章节
+
+traffic-multi-env.md（新建）:
+  - 从 traffic-multi-env-impl-draft.md 演化为正式文档
+  - 状态 📐→✅，verifiedTrafficWriter + --from-env 全部落地
+  - 代码归档：~550 行实现 + ~280 行测试
+  - 原草案保留存档

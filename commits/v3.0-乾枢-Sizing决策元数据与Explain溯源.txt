@@ -1,23 +1,23 @@
-feat(sizing): decision metadata in components.yaml + kp explain traceability
+feat(sizing): components.yaml 决策元数据注入 + kp explain 决策溯源
 
-Sizing decision metadata:
-  - Suggestion.SampleCount field added (len of metrics samples used)
-  - components.yaml comments enriched with full decision metadata
-    Format: # Reason: sizing: profile=web confidence=0.85 samples=672
-            cpu=500m→320m(-36%) mem=512Mi→384Mi(-25%) at=2026-05-04T11:00:00Z
-  - Parsed by kp explain to display Layer 2 decision trace
+决策元数据：
+  - Suggestion 新增 SampleCount 字段（参与 DP 计算的有效采样点数）
+  - components.yaml 注释从简单 reason 升级为富元数据格式
+    格式: # Reason: sizing: profile=web confidence=0.85 samples=672
+          cpu=500m→320m(-36%) mem=512Mi→384Mi(-25%) at=2026-05-04T11:00:00Z
+  - kp explain 解析此注释，展示 Layer 2 决策溯源
 
-kp explain (decision-stack.md §4.3):
-  - kp explain — project overview, lists all components with sizing history
-  - kp explain --pod <name> — per-pod trace with profile/confidence/samples/cpu/mem
-  - kp explain --list-pods — shell completion data source
-  - Layer 3 section marked as "not yet available (planned v3.0)"
-  - tools/kp-completion.bash — bash completion with zero external dependencies
+kp explain (decision-stack.md §4.3)：
+  - kp explain              项目级概览，列出所有有 sizing 记录的组件
+  - kp explain --pod <name> 单 Pod 溯源：profile/confidence/samples/cpu/mem
+  - kp explain --list-pods  shell completion 数据源
+  - Layer 3 章节标记为 "not yet available (planned v3.0)"
+  - tools/kp-completion.bash 零外部依赖的 bash 补全脚本
 
-Dead code cleanup:
-  - internal/sizing/dp.go: removed toMillicores, toBytes, samplePodMetrics (dup)
-  - compute() no longer takes unused ctx parameter
-  - Removed unused sort/time imports
+死代码清理：
+  - internal/sizing/dp.go 删除 toMillicores / toBytes / samplePodMetrics（重复）
+  - compute() 不再接收未使用的 ctx 参数
+  - 移除未使用的 sort / time import
 
-Watcher noise reduction:
-  - internal/controller/watcher.go: WARN→INFO for stream reconnect + heartbeat
+日志降噪：
+  - internal/controller/watcher.go watcher 重连 + 心跳探活 WARN→INFO

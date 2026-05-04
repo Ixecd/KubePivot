@@ -1,8 +1,8 @@
 # KubePivot 三层资源决策栈
 
-> 编写日期：2026-04-27
-> 状态：部分实现（Layer 1 ✅ / Layer 2 ⏳ / Layer 3 ⏳）
-> 关联文档：[ROADMAP.md](../../ROADMAP.md) / [architecture.md](architecture.md)
+> 编写日期：2026-04-27 / 更新 2026-05-04
+> 状态：Layer 1 ✅ / Layer 2 🟡 / Layer 3 🟡
+> 关联文档：[ROADMAP.md](../../ROADMAP.md) / [architecture.md](architecture.md) / [controller-update-sizing-draft.md](controller-update-sizing-draft.md)
 
 ---
 
@@ -21,8 +21,8 @@ KubePivot 不只是 K8s 部署工具，从 v2.x 开始演化为**资源决策系
 
 ```
 Layer 1: AI Cold Start  ✅ v2.x 已实现
-Layer 2: DP Sizing      ⏳ v2.9 规划
-Layer 3: DP Scheduler   ⏳ v3.0 规划
+Layer 2: DP Sizing      🟡 v3.0 部分实现
+Layer 3: DP Scheduler   🟡 v3.0 已实现
 ```
 
 三层各司其职，无冲突无重叠，按时间维度接力。
@@ -53,7 +53,7 @@ Layer 3: DP Scheduler   ⏳ v3.0 规划
           ┌─────────────────────────────────────┐
           │   Layer 2: DP Sizing                │
           │   历史数据 + 二维 DP → 单 Pod 最优     │
-          │   ⏳ kp sizing recommend (v2.9)     │
+          │   🟡 kp deploy --sizing auto (v3.0)     │
           └─────────────────────────────────────┘
                             │
                   [resources.yaml 更新]
@@ -62,7 +62,7 @@ Layer 3: DP Scheduler   ⏳ v3.0 规划
           ┌─────────────────────────────────────┐
           │   Layer 3: DP Scheduler             │
           │   sizing + 节点拓扑 → 节点放置         │
-          │   ⏳ kp scheduler (v3.0)            │
+          │   🟡 kp scheduler (v3.0)            │
           └─────────────────────────────────────┘
                             │
                             ↓
@@ -79,7 +79,7 @@ Layer 3: DP Scheduler   ⏳ v3.0 规划
 | 数据依赖 | 零（不依赖运行时） | 强（需 metrics-server） | 强（需 sizing 输出 + node 状态） |
 | 决策方式 | LLM 推理（"猜"） | 二维 DP + 启发式 | 双 DP 协同 |
 | 价值 | "零配置部署"成为可能 | 单 Pod 利用率 70%+ | 节点 CPU 85%+, Mem 70%+ |
-| 状态 | ✅ v2.x 已实现 | ⏳ v2.9 规划 | ⏳ v3.0 规划 |
+| 状态 | ✅ v2.x 已实现 | 🟡 v3.0 部分实现 | 🟡 v3.0 已实现 |
 
 ---
 
@@ -309,6 +309,69 @@ KubePivot Layer 2：
    完整测试覆盖（>200 case）
 ```
 
+### 2.6 当前实现状态（v3.0, 2026-05-04）
+
+Layer 2 已有实质性实现，不再是纯规划状态：
+
+**Pod 级 sizing（kp deploy 内嵌）**：
+```
+cmd/kp/deploy_sizing.go     runSizingHook — kp deploy 时自动触发
+                            Prometheus 历史查询 + kubectl 瞬时采样 fallback
+                            10 并发 DP 计算 + confidence 灰度门控
+                            原子写入 components.yaml（临时文件 + rename）
+                            软/硬失败分级报告 + VPA 建议生成
+internal/sizing/dp.go       Compute() — 二维 DP 核心算法
+                            Profile 驱动权重系统（web/batch/db/default）
+                            P95 估算 + 离散化 + 成本函数 + 浪费惩罚
+                            SampleCount / Confidence / Savings 输出
+internal/sizing/intelligence.go  RecommendProfile() — 自动识别业务类型
+```
+
+**Controller 级 sizing（kp controller update）**：
+```
+kp controller update          P→S→C 三维关系推导最优分片/副本数
+internal/controller_installer/sizing.go  Recommend() + GetSizingInfo()
+internal/controller_installer/apply.go   ApplySizing() + rollbackSizing()
+                              dry-run 展示压力变化趋势表
+                              --apply 原子变更 + 失败回滚
+                              孤儿 Lease 清理 + etcd 健康度预检
+                              权限预检 (kubectl auth can-i)
+```
+
+**决策可解释性**：
+```
+kp explain                    项目级 sizing 概览 / 单 Pod 决策溯源
+components.yaml 注释          富元数据决策记录:
+                              # Reason: sizing: profile=web confidence=0.85
+                              samples=672 cpu=500m→320m(-36%) ...
+```
+
+**代码归档**：
+```
+internal/sizing/
+├── dp.go             Suggestion / Profile / Compute / compute / GetWeights
+├── intelligence.go   RecommendProfile — 自动业务类型识别
+└── vpa.go            VPA 建议生成
+
+internal/controller_installer/
+├── sizing.go         SizingInfo / Recommend / GetSizingInfo
+├── apply.go          ApplySizing / rollbackSizing
+├── cleanup.go        cleanupOrphanedLeases
+└── auth.go           checkAccessReview / checkEtcdHealth
+
+cmd/kp/
+├── deploy_sizing.go  runSizingHook / computeSizingForPod
+├── sizing.go         kp sizing recommend CLI
+├── explain.go        kp explain CLI
+└── controller.go     kp controller update CLI
+```
+
+**待完成**：
+- kp sizing recommend 独立运行模式（目前只作为 deploy hook 运行）
+- Confidence-based 自动 apply（目前需用户确认）
+- 多项目 sizing 批量报告
+- 与 Layer 3 的 sizing 输出对接
+
 ---
 
 ## Layer 3: DP Scheduler
@@ -373,6 +436,49 @@ KubePivot v3.0 选择 模式 1+3 混合：
    StatefulSet 数据敏感不主动迁移
    蓝绿 Pod 由 v2.6 traffic 控制不参与
 ```
+
+### 3.4 当前实现状态（v3.0, 2026-05-04）
+
+Layer 3 已有完整实现，`docs/design/scheduler.md` 标记为 "implemented (v3.0.0)"。
+
+**Bin Pack 引擎**（维度 A — 节点 × Pod × 资源）：
+```
+internal/scheduler/bin_pack.go   BinPack() — FFD 排序 + 0-1 背包 per-node
+                                 对每节点独立 DP：选最优 Pod 子集
+internal/scheduler/coordinator.go  coordinate() — 双 DP 协同循环
+                                 最多 5 轮迭代，每轮 Node Cap 收缩 10%
+internal/scheduler/adapter.go    Scheduler / NodeInfo / PodInfo / SchedulingPlan
+                                 接口：PodLister / NodeLister / MetricsProvider
+```
+
+**运行时重调度**：
+```
+internal/scheduler/rescheduler.go  Rescheduler — 周期性均衡扫描
+                                  抖动检测 + 退化级别 Level 0-3
+                                  Pause / Resume / ReportOOM
+internal/scheduler/metrics.go     7 个 Prometheus 指标
+                                  ShardOverload / SchedulingLatency / RescheduleCount
+```
+
+**Webhook 实时调度**：
+```
+internal/scheduler/webhook.go        WebhookServer — HTTPS AdmissionReview
+                                     AssignPod() — Best-Fit 单 Pod 放置
+internal/scheduler/webhook_deploy.go MutatingWebhookConfiguration YAML 生成
+internal/scheduler/cert.go           GenerateSelfSignedCert() — TLS 自签证书
+```
+
+**适配器层**：
+```
+internal/scheduler/kubectl_adapter.go  NewKubectlAdapter() — kubectl 实现 PodLister/NodeLister
+internal/scheduler/sizing_adapter.go   NewSizingAdapter() — 桥接 internal/sizing + internal/metrics
+internal/scheduler/plan_writer.go      NewFilePlanWriter() — components.yaml GitOps 写入
+```
+
+**待完成**：
+- `kp explain` 的 Layer 3 决策溯源（当前显示 "not yet available"）
+- Rescheduler 的实际 Pod 驱逐（Eviction API）—— 当前仅标记，未执行物理迁移
+- `kp scheduler` 独立 CLI 命令
 
 ---
 
@@ -583,23 +689,19 @@ KubePivot 与 k9s 解决不同问题，在不同 niche 共存。
 
 ```
 2026-04-27  v0.1 创建（v2.6.0 release 后第二天清晨）
-            
-            起源：
-            qc 4-26 晚上回顾 KubePivot 时
-            发现 v2.x 已实现的 kp ai-plan 与 v2.9/v3.0 规划的 DP 调度
-            完美互补，不冲突
-            
-            决定单独成文（不并入 ROADMAP）
-            理由：
-            - ROADMAP 已 ~2143 行，再加补充会显得"打补丁"
-            - 三层决策栈是 KubePivot 的核心 mental model
-            - v3.0 release 时这是核心叙事文档
-            - 未来其他文档都可以引用此文档
+            起源：qc 发现 kp ai-plan 与 DP 调度完美互补
+            决定单独成文，三层决策栈是 KubePivot 核心 mental model
+            写作约定：Layer 1 详细 / Layer 2/3 引用 ROADMAP / 衔接逻辑是心脏
 
-            写作约定：
-            - Layer 1 详细（已实现，含代码归档）
-            - Layer 2/3 引用 ROADMAP，不展开（避免重复）
-            - 衔接逻辑章节是本文档的"心脏"
-            - 含每层局限（工程诚实）
-            - 不含商业化探讨
+2026-05-04  v0.2 qc + Claude 更新至 v3.0 现状（两次扫描）
+            第一次（上午）：
+              Layer 2 状态 ⏳→🟡：
+              - 新增 §2.6 当前实现状态（Pod sizing / Controller sizing / 决策可解释性）
+              - 代码归档：internal/sizing/ + controller_installer/ + cmd/kp/
+              - 待完成：独立 sizing recommend / 自动 apply / 批量报告
+            第二次（下午，全项目扫描）：
+              Layer 3 状态 ⏳→🟡：
+              - internal/scheduler/ 13 文件完整实现，scheduler.md 标记 "implemented"
+              - §3.4 新增代码归档：bin_pack / coordinator / rescheduler / webhook / adapters
+              - 待完成：kp explain Layer 3 溯源 / Eviction API / kp scheduler CLI
 ```
