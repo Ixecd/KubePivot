@@ -221,45 +221,51 @@ kp deploy --env prod --from-env staging
   - 工作量：~200 行 + 测试
 ```
 
-## v3.x+ — AI Workload Sizing & Scheduling（GPU 调度路线图）
+## v3.x+ — 乾枢智能调度演进：GPU → 池化
 
 ### 背景与定位
 
 KubePivot v3.0 已具备 CPU/Memory 的部署时调度、运行时重调度及多级降级能力。
-将其扩展至 GPU 训练场景，不是重复造 GPU Operator，而是发挥乾枢在**三维装箱、
-拓扑感知、碎片整理、Sizing 引擎**上的技术积累，解决 AI 集群最痛的
-“利用率低、碎片严重、拓扑错配”问题。
+v3.1 的核心使命是完成**单维资源维度补全（GPU）+ 二维 DP 升级为三维 DP
+（CPU + Memory + GPU）+ 碳排放感知调度**，将乾枢从通用业务调度器升级为
+AI 基础设施调度器。
+
+v3.2 在此基础上叠加**池化调度层**（Node Pool / CPU-Memory Pool），
+将调度视角从”逐节点贪心”切换到”全局容量治理”，实现碎片率驱动的跨节点迁移。
 
 生产环境对 GPU 调度工具的核心诉求：
 - **省钱**：千卡 A100 集群月租金百万级，利用率从 50%→80% 直接省 30% 成本。
 - **合规**：2026 年 ESG 强制披露趋势下，需要自动化碳足迹追踪和报告。
 - **稳定**：不与现有魔改调度器冲突，不引入不可控风险。
 
-乾枢的策略：先用“省钱”打入技术层，证明稳定高效；再用“合规”上管理层视野，
-成为不可替代的“AI 基础设施标准配置”。
+乾枢的策略：先用”省钱”打入技术层，证明稳定高效；再用”合规”上管理层视野，
+成为不可替代的”AI 基础设施标准配置”。
 
 ### 核心挑战 (对比 v2.9 通用业务)
 
 | 维度 | 通用业务 (v2.9) | AI 训练 (v3.x) | 设计影响 |
 |------|----------------|---------------|----------|
 | 资源粒度 | CPU: millicores, Mem: bytes | GPU: 整数卡 / MIG 0.1 卡 | 离散化策略需支持混合粒度 |
-| 状态空间 | `dp[c][m]` 2D | `dp[c][m][g]` 3D+ | DP 矩阵膨胀，需稀疏优化 + 剪枝 |
+| 状态空间 | `dp[c][m]` 2D | `dp[c][m][g]` 3D | DP 矩阵膨胀，需稀疏优化 + 剪枝 |
 | 浪费惩罚 | CPU/Mem 权重均衡 | GPU 权重 >> CPU/Mem | cost 函数需动态权重 (profile=training) |
 | 拓扑敏感 | 无 (只看资源够不够) | NVLink/PCIe/RDMA 带宽敏感 | score 函数增加 `topology_bonus` |
 | 调度原子性 | 单 Pod 独立调度 | Gang Scheduling (All-or-Nothing) | 引入 PodGroup + 原子决策 |
 | 资源曲线 | 流量周期性抖动 | 阶段性强波动 (预处理→计算) | business-template: training + 动态 headroom |
 | 失败代价 | 重启秒级恢复 | 训练中断 = 小时级算力浪费 | 显存 OOM 预测 + 提前扩容/迁移 |
 
-## v3.1 — GPU 智能调度基础
+## v3.1 — GPU 调度 + 三维 DP + 碳排放感知
 
 ### 前提
 
-**KubePivot v3.0 所有命令、所有 flag、所有默认行为都实际验证一遍，暴露任何隐藏的问题。** 这是我们在进入 v3.1 GPU 调度之前，对现有代码质量做的一次全面体检——不是为了推翻重来，而是为了清晰地知道什么是好的、什么需要修、什么可以再等等。
+**KubePivot v3.0 所有命令、所有 flag、所有默认行为都实际验证一遍，暴露任何隐藏的问题。** 这是我们在进入 v3.1 之前，对现有代码质量做的一次全面体检——不是为了推翻重来，而是为了清晰地知道什么是好的、什么需要修、什么可以再等等。
 
 ### 目标
 
-让乾枢具备 GPU 资源感知、Sizing 升维、拓扑亲和调度及碎片整理能力。
-不打穿 GPU Operator 的职责范围，专注“在已有节点上决定 GPU 任务的最优放置”。
+让乾枢具备 GPU 资源感知、Sizing 三维升维（CPU + Memory + GPU）、
+碳排放感知调度及拓扑亲和调度能力。不打穿 GPU Operator 的职责范围，
+专注”在已有节点上决定 GPU 任务的最优放置”。
+
+v3.1 完成后打 tag，然后进入 v3.2 池化实现。
 
 ### 前置任务
 
@@ -270,131 +276,177 @@ KubePivot v3.0 已具备 CPU/Memory 的部署时调度、运行时重调度及�
 
 ### 核心交付
 
+#### A. GPU 资源感知层
+
 ```
-GPU 资源感知层:
-  - 扩展 NodeInfo 结构体，新增 GPUInfo 字段：
-    型号（A100-SXM4-80GB / H100-PCIe-80GB）
-    显存总量/已用量
-    设备索引 + 健康状态
-    拓扑标记（HasNVLink / Clique / Ring）
-  - 数据来源：DCGM Exporter → Prometheus → MetricsProvider 接口
-  - 不引入 nvidia-smi 直接调用
+- 扩展 NodeInfo 结构体，新增 GPUInfo 字段：
+  型号（A100-SXM4-80GB / H100-PCIe-80GB）
+  显存总量/已用量
+  设备索引 + 健康状态
+  拓扑标记（HasNVLink / Clique / Ring）
+- 数据来源：DCGM Exporter → Prometheus → MetricsProvider 接口
+- 不引入 nvidia-smi 直接调用
+```
 
-Sizing 引擎 GPU 升维:
-  - 状态空间从 dp[cpu][mem] 升级为 dp[cpu][mem][gpu_count][gpu_mem]
-  - 稀疏化：只枚举合理组合（如 gpu_count ∈ {0,1,2,4,8}）
-  - 新增 profile=training：GPU 权重 >> CPU/Mem
-  - 显存 OOM 预测：基于历史显存曲线 + 训练阶段识别
+#### B. Sizing 引擎三维 DP 升级
 
-拓扑感知调度:
-  - AffinityScore 引入 NVLink 拓扑评分
-  - 优先将同训练任务的 Pod 调度到有 NVLink 互联的节点组
-  - 处理“卡上有显存但没卡可用”的碎片场景：调度器识别单卡任务
-    分散占用 8 卡节点的“碎片化”状态，优先将大任务（8 卡）放置到
-    连续空闲的节点
-  - 动态阈值：引入基于等待时间的衰减系数 α，当大任务等待超时后逐步
-    释放预留资源给小任务，防止饥饿
+```
+- 状态空间从 dp[cpu][mem] 升级为 dp[cpu][mem][gpu]（三维 DP）
+- 稀疏化：只枚举合理组合（如 gpu_count ∈ {0,1,2,4,8}）
+- 新增 profile=training：GPU 权重 >> CPU/Mem
+- 显存 OOM 预测：基于历史显存曲线 + 训练阶段识别
+- 三维 DP 目标：CPU + Memory + GPU 联合求解最优资源规格
+```
 
-Gang Scheduling 协作:
-  - 与 Volcano / Coscheduling 社区方案协作，不自己实现 All-or-Nothing
-  - 乾枢专注“选择最优节点组合”，生成 PodGroup 规范交给社区调度器执行
-  - 在 Cache Map 中预锁定 GPU 资源，避免竞态
+#### C. 拓扑感知调度
 
-碎片整理:
-  - 周期性检测 GPU 碎片：识别“低显存占用但阻塞大任务调度”的单卡任务
-  - 场景：某任务申领 80GB 显存实际只用 20GB，节点上有 8 卡大任务排队。
-    乾枢发出 Evict 信号，配合 Sizing 引擎给出新规格，重新调度
-  - 约束：仅处理可 Checkpoint 恢复的训练任务（框架支持），
-    不迁移不可恢复的推理服务
+```
+- AffinityScore 引入 NVLink 拓扑评分
+- 优先将同训练任务的 Pod 调度到有 NVLink 互联的节点组
+- 处理”卡上有显存但没卡可用”的碎片场景：调度器识别单卡任务
+  分散占用 8 卡节点的”碎片化”状态，优先将大任务（8 卡）放置到
+  连续空闲的节点
+- 动态阈值：引入基于等待时间的衰减系数 α，当大任务等待超时后逐步
+  释放预留资源给小任务，防止饥饿
+```
+
+#### D. Gang Scheduling 协作
+
+```
+- 与 Volcano / Coscheduling 社区方案协作，不自己实现 All-or-Nothing
+- 乾枢专注”选择最优节点组合”，生成 PodGroup 规范交给社区调度器执行
+- 在 Cache Map 中预锁定 GPU 资源，避免竞态
+```
+
+#### E. 碎片整理
+
+```
+- 周期性检测 GPU 碎片：识别”低显存占用但阻塞大任务调度”的单卡任务
+- 场景：某任务申领 80GB 显存实际只用 20GB，节点上有 8 卡大任务排队。
+  乾枢发出 Evict 信号，配合 Sizing 引擎给出新规格，重新调度
+- 约束：仅处理可 Checkpoint 恢复的训练任务（框架支持），
+  不迁移不可恢复的推理服务
+```
+
+#### F. 碳排放感知调度
+
+```
+- MetricsProvider 接口扩展 CarbonIntensityProvider（注入，非侵入）
+  - 碳强度数据来源：云厂商碳足迹 API / Electricity Maps
+  - 预留碳数据源优先级字段（未来可能多源共存）
+- CostFactor 公式扩展：
+  CostFactor = (GPUPrice × Time) + (CarbonIntensity × Power × CarbonPrice)
+- 碳成本进入调度决策的 CostFactor（默认权重 0，用户显式启用）
+- kp scheduler status 输出当前碳成本估算
+```
+
+#### G. VPA 共存模式
+
+```
+- resources.yaml sizing.mode 支持 vpa 选项
+- mode=vpa 时乾枢不干预，VPA 负责运行时调整
+- mode=auto 时乾枢部署时优化 + 周期性重调度
+- 两者通过 annotation 识别对方，避免无限循环
+```
+
+#### H. 可观测性增强
+
+```
+- kubepivot_gpu_scheduling_decisions_total（GPU 调度决策计数）
+- kubepivot_gpu_fragmentation_ratio（GPU 碎片率）
+- kubepivot_gpu_migration_total（GPU 任务迁移计数）
+- Grafana dashboard：GPU 利用率热力图 + 碎片率趋势 + 碳排放趋势
+- 告警规则：GPU 碎片率 > 40% → warning，单节点显存闲置 > 50% → warning
 ```
 
 ### 务实声明
 
 - **不替换 GPU Operator**：依赖 K8s 设备插件暴露 GPU 资源，乾枢只做调度决策
-- **不实现 Gang Scheduling 全栈**：依赖社区成熟方案，乾枢专注“选哪个节点”
+- **不实现 Gang Scheduling 全栈**：依赖社区成熟方案，乾枢专注”选哪个节点”
 - **碎片整理仅处理可恢复任务**：不可 Checkpoint 的推理服务不主动迁移
-- **不感知 IB 网络拓扑初期**：NVLink 亲和优先，IB 拓扑感知留 v3.2
+- **碳感知默认关闭**：不给用户增加无法理解的调度行为，用户显式启用后生效
+- **不感知 IB 网络拓扑**：v3.1 NVLink 亲和优先，IB 拓扑感知留后续迭代
 
 ### 验收
 
 ```
-✓ KP Sizing recommend --pod=gpu-training-pod 输出 GPU 推荐值
+✓ kp sizing recommend --pod=gpu-training-pod 输出 GPU 推荐值
+✓ 三维 DP 求解器通过 GPU 维度扩展测试
 ✓ 拓扑感知调度：8 卡训练任务的所有 Pod 被调度到同一 NVLink 组
-✓ 碎片检测：识别“有显存但无整卡”的场景并发出警告
+✓ 碎片检测：识别”有显存但无整卡”的场景并发出警告
 ✓ DCGM 数据流：Prometheus → MetricsProvider → Sizing 引擎链路畅通
+✓ kp scheduler status 展示碳排放估算
 ✓ Write-heavy Cache 基准数据输出
 ✓ make dev 全绿
 ```
 
+---
 
-## v3.2 — GPU 调度增强 + VPA 协调 + 碳感知占位（预计 2026-06，约 3 周）
+## v3.2 — 池化调度层
+
+> 设计文档：[docs/design/pooling-migration.md](docs/design/pooling-migration.md)
 
 ### 目标
 
-在 v3.1 的基础上，补全 IB 网络拓扑感知，正式支持 K8s VPA 共存模式，
-并完成能源/碳感知的架构占位（采集、展示，但不参与调度决策）。
+在 v3.1 三维 DP + GPU 调度的基础上，叠加**池化调度层**，将调度视角从
+“逐节点贪心”切换到”全局容量治理”。池是翻译层——Sizing 对着池容量决策，
+Placement 在池内做优化，Rescheduler 按池级碎片率触发迁移。
 
 ### 核心交付
 
+#### A. 池化分层拓扑
+
 ```
-IB/RDMA 网络拓扑感知:
-  - NodeInfo 扩展 NetworkTopology 字段
-  - 调度器感知节点间 IB 互联关系，优先将跨节点训练任务
-    放置在有高速互联的节点组上
-  - 与 NVLink 亲和联合评分
+- Node Pool（物理边界）：从 Node Label 推导，第一道过滤
+- CPU/Memory Pool（逻辑聚合）：Node Pool 自动投影，池级容量 + 碎片率
+- PoolInfo 数据结构 + computePoolUtilization 按池聚合计算
+- PoolScore 动态健康度字段
+```
 
-VPA 共存模式正式化:
-  - resources.yaml sizing.mode 支持 vpa 选项
-  - mode=vpa 时乾枢不干预，VPA 负责运行时调整
-  - mode=auto 时乾枢部署时优化 + 周期性重调度
-  - 两者通过 annotation 识别对方，避免无限循环
+#### B. MigrationManager 迁移执行引擎
 
-碳感知架构占位:
-  - MetricsProvider 接口扩展 CarbonIntensityProvider（注入，非侵入）
-    - 碳强度数据来源：云厂商碳足迹 API / Electricity Maps
-    - 预留碳数据源优先级字段（未来可能多源共存）
-  - CostFactor 公式扩展：
-    CostFactor = (GPUPrice × Time) + (CarbonIntensity × Power × CarbonPrice)
-  - 实现碳数据采集与 kp scheduler status 展示，但默认不参与调度决策
+```
+- Rescheduler（决策）+ MigrationManager（执行）职责分离
+- 异步迁移状态机：Evicting → WaitingForReady → Verifying → Complete
+- Pod Annotation Bundle 持久化迁移状态（7 个 key）
+- 僵尸迁移检测 + Annotation 收尾清理
+- 并发迁移数按池健康度动态调整
+```
+
+#### C. Fencing 协议（Stateful Cell）
+
+```
+- Sidecar Informer Watch 自身 Pod Annotation 感知 Fencing 阶段
+- Sidecar → 业务容器 gRPC 信号注入（ACK + 重试）
+- Point of No Return：进入 Fencing 后不允许自动回滚
+- fencing-ready: true 标记确认后推进 Complete
+```
+
+#### D. 池级碎片整理
+
+```
+- 碎片率传感器：周期性检测池内”碎片率 > 阈值”
+- 池内迁移：小 Pod 挪走腾空间给大 Pod
+- 池间迁移：高负载池 → 低负载池均衡
+- Dry-run 模式：只记录不执行，验证碎片算法稳定性
 ```
 
 ### 务实声明
 
-- **碳感知默认关闭**：v3.2 只做采集和展示，不进入调度决策主路径
-- **先优化利用率，再谈碳**：GPU 利用率从 50%→80% 本身就是最大的碳减排
-- **IB 拓扑依赖用户提供的标签或 DCGM 指标**：不实现自动拓扑发现
-- **VPA 共存是选项，不是强制**：用户自行选择 auto/manual/vpa 模式
+- **MigrationManager 做在 Controller 进程内**：共享 Informer pool + 池视图，
+  不做独立二进制，避免 dual-write 并发冲突和部署复杂度
+- **池定义来源**：v3.2 先用 Node Label 推导（人工标注），自动聚类留后续
+- **Fencing 依赖 Sidecar gRPC 接口**：需 etcd Learner sidecar 暴露 fencing 端点
 
-
-## v3.3 — 可观测性增强 + 碳感知正式化（预计 2026-07，约 2 周）
-
-### 目标
-
-在 GPU 调度稳定后，补全调度器可观测性，让 GPU 调度决策可追溯；
-正式启用碳感知功能，使之成为调度决策的可配置因子。
-
-### 核心交付
+### 验收
 
 ```
-调度器可观测性增强:
-  - kubepivot_gpu_scheduling_decisions_total（GPU 调度决策计数）
-  - kubepivot_gpu_fragmentation_ratio（GPU 碎片率）
-  - kubepivot_gpu_migration_total（GPU 任务迁移计数）
-  - Grafana dashboard：GPU 利用率热力图 + 碎片率趋势 + 碳排放趋势
-  - 告警规则：GPU 碎片率 > 40% → warning，单节点显存闲置 > 50% → warning
-
-碳感知正式化:
-  - 支持用户配置碳数据源（云厂商 API 或 Electricity Maps）
-  - 碳成本进入调度决策的 CostFactor（默认权重 0，用户显式启用）
-  - kp scheduler status 输出当前碳成本估算
-  - kp audit 记录调度决策的碳成本影响
+✓ PoolInfo 聚合计算（碎片率 / 有效容量 / PoolScore）
+✓ 池间不平衡检测 + 池内碎片率阈值触发
+✓ MigrationManager 状态机完整路径（不含 Fencing）
+✓ Dry-run 模式输出迁移建议不执行实际 evict
+✓ make dev 全绿
 ```
-
-### 务实声明
-
-- **碳感知默认关闭**：不给用户增加无法理解的调度行为
-- **碳数据不是调度的核心输入**：成本优化和利用率提升仍是主要目标，
-  碳感知是辅助决策因子，仅在用户显式启用后生效
 
 
 ## v4.0 — 平台化探索（所有商业化形式均基于 MIT 开源内核）
@@ -436,23 +488,20 @@ Org 级多租户（v4.0 候选）:
 ```
 v2.6.0 → v2.7.0 → v2.8 → v2.9 → v3.0（全部已完成，2026-04-26 ~ 04-30）
   ↓
-v3.1 GPU 基础调度（预计 2026-05/06，取决于真实 GPU 集群或 KinK 模拟环境可及性）
-  ↓
-v3.2 GPU 增强 + VPA + 碳感知占位（预计 2026-06）
-  ↓
-v3.3 可观测性 + 碳感知正式化（预计 2026-07）
+v3.1 GPU 三维 DP + 碳排放感知（当前，预计 2026-05/06）
+  ↓ 打完 v3.1 tag 后进入
+v3.2 池化调度层（预计 2026-06/07）
   ↓
 v4.0 平台化探索（触发条件满足后启动，预计 2027+）
 ```
 
 **关键依赖**：
 - v3.1 依赖真实 GPU 集群或 KinK 模拟环境用于验证；Write-heavy Cache 基准测试
-  结果决定细粒度锁改造范围
-- v3.2 碳感知架构占位独立于任何外部依赖，代码层可完成
-- v3.3 碳正式化依赖用户显式配置碳数据源，无外部依赖可交付
-
+  结果决定细粒度锁改造范围；碳排放数据源依赖云厂商 API 或 Electricity Maps
+- v3.2 依赖 v3.1 GPU 调度 + 三维 DP 稳定后叠加池化层；Fencing 协议依赖
+  etcd Learner sidecar gRPC 接口
+  
 **务实声明**：
-- 所有“预计”时间线均为单人开发的估算，实际交付日期取决于真实 GPU 集群的
-  可及性、个人精力分配、以及是否先做 v2.8.1 的收尾任务
-- v3.2 和 v3.3 均为轻量级版本（1-2 周核心开发），不是大版本
+- 所有”预计”时间线均为单人开发的估算，实际交付日期取决于真实 GPU 集群的
+  可及性、个人精力分配
 - v4.0 的启动时机不是时间驱动的，是条件驱动的

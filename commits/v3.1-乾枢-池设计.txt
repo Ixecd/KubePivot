@@ -1,10 +1,150 @@
-docs: 池化调度与迁移引擎设计文档 (v3.1 前置)
+docs(design): 乾枢池化调度与迁移引擎设计 — 从节点贪心到全局容量治理
 
-- 池化分层拓扑：Node Pool（物理隔离）→ CPU/Memory Pool（逻辑聚合）
-- In-memory + Annotation 持久化方案：池状态内存重建，迁移状态随 Pod annotation 走
-- Rescheduler（决策）+ MigrationManager（执行）职责分离 + 异步状态机
-- Stateful Cell Fencing 协议：Sidecar Informer Watch + gRPC 信号 + Point of No Return
-- 与 CBA 联动：Stateless/Stateful Cell 差异化迁移策略
-- 实施路线 v3.2-v3.3 + Dry-run 测试模式
+当前 KubePivot 调度器逐节点做 bin-packing 贪心，缺少跨节点的全局容量视图。
+碎片化（每个节点剩一点资源但拼不出完整 Pod）和维度 A/B 协同
+（Sizing ↔ Placement）都需要一个池化翻译层。
 
-关联：scheduler.md / cell-based-architecture.md
+本文定义 v3.2 池化调度层的完整架构，同时刷新 ROADMAP.md 将
+v3.1 定位为 GPU + 三维 DP + 碳排放感知，v3.2 为纯池化实现。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+池化分层拓扑
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  三层嵌套模型:
+    Node Pool（物理边界: GPU 型号 / AZ / 存储介质）
+      → CPU Pool（逻辑聚合: 池内所有 CPU 总和）
+      → Memory Pool（逻辑聚合: 池内所有 Memory 总和）
+
+  池是第一道过滤（先确定哪个 Node Pool）
+  然后 Placement 在池内做优化
+  Rescheduler 按池级碎片率触发跨节点迁移
+
+  数据结构:
+    PoolInfo.Name / Labels / Nodes / CPU / Memory / Score
+    PoolResource.Total / Used / Util / FragmentRate / Effective
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+In-memory + Annotation 持久化方案
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  池状态（碎片率 / 容量 / PoolScore）→ 全内存，重启后秒级重算
+  迁移状态 → Pod Annotation Bundle（7 个 key）:
+    migration-id / source-node / target-node / phase / start-timestamp
+    / cell-type / fencing-ready
+
+  不做 etcd Learner 持久化池状态 — 可重建的不需要持久化
+  不做独立数据库 — 违背 KubePivot "无外部依赖" 原则
+  In-flight 迁移状态随 Pod Annotation 走，Controller 重启扫 annotations 恢复
+
+  僵尸迁移清理:
+    Pod 已不存在 → 清 annotation 收尾
+    phase=Evicting 超 10min → 判定僵尸，清 annotation 重试
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Rescheduler + MigrationManager 职责分离
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Rescheduler（决策引擎）:
+    输入: 池级利用率数据
+    做: 检测不平衡 → 决定迁哪个 Pod
+    输出: evict + 打 annotation
+    运行: 周期性 ticker（5min）
+
+  MigrationManager（执行引擎）:
+    输入: Pod Watch 事件（带 migration annotation）
+    做: 跟踪迁移生命周期 → 阶段推进 / 超时回滚
+    输出: 清 annotation + 更新迁移计数器
+    运行: Watch + Reconcile（持续）
+
+  两组件不互相调用，通过池状态 + Pod annotations 松耦合
+  MigrationManager 做在 Controller 进程内（package），不做独立二进制
+    — 共享 Informer pool + 池视图，无 dual-write 冲突
+
+  异步迁移状态机:
+    Evicting → WaitingForReady → Verifying → Complete
+            ← Rollback（超时 5min）  ↑ Stateful 专属
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Fencing 协议（Stateful Cell 迁移隔离）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Sidecar Informer Watch 自身 Pod Annotation
+    → 感知 migration-phase: Verifying
+    → gRPC 信号注入业务容器（ACK + 重试）
+    → 业务容器排空 + Flush
+    → Sidecar 打 fencing-ready: true
+    → MigrationManager 推进 Complete
+
+  Point of No Return:
+    Stateful 迁移一旦进入 Verifying，原则上不允许自动回滚
+    超时 → Manual-Intervention + 高警报
+    原因: 旧 Pod 数据可能已部分失效，自动回滚 = split-brain 风险
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ROADMAP 刷新
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  v3.1: GPU 调度 + 三维 DP（CPU/Mem/GPU）+ 碳排放感知
+    → 完成后打 v3.1 tag
+  v3.2: 池化调度层（本设计的实现）
+    → v3.1 tag 后进入
+  删掉原 v3.3，碳排放正式化和可观测性合入 v3.1
+
+  路线逻辑:
+    GPU（单维补全）→ 三维 DP（维度升级）→ 碳感知（调度策略）
+    → tag → 池化（全局容量治理）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+设计拍板记录
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Q1: 池状态存哪里？
+    选项 A: etcd Learner sidecar 持久化
+    选项 B: In-memory + Pod Annotation 标记
+    拍板: B — 可重建的不需要持久化，in-flight 状态随 K8s 对象走
+    理由: 不引入新存储依赖，Controller 重启秒级重建池视图
+
+  Q2: MigrationManager 独立二进制还是 Controller 进程内？
+    选项 A: 独立二进制（故障隔离）
+    选项 B: Controller 进程内 package
+    拍板: B — 共享 Informer pool + 池视图，无 dual-write 冲突
+    理由: 独立二进制引入 IPC 复杂度 + 部署负担，违背清爽感
+
+  Q3: 外部独立调度器 vs Scheduling Framework 插件？
+    选项 A: 外部调度器（Webhook + Rescheduler）
+    选项 B: K8s Scheduling Framework 插件
+    拍板: A — 池化需要全局持久状态 + Rescheduler 主动驱逐
+    理由: 插件模型无状态，做不了碎片率驱动的迁移闭环
+
+  Q4: Fencing 信号方式？
+    选项 A: Sidecar 轮询 Annotation
+    选项 B: Sidecar Informer Watch + gRPC
+    拍板: B — 复用现有 Informer，gRPC 有 ACK 语义保证送达
+
+  Q5: 池定义边界谁定？
+    选项 A: 纯 Node Label 推导
+    选项 B: 自动聚类（resource profile）
+    拍板: A 为主，B 作为后续 opt-in — v3.2 先落地
+
+  Q6: 并发迁移数控制？
+    选项 A: 固定上限
+    选项 B: 按池健康度动态调整
+    拍板: B — poorScore < 0.5 降为 1，与 degradeLevel 机制一致
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  docs/design/pooling-migration.md   新增 ~394 行 (池化调度与迁移引擎设计)
+  ROADMAP.md                          更新 v3.1/v3.2 路线图
+
+合计: 1 个新文件 + 1 个文件更新
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+池是翻译层 — Sizing 对着池容量做决策，Placement 在池内做优化，
+Rescheduler 按池级碎片率触发迁移。
+外部独立调度器路线是池化的唯一解。
