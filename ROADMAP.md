@@ -382,19 +382,47 @@ v3.1 完成后打 tag，然后进入 v3.2 池化实现。
 
 ---
 
-## v3.2 — 池化调度层
+## v3.2 — Informer KV Cache + 池化调度层
 
-> 设计文档：[docs/design/pooling-migration.md](docs/design/pooling-migration.md)
+> 设计文档：[docs/design/informer-kv-cache.md](docs/design/informer-kv-cache.md) / [docs/design/pooling-migration.md](docs/design/pooling-migration.md)
 
 ### 目标
 
-在 v3.1 三维 DP + GPU 调度的基础上，叠加**池化调度层**，将调度视角从
-“逐节点贪心”切换到”全局容量治理”。池是翻译层——Sizing 对着池容量决策，
-Placement 在池内做优化，Rescheduler 按池级碎片率触发迁移。
+v3.2 分两阶段推进：先做 **Informer KV Cache**，把调度器数据通路从
+“kubectl → JSON → parse”压缩成”内存 map → O(1) 读”，再做**池化调度层**，
+将调度视角从”逐节点贪心”切换到”全局容量治理”。
+
+顺序逻辑：池化需要频繁扫全集群 Pod/Node 算池级聚合（碎片率、PoolScore）。
+KV Cache 不落地，池化层就得每 5min 打一次 kubectl 全量查询——1000 Pod
+场景下 JSON 解析是纯浪费。KV Cache 先把数据通路修好，池化层坐享 O(1) 读。
+
+实际执行节奏（交替推进，非严格串行）：
+
+```
+KV Cache Phase 1-2 (数据结构 + Watch 接线)
+  → 池化 A（PoolInfo + computePoolUtilization，直接读 cache）
+  → 池化 B（池间不平衡检测 + 碎片率）
+  → KV Cache Phase 3-4 (InformerAdapter 切换 + 默认启用)
+  → 池化 C-D（MigrationManager + Fencing + Dry-run）
+```
 
 ### 核心交付
 
-#### A. 池化分层拓扑
+#### A. Informer KV Cache（先导）
+
+```
+- PodCache + NodeCache: map[string]*PodInfo + byNode 二级索引
+- 双缓冲 PutBulk: 持锁 341ms → 纳秒级指针交换
+- MODIFIED Fast Pre-check: 调度字段无变化跳写锁 + 通知
+- atomicUpdate() 封装: pods + byNode 联合原子更新
+- 410 Gone 重建: 先建完整新快照，再原子替换
+- Go map 内存压缩: fragmentation_ratio 指标 + PutBulk 强制压缩
+- InformerAdapter: 实现 PodLister/NodeLister，影子降级到 kubectlAdapter
+- Subscribe 回调 + 30s debounce + BulkResync jitter
+- 7 个监控指标（含 Watch Heartbeat stale 检测）
+```
+
+#### B. 池化分层拓扑
 
 ```
 - Node Pool（物理边界）：从 Node Label 推导，第一道过滤
@@ -403,7 +431,7 @@ Placement 在池内做优化，Rescheduler 按池级碎片率触发迁移。
 - PoolScore 动态健康度字段
 ```
 
-#### B. MigrationManager 迁移执行引擎
+#### C. MigrationManager 迁移执行引擎
 
 ```
 - Rescheduler（决策）+ MigrationManager（执行）职责分离
@@ -413,7 +441,7 @@ Placement 在池内做优化，Rescheduler 按池级碎片率触发迁移。
 - 并发迁移数按池健康度动态调整
 ```
 
-#### C. Fencing 协议（Stateful Cell）
+#### D. Fencing 协议（Stateful Cell）
 
 ```
 - Sidecar Informer Watch 自身 Pod Annotation 感知 Fencing 阶段
@@ -422,7 +450,7 @@ Placement 在池内做优化，Rescheduler 按池级碎片率触发迁移。
 - fencing-ready: true 标记确认后推进 Complete
 ```
 
-#### D. 池级碎片整理
+#### E. 池级碎片整理
 
 ```
 - 碎片率传感器：周期性检测池内”碎片率 > 阈值”
@@ -490,7 +518,7 @@ v2.6.0 → v2.7.0 → v2.8 → v2.9 → v3.0（全部已完成，2026-04-26 ~ 04
   ↓
 v3.1 GPU 三维 DP + 碳排放感知（当前，预计 2026-05/06）
   ↓ 打完 v3.1 tag 后进入
-v3.2 池化调度层（预计 2026-06/07）
+v3.2 Informer KV Cache → 池化调度层（预计 2026-06/07）
   ↓
 v4.0 平台化探索（触发条件满足后启动，预计 2027+）
 ```
@@ -498,8 +526,8 @@ v4.0 平台化探索（触发条件满足后启动，预计 2027+）
 **关键依赖**：
 - v3.1 依赖真实 GPU 集群或 KinK 模拟环境用于验证；Write-heavy Cache 基准测试
   结果决定细粒度锁改造范围；碳排放数据源依赖云厂商 API 或 Electricity Maps
-- v3.2 依赖 v3.1 GPU 调度 + 三维 DP 稳定后叠加池化层；Fencing 协议依赖
-  etcd Learner sidecar gRPC 接口
+- v3.2 KV Cache 依赖 Informer Watch 流已稳定（v2.7.0 落地）；池化层依赖
+  KV Cache 提供 O(1) Pod/Node 查询；Fencing 协议依赖 etcd Learner sidecar gRPC 接口
   
 **务实声明**：
 - 所有”预计”时间线均为单人开发的估算，实际交付日期取决于真实 GPU 集群的

@@ -1,0 +1,86 @@
+docs(design): Informer KV Cache 设计 — 从 Skeleton 到完整资源对象
+
+当前 Informer Watch Pod/Node 但只存 Skeleton 元数据，scheduler 每 5min
+重复打 kubectl 全量查询同一批数据——两套数据通路各跑各的，Watch 流浪费。
+
+本设计将 Informer Hot 层从 Skeleton cache 升级为 KV cache（PodCache +
+NodeCache），通过 InformerAdapter 实现 PodLister/NodeLister 接口，
+scheduler 从 kubectlAdapter 切换到内存 O(1) 读。同时为池化层提供
+高速数据通路（池化需频繁扫全集群算碎片率）。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+KV Cache 核心设计
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  数据结构:
+    PodCache: map[string]*PodInfo + byNode 二级索引
+    NodeCache: map[string]*NodeInfo
+    "完整" = 调度字段（CPU/Mem/GPU/Phase/Labels），非 K8s 全字段
+    字段裁剪: managedFields/ownerReferences/conditions 全剔除
+    CPU 用 int32 压内存（limits.go 单测防溢出）
+
+  写入优化:
+    PutBulk 双缓冲: 内存构造 newMap → 指针交换（持锁 341ms → 纳秒）
+    MODIFIED Fast Pre-check: 调度字段无变化直接 return，跳写锁 + 通知
+    atomicUpdate() 封装: pods + byNode 必须在同一闭包内更新
+    410 Gone: 先建完整新快照，再原子替换（调度器读不到残缺快照）
+    Go map 内存压缩: fragmentation_ratio > 3 触发 PutBulk 强制压缩
+
+  读取路径:
+    InformerAdapter 实现 PodLister/NodeLister
+    影子降级: cache.ready==false → 透传 kubectlAdapter
+
+  Subscribe 事件驱动:
+    CacheSubscriber 接口 + CacheChangeEvent
+    30s debounce + BulkResync jitter (0-5s)
+    Keys 去重 Set 语义 + 以 cache 当前态为准
+
+  监控指标:
+    pods_total / nodes_total / hit_total / stale_seconds (Heartbeat)
+    / watch_restarts / bulk_insert_ms / fragmentation_ratio
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+client-go 对比鞭尸 😋
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  | KubePivot Informer KV | client-go Indexer |
+  | ~500B/Pod (纯调度字段)   | ~1200B/Pod (全展开) |
+  | 手写 byNode 二级索引       | 多级 IndexFunc + sets.String overhead |
+  | 只 extract resource reqs  | 全 JSON deserialize |
+  | 0 外部依赖                | client-go + 14 传递依赖 |
+  | Cache Get 14.5ns          | 基准更慢 |
+  | Cold Start 4.6x faster    | 基准 |
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ROADMAP 刷新
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  v3.2: Informer KV Cache（先导）→ 池化调度层
+  顺序逻辑: 池化需频繁扫全集群算聚合，KV Cache 先修数据通路
+  执行节奏: 交替推进（KV Cache P1-2 → 池化 A-B → KV Cache P3-4 → 池化 C-E）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+五轮迭代记录（qc 深度反馈）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  初版: PodCache/NodeCache + InformerAdapter + design Q
+  漏招补全: MODIFIED 跨节点索引 / 双缓冲 / 410 Gone / 影子降级 / 监控指标 / Subscribe
+  深度对齐: 字段裁剪清单 + BulkResync 事件类型
+  底层陷阱: Go map 压缩 / Fast Pre-check / atomicUpdate / Heartbeat stale / CPU int32 溢出
+  顺序性: Keys=Set + BulkResync jitter + 以 cache 当前态为准
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  docs/design/informer-kv-cache.md   新增 ~450 行 (KV Cache 设计)
+  ROADMAP.md                          更新 v3.2: KV Cache 先导 + 池化
+
+合计: 1 个新文件 + 1 个文件更新
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+一次 kubectl 都不打——Informer Watch 的数据，调度器直接用。
+KV Cache 是池化层的高速路基，先修路再跑车。
