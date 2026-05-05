@@ -12,7 +12,7 @@ import (
 
 // ─── KubectlMetricsClient ─────────────────────────────────────────
 //
-// 基于 kubectl top 实现 MetricsClient。
+// 基于 kubectl get --raw /apis/metrics.k8s.io/ 实现 MetricsClient。
 //
 // 优势：
 //   - 几乎所有 K8s 集群都有 metrics-server（kubectl top 兜底）
@@ -28,7 +28,7 @@ import (
 //   - PrometheusClient 提供历史 + 高分辨率
 //   - 调用方按需选择（topology fallback）
 
-// KubectlMetricsClient 通过 kubectl top 实现 MetricsClient。
+// KubectlMetricsClient 通过 kubectl get --raw /apis/metrics.k8s.io/ 实现 MetricsClient。
 //
 // kubectl 字段是可注入函数，方便测试 mock。
 // 生产时默认使用 executor.GetExecutor().Kubectl。
@@ -54,9 +54,9 @@ func NewKubectlMetricsClient(kubeconfig string) *KubectlMetricsClient {
 	}
 }
 
-// ─── kubectl top 输出 JSON 结构 ─────────────────────────────────
+// ─── metrics API JSON 结构 ──────────────────────────────────────
 
-// kubectl top pod -o json 输出格式（v1.21+）：
+// kubectl get --raw /apis/metrics.k8s.io/v1beta1/... 输出格式：
 //
 //	{
 //	  "kind": "PodMetricsList",
@@ -206,25 +206,36 @@ func (c *KubectlMetricsClient) ListNodeMetrics(ctx context.Context) ([]*NodeMetr
 
 // ─── 工具函数 ────────────────────────────────────────────────────
 
-// kubectlTop 调用 kubectl top 子命令。
+// kubectlTop 通过 kubectl get --raw 调 metrics API 获取指标 JSON。
 //
 // resource: "pod" / "node"
 // name:     具体资源名，空表示 list 所有
-// namespace: 仅 pod 有效，空表示当前 ns（list 时空 → "" → 当前 ns）
+// namespace: 仅 pod 有效
 //
 // 错误处理：
 //   - "not found" 错误 → 包装为 ErrNotFound
 //   - 其他错误 → 透传
 func (c *KubectlMetricsClient) kubectlTop(ctx context.Context, resource, name, namespace string) ([]byte, error) {
-	args := []string{"top", resource}
-	if name != "" {
-		args = append(args, name)
+	// kubectl top 不支持 -o json（v1.33+），改用 raw metrics API
+	var path string
+	switch resource {
+	case "pod":
+		if name != "" {
+			path = fmt.Sprintf("/apis/metrics.k8s.io/v1beta1/namespaces/%s/pods/%s", namespace, name)
+		} else {
+			path = fmt.Sprintf("/apis/metrics.k8s.io/v1beta1/namespaces/%s/pods", namespace)
+		}
+	case "node":
+		if name != "" {
+			path = fmt.Sprintf("/apis/metrics.k8s.io/v1beta1/nodes/%s", name)
+		} else {
+			path = "/apis/metrics.k8s.io/v1beta1/nodes"
+		}
+	default:
+		return nil, fmt.Errorf("metrics: unsupported resource: %s", resource)
 	}
-	if namespace != "" && resource == "pod" {
-		args = append(args, "-n", namespace)
-	}
-	args = append(args, "--output", "json")
 
+	args := []string{"get", "--raw", path}
 	out, err := c.kubectl(ctx, c.kubeconfig, args...)
 	if err != nil {
 		// kubectl 把 "not found" 写到 stderr，error 含 "NotFound" 关键字
@@ -232,8 +243,8 @@ func (c *KubectlMetricsClient) kubectlTop(ctx context.Context, resource, name, n
 		if strings.Contains(errMsg, "NotFound") || strings.Contains(errMsg, "not found") {
 			return nil, ErrNotFound
 		}
-		return nil, fmt.Errorf("metrics: kubectl top %s: %w (output: %s)",
-			resource, err, truncate(string(out), 200))
+		return nil, fmt.Errorf("metrics: kubectl get --raw %s: %w (output: %s)",
+			path, err, truncate(string(out), 200))
 	}
 	return out, nil
 }

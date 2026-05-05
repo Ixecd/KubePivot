@@ -1,10 +1,10 @@
 FROM eclipse-temurin:21-jdk-alpine AS builder
+RUN apk add --no-cache gradle
 WORKDIR /app
-COPY build.gradle.kts gradlew ./
-COPY gradle/ ./gradle/
-RUN chmod +x gradlew && ./gradlew dependencies --no-daemon
+COPY build.gradle.kts .
+RUN gradle dependencies --no-daemon
 COPY src/ ./src/
-RUN ./gradlew buildFatJar --no-daemon
+RUN gradle buildFatJar --no-daemon
 
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app

@@ -171,6 +171,7 @@ ETCD_ENDPOINTS=
 	renameDir(filepath.Join(outputDir, "deployments", "project"), filepath.Join(outputDir, "deployments", kebabName))
 	renameDir(filepath.Join(outputDir, "deployments", "dev-toolkit"), filepath.Join(outputDir, "deployments", kebabName))
 	fixChartYAMLs(outputDir, kebabName)
+	writeHelmTemplateSkeleton(outputDir, kebabName)
 
 	// Git init
 	runInDir(outputDir, "git", "init", "--initial-branch=Master")
@@ -253,8 +254,6 @@ ETCD_ENDPOINTS=
 			_ = replaceInDir(filepath.Join(outputDir, ".githooks"), map[string]string{module: "github.com/Ixecd/kubepivot"})
 			replaceInDir(filepath.Join(outputDir, "deployments"), map[string]string{"project": kebabName})
 
-			writeHelmTemplateSkeleton(outputDir, kebabName)
-
 			runInDir(outputDir, "go", "get", "github.com/stretchr/testify@latest")
 			runInDir(outputDir, "go", "get", "github.com/golang-jwt/jwt/v5")
 			runInDir(outputDir, "go", "get", "golang.org/x/crypto/bcrypt")
@@ -263,7 +262,24 @@ ETCD_ENDPOINTS=
 		}
 	}
 
-	// Phase 3: 成功消息
+	// 非 Go 语言：替换为多语言 Makefile + 整理 Dockerfile 路径
+	if opts.Lang != "" && opts.Lang != LangGo {
+		// 替换 Go Makefile 为多语言 Makefile（仅部署相关 target）
+		writePolyglotMakefile(outputDir, kebabName, module)
+		// Dockerfile + .dockerignore 从根目录移到 build/docker/<name>/
+		dockerDir := filepath.Join(outputDir, "build", "docker", kebabName)
+		os.MkdirAll(dockerDir, 0755)
+		if _, err := os.Stat(filepath.Join(outputDir, "Dockerfile")); err == nil {
+			os.Rename(filepath.Join(outputDir, "Dockerfile"),
+				filepath.Join(dockerDir, "Dockerfile"))
+		}
+		if _, err := os.Stat(filepath.Join(outputDir, ".dockerignore")); err == nil {
+			os.Rename(filepath.Join(outputDir, ".dockerignore"),
+				filepath.Join(dockerDir, ".dockerignore"))
+		}
+	}
+
+// Phase 3: 成功消息
 	friendly := strings.Replace(friendlyPath(outputDir), kebabName, name, -1)
 	fmt.Fprintf(opts.Stdout, "✅ 项目已成功生成！\n\n")
 	fmt.Fprintf(opts.Stdout, "  路径    %s\n", friendly)
@@ -607,6 +623,31 @@ func walkEmbedDir(fs embed.FS, dir, outputDir, name string) error {
 		}
 	}
 	return nil
+}
+
+// writePolyglotMakefile 为非 Go 项目写最小 Makefile，仅支持 deploy.build / deploy.push。
+func writePolyglotMakefile(outputDir, name, module string) error {
+	content := fmt.Sprintf(`# %s — KubePivot 多语言项目 Makefile
+
+ROOT_DIR := $(shell pwd)
+VERSION ?= v0.1.0
+ARCH ?= amd64
+REGISTRY_PREFIX ?= qingchun22
+PROJECT_NAME := %s
+MODULE_PATH := %s
+DOCKERFILE := build/docker/$(PROJECT_NAME)/Dockerfile
+
+include scripts/make-rules/deploy.mk
+
+.PHONY: deploy.build deploy.push
+deploy.build:
+	@docker build -t $(REGISTRY_PREFIX)/$(PROJECT_NAME)-$(ARCH):$(VERSION) -f $(DOCKERFILE) .
+
+deploy.push:
+	@docker push $(REGISTRY_PREFIX)/$(PROJECT_NAME)-$(ARCH):$(VERSION)
+`, name, name, module)
+
+	return os.WriteFile(filepath.Join(outputDir, "Makefile"), []byte(content), 0644)
 }
 
 // friendlyPath 把绝对路径转成用户友好的形式

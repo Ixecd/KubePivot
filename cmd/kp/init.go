@@ -21,7 +21,9 @@ func Root() (string, error) {
 	}
 	dir := cwd
 	for {
-		if fileExists(filepath.Join(dir, "Makefile")) {
+		// Makefile（Go 项目）或 project.env（多语言项目）
+		if fileExists(filepath.Join(dir, "Makefile")) ||
+			fileExists(filepath.Join(dir, "configs", "project.env")) {
 			return dir, nil
 		}
 		parent := filepath.Dir(dir)

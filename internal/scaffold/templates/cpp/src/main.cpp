@@ -1,17 +1,15 @@
-#include <drogon/drogon.h>
-using namespace drogon;
+#include <httplib.h>
 
 int main() {
-    app().registerHandler("/healthz", [](const HttpRequestPtr&,
-        std::function<void(const HttpResponsePtr&)>&& callback) {
-        Json::Value ret; ret["status"] = "ok";
-        callback(HttpResponse::newHttpJsonResponse(ret));
+    httplib::Server svr;
+
+    svr.Get("/healthz", [](const httplib::Request&, httplib::Response& res) {
+        res.set_content("{\"status\":\"ok\"}", "application/json");
     });
-    app().registerHandler("/", [](const HttpRequestPtr&,
-        std::function<void(const HttpResponsePtr&)>&& callback) {
-        Json::Value ret; ret["service"] = "{{name}}"; ret["status"] = "ok";
-        callback(HttpResponse::newHttpJsonResponse(ret));
+
+    svr.Get("/", [](const httplib::Request&, httplib::Response& res) {
+        res.set_content("{\"service\":\"{{name}}\",\"status\":\"ok\"}", "application/json");
     });
-    app().addListener("0.0.0.0", 8080).run();
-    return 0;
+
+    svr.listen("0.0.0.0", 8080);
 }

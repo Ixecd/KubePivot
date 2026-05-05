@@ -109,12 +109,10 @@ func TestKubectlMetricsClient_GetPodMetrics_Success(t *testing.T) {
 		t.Errorf("TotalMemory=%d, want %d", pm.TotalMemory.Value, expectedMem)
 	}
 
-	// 验证调用参数
-	if !contains(mock.gotArgs, "top") || !contains(mock.gotArgs, "pod") || !contains(mock.gotArgs, "myapp-abc") {
-		t.Errorf("kubectl args 错误: %v", mock.gotArgs)
-	}
-	if !contains(mock.gotArgs, "--output") || !contains(mock.gotArgs, "json") {
-		t.Errorf("kubectl args 缺 --output json: %v", mock.gotArgs)
+	// 验证调用参数：走 raw API，不再用 kubectl top
+	lastArg := mock.gotArgs[len(mock.gotArgs)-1]
+	if !strings.Contains(lastArg, "/apis/metrics.k8s.io/") || !strings.Contains(lastArg, "myapp-abc") {
+		t.Errorf("kubectl args 应走 raw API 且含 pod 名: %v", mock.gotArgs)
 	}
 }
 

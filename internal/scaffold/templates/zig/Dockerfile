@@ -3,7 +3,7 @@ RUN apk add --no-cache zig
 WORKDIR /app
 COPY build.zig .
 COPY src/ ./src/
-RUN zig build-exe src/main.zig -O ReleaseSafe -target x86_64-linux-musl --static
+RUN zig build-exe src/main.zig -O ReleaseSafe -target native-native-musl --static
 
 FROM scratch
 COPY --from=builder /app/main /app

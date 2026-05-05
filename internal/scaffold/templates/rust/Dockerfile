@@ -1,9 +1,11 @@
 FROM rust:1.85-alpine AS builder
 RUN apk add --no-cache musl-dev
 WORKDIR /app
-COPY Cargo.toml Cargo.lock ./
+# 仅缓存依赖（假 main.rs）
+COPY Cargo.toml Cargo.lock* ./
 RUN mkdir src && echo 'fn main() {}' > src/main.rs
-RUN cargo build --release
+RUN cargo fetch
+# 替换为真实源码并编译
 RUN rm -rf src
 COPY src/ ./src/
 RUN cargo build --release

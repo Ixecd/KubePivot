@@ -1,0 +1,31 @@
+feat(scaffold): 多语言模板全链路 init→build→deploy→自愈 验证通过
+
+脚手架架构修复：
+  - writeHelmTemplateSkeleton 从 Go case 提到 Phase 1，所有语言共享 Helm chart
+  - 非 Go 语言 Dockerfile 自动搬迁到 build/docker/<name>/Dockerfile
+  - 非 Go 语言写入精简 Makefile（deploy.build → docker build，不碰 golang.mk）
+  - Root() 项目根检测新增 configs/project.env 标记（非 Go 项目兼容）
+  - embedded_templates 恢复 .gitignore + Makefile
+
+模板 Dockerfile 修复：
+  - C++：Drogon → cpp-httplib（单头文件 FetchContent，零系统依赖，8 行 Dockerfile）
+  - Java：apt-get add maven（eclipse-temurin 不含 Maven）
+  - Kotlin：gradlew → apt-get add gradle（模板缺 gradlew wrapper）
+  - Rust：cargo build → cargo fetch（避免假 main.rs 编译缓存导致退出码 0）
+  - Zig：-target x86_64-linux-musl → native-native-musl（ARM64 兼容）
+
+metrics 修复：
+  - kubectl top pod -o json → kubectl get --raw /apis/metrics.k8s.io/
+    （kubectl v1.33+ 不再支持 kubectl top -o json）
+  - kubectl_test.go 断言同步
+
+文档：
+  - templates/README.md — 维护策略（Go/Python/Rust/C++）+ Dockerfile 约定
+  - commits/README.md — tag→实现→tag 发布节奏 + 主次版本号规范
+  - watcher 重连日志 WARN→INFO（正常运维行为不吓人）
+
+测试：
+  - tools/test_multi_lang.sh 重写：结构验证 + helm template 离线校验 + make deploy.build
+  - 18 个 Recommend() 单测全覆盖
+
+验证：kp init --lang cpp → make deploy.build → kp deploy → 手动删 Deployment → 自愈重建 ✊
