@@ -27,7 +27,7 @@ func runExplain(args []string) {
 	}
 
 	if *listPods {
-		listManagedPods(*namespace)
+		listManagedPods()
 		return
 	}
 
@@ -42,7 +42,7 @@ func runExplain(args []string) {
 }
 
 // listManagedPods 输出所有 managed pod 名称（一行一个，shell completion 用）。
-func listManagedPods(namespace string) {
+func listManagedPods() {
 	// 获取 managed namespace 列表
 	nsOut, err := execKubectl("get", "namespace",
 		"-l", "kubepivot.io/managed=true",

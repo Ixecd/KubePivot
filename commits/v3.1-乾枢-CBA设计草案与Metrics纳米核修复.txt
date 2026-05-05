@@ -1,0 +1,22 @@
+fix(metrics): 支持 K8s nanocores CPU 单位 + CBA 设计草案
+
+metrics 修复：
+  - quantity.go cpuMultiplier 新增 "n"（nanocores）和 "u"（microcores）
+  - K8s metrics API 对极低 CPU 用量返回 nanocores 格式（如 320509n）
+  - nanocores < 1 milli-core 向下取 0（对 sizing 无实际影响）
+
+CBA 设计文档：
+  - docs/design/cell-based-architecture.md（新）— 从 FUTURE.md F1 种子演化
+  - 1D→2D 架构、Cell-to-Pod 映射、Stateless/Stateful 故障策略差异
+  - §4 Workload-class 自动判定（CRD OwnerReference 递归 + Annotation 逃生舱）
+  - §5 Handover 协议（Warm-up + 原子切换 + Fencing 防脑裂 + 并发槽位）
+  - §6 Sidecar etcd 数据预热 Gate + 相对健康度（全集群变慢时不死锁）
+  - §7 可观测性：Holding 状态 + 审计日志
+  - §8 迁移成本量化模型
+
+FUTURE.md：
+  - 版本号 v2.7/v2.8 → v3.1/v3.2+
+  - 适用前提更新：StatefulSet + etcd Learner 已落地
+  - 重新评估时机调整为 v3.2+ 设计阶段
+
+死代码清理：移除未使用的函数参数

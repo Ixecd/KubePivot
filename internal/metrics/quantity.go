@@ -66,6 +66,8 @@ func (q Quantity) IsZero() bool {
 //   "1k"   → Base=1,   Multiplier=1e6   → 1,000,000 milli-cores（1000 cores）
 var cpuMultiplier = map[string]int64{
 	"":  1000, // 无单位 = cores（默认）
+	"n": 0,    // nanocores → < 1 milli-core，向下取 0
+	"u": 0,    // microcores → < 1 milli-core，向下取 0
 	"m": 1,    // milli-cores
 	"k": 1000 * 1000,
 	"M": 1000 * 1000 * 1000,
@@ -106,9 +108,10 @@ var memoryMultiplier = map[string]int64{
 //   "1.5"    → 1500
 //   "0.5"    → 500
 //   "2k"     → 2,000,000
+//   "320509n"→ 0（nanocores < 1 milli-core，向下取 0）
 //   ""       → 0（空字符串视为 0，方便测试）
 //
-// 不支持：负数 / 科学计数法 / 未知单位
+// 不支持：负数 / 科学计数法
 func parseCPU(s string) (Quantity, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {

@@ -210,12 +210,3 @@ func TestTruncate(t *testing.T) {
 		t.Errorf("长字符串应截断, got %q", got)
 	}
 }
-
-func contains(slice []string, s string) bool {
-	for _, x := range slice {
-		if x == s {
-			return true
-		}
-	}
-	return false
-}
