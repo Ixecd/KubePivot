@@ -33,6 +33,29 @@ GPU 调度不是新建一个调度器，而是给乾枢加一个维度。当前�
 - ❌ 不引入 GPU 监控大盘——DCGM → Prometheus → Grafana，KubePivot 不画图
 - ❌ 不做 GPU 共享（MPS/TimeSlicing）——v3.1 聚焦整卡调度，共享留 v3.2
 
+### 1.3 关键设计边界：三维 DP 仅对 training profile 升维
+
+Web 服务（profile=web/batch/db）不涉及 GPU，走现有 2D DP（cpu+mem）即可。
+只有以下条件同时满足时才激活三维 DP（cpu+mem+gpu）：
+
+1. `resources.yaml` 声明了 `gpu` 字段（`gpu.count > 0` 或 `gpu.memory > 0`）
+2. sizing profile 为 `training`
+
+**Solver 入口逻辑**：
+
+```
+if pod.Resources.GPU != nil && pod.Profile == "training":
+    dp3D(cpu, mem, gpu)
+else:
+    dp2D(cpu, mem)  // 现有路径，无变化
+```
+
+**理由**：
+- 状态空间控制：二维 DP 的 `dp[c][m]` 状态数为 80×128=10240，加 GPU 维度后至少翻倍。
+  全体 Pod 无条件升维会造成不必要的矩阵膨胀，拖慢非 GPU 场景的调度速度。
+- 语义正确：Web 服务没有 GPU 需求，GPU 维度对它毫无意义，硬塞进求解器只会增加噪声。
+- 不影响已有行为：web/batch/db 类服务继续走 v3.0 的二 DP 路径，零回归风险。
+
 ---
 
 ## 二、架构：在乾枢上加一维

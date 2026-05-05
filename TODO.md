@@ -88,20 +88,29 @@ minor  新功能落地（v3.0 → v3.1）
 
 ## ⏳ 当前进行中（v3.1 → v3.2）
 
-### 优先级 1：决策系统收尾
+### 优先级 1：Rescheduler + CLI ✅ 已完成
 
 ```
-[ ] Rescheduler Pod 驱逐（Eviction API）
-    当前仅标记 NodeName，未实际驱逐 Pod
-    internal/scheduler/rescheduler.go migratePods()
-    → 调 policy/v1 Eviction API 或 kubectl drain
-    工作量：~1 天
+✅ Rescheduler Pod 驱逐（Eviction API）
+    evictPodFunc 函数变量注入 → kubectl delete pod --grace-period=30 --wait=false
+    Rescheduler.RunOnce() 手动触发接口
+    see: b891c40
 
-[ ] kp scheduler 独立 CLI
-    cmd/kp/scheduler.go 不存在
-    → runScheduler() + kp scheduler status/recommend/apply
-    → 接入 internal/scheduler/ 既有引擎
-    工作量：~2 天
+✅ kp scheduler 独立 CLI
+    kp scheduler status   — 集群利用率 + 节点/Pod 统计
+    kp scheduler reschedule — 手动触发一次重调度
+    computeClusterSummary() 抽取为可测函数
+    see: b891c40
+```
+
+### 当前聚焦：GPU + 三维 DP + 碳排放感知
+
+```
+[ ] GPU 资源感知层 — DCGM Exporter → PrometheusClient → NodeInfo.GPUInfo
+[ ] Sizing 引擎三维 DP — dp[cpu][mem] → dp[cpu][mem][gpu]（仅 profile=training）
+    关键边界：Web 服务（profile=web/batch/db）不走 GPU 维度，保持 2D DP
+    只有 resources.yaml 声明 gpu 字段 + profile=training 才激活三维 DP
+[ ] 碳排放感知 — CarbonIntensityProvider + kp scheduler status 展示
 ```
 
 ### 优先级 2：sizing 链路完善

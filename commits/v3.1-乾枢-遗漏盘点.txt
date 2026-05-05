@@ -1,0 +1,70 @@
+docs: FORGET.md 设计遗漏总盘点 + TODO 刷新 + GPU 三维 DP 边界
+
+扫描 docs/design/ 下 34 个设计文档，提取 81 条未实现/未验证/未拍板条目，
+分六类归档到 FORGET.md 作为项目记忆外挂。同时刷新 TODO.md 反映 v3.1 当前
+聚焦（GPU + 三维 DP + 碳排放），并在 gpu-scheduling-draft.md 明确关键边界。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FORGET.md — 81 条遗漏点
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  一、v3.1 已设计未实现（1-33）
+    Scheduler/Rescheduler: kp sizing recommend 独立 CLI / 自动 apply / 批量报告
+    Controller: OOM/CrashLoop 自愈 / Prometheus exporter / K8s Lease 选举
+    Event Stream: Bench 3 / lock-free Hot layer / OnShardChanged / Cold layer
+    Traffic: ConfigMap 清理 / 版本签名 / 新鲜度 / --sync-to-git / --from-env
+    Sandbox/Warmup: SIMULATING / PVC snapshot / Istio/NGINX weight patch
+    其他: 11 语言脚手架 / kp doctor --dockerfiles / kp self-update
+
+  二、v3.2 池化依赖（34-40）
+    PoolInfo / 池间检测 / Annotation Bundle / MigrationManager / Fencing / Dry-run
+
+  三、已完成未验证（41-49）
+    多集群 e2e / 跨云 / 大规模 100+ ns / GPU 拓扑 / H100/B200 兼容 / 24h 长稳
+    / Event Stream 生产环境 / client-go 对比基准 / Performance cube
+
+  四、已设计未拍板（50-56）
+    CBA / ai-plan 2.0 / kp controller update / canary 全功能 / GPU sharing
+    / 碳感知正式化 / KinK
+
+  五、已知局限（57-74）
+    FNV hash 不均 / shard 切换 10s gap / Lease 竞争 / Quota 不均
+    / 跨 ns 依赖不支持 / per-service rollback / controller chart 默认 disabled
+    / etcd emptyDir / IAM groups 未填充 / audit 无轮转 / teams.yaml 注释丢失
+    / audit-auth 隐式耦合 / Controller 内部权限不暴露 / etcd IAM 未激活
+    / NFS PV 风险 / 假 Pod-0 trap / 跨 Chart 命名一致性 / rollout 历史 bug
+
+  六、长期演进（75-81）
+    多租户决策栈 / cost vs SLA / 决策反馈闭环 / AI 层演进 / Karpenter 协同
+    / Multi-cluster / Linkerd-Istio Provider
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TODO.md 刷新
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Rescheduler Eviction + kp scheduler CLI → 标记已完成（b891c40）
+  当前聚焦 → GPU 资源感知 + 三维 DP（仅 training profile）+ 碳排放感知
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+gpu-scheduling-draft.md — 设计边界
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  新增 §1.3: 三维 DP 仅对 profile=training + resources.yaml 声明 gpu 字段升维
+  web/batch/db 服务保持 2D DP，控制状态空间膨胀 + 零回归风险
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  FORGET.md                           新增 ~215 行 (81 条遗漏点)
+  TODO.md                              刷新 v3.1 进行中章节
+  docs/design/gpu-scheduling-draft.md  新增 §1.3 设计边界
+
+合计: 1 个新文件 + 2 个文件更新
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+FORGET.md 是设计文档的反向索引——不是"要做什么"而是"忘了什么"。
+34 个设计文档 → 81 条遗漏点，六层分类，每一条都指向来源文档的具体位置。
