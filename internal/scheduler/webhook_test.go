@@ -61,10 +61,6 @@ func TestWebhookMutate_PodAssigned(t *testing.T) {
 		t.Fatal(err)
 	}
 	ws.server.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
-	if err != nil {
-		t.Fatal(err)
-	}
-	ws.server.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
 	ts := httptest.NewUnstartedServer(ws.server.Handler)
 	ts.TLS = ws.server.TLSConfig
 	ts.StartTLS()

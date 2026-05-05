@@ -149,32 +149,6 @@ func TestIsMigratable(t *testing.T) {
 	}
 }
 
-// realMigratePodsTest 包装真实逻辑，便于注入mock
-func realMigratePodsTest(assigner PodAssigner, pairs []*imbalancePair, allPods []*PodInfo, allNodes []*NodeInfo, maxMigrations int) int {
-	rs := &Rescheduler{
-		assigner:      assigner,
-		maxMigrations: maxMigrations,
-	}
-	// 捕获信息
-	migrated := 0
-	// 我们无法直接访问 migratePods 因为它未导出且内部有log。
-	// 为了测试，我们可以将 migratePods 的核心逻辑提取为一个可测试的函数，或者直接调用 run 的一个变体。
-	// 更简单的方法是直接调用 migratePods（虽然未导出，但在同一个包内测试可以访问）。
-	// 这里为了清晰，我们假设 migratePods 是包内可访问的，或者我们在此测试文件中直接实现核心逻辑的测试版。
-	// 由于 migratePods 是*Rescheduler 的方法，且我们在包内，可以直接访问。
-	// 我们构造一个假的上下文。
-	ctx := context.Background()
-	rs.migratePods(ctx, pairs, allPods, allNodes)
-	// 如何得知迁移了多少？需要在 rs 上暴露，或者从日志中无法捕获。
-	// 更好的方式：让 migratePods 返回迁移的 Pod 列表，或者用计数器。
-	// 临时方案：修改 migratePods 以返回迁移数，或接受一个回调。
-	// 我们先假设 migratePods 会返回一个 int。
-	// 实际上，我们将在测试中直接验证效果：被迁移的 Pod 的 NodeName 应该变了。
-	_ = ctx
-	_ = rs
-	return migrated
-}
-
 // mockAssigner 实现 PodAssigner 接口
 type mockAssigner struct {
 	assignFunc func(ctx context.Context, pod *PodInfo) (string, error)
@@ -211,19 +185,24 @@ func TestMigratePods_Simple(t *testing.T) {
 		},
 	}
 
+	evicted := false
 	rs := &Rescheduler{
 		assigner:      assigner,
 		maxMigrations: 1,
+		evictPodFunc: func(ctx context.Context, pod *PodInfo) error {
+			evicted = true
+			return nil
+		},
 	}
 
 	// 执行迁移
-	migrated := rs.migratePods(context.Background(), []*imbalancePair{pair}, allPods, allNodes)
+	migrated := rs.migratePods(context.Background(), []*imbalancePair{pair}, allPods)
 
 	if migrated != 1 {
 		t.Fatalf("expected 1 migration, got %d", migrated)
 	}
-	if podToMigrate.NodeName != "node2" {
-		t.Errorf("expected pod to be migrated to node2, but still on %s", podToMigrate.NodeName)
+	if !evicted {
+		t.Error("expected evictPodFunc to be called, but it was not")
 	}
 }
 func TestDetectJitter(t *testing.T) {

@@ -72,6 +72,8 @@ func main() {
 		runSupplyChain(os.Args[2:])
 	case "sizing":
 		runSizing(os.Args[2:])
+	case "scheduler":
+		runSchedulerCmd(os.Args[2:])
 	case "chaos":
 		runChaos(os.Args[2:])
 	case "plugin":

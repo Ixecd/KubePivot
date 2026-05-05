@@ -3,10 +3,13 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"math"
 	"sync"
 	"time"
+
+	"github.com/Ixecd/kubepivot/internal/executor"
 )
 
 // PodAssigner 定义了为单个 Pod 实时分配节点的能力。
@@ -67,6 +70,9 @@ type Rescheduler struct {
 	lastOOM          time.Time     // 最近 OOM 时间
 	degradedUntil    time.Time     // 降级结束时间，之后自动恢复正常级别
 
+	// 测试注入点（函数变量模式，与 KubePivot 工程惯例一致）
+	evictPodFunc func(ctx context.Context, pod *PodInfo) error
+
 	mu sync.Mutex
 }
 
@@ -96,6 +102,7 @@ func NewRescheduler(assigner PodAssigner, pods PodLister, nodes NodeLister, cfg 
 		jitterWindow:     cfg.JitterWindow,
 		jitterThreshold:  cfg.JitterThreshold,
 		jitterSpikeCount: cfg.JitterSpikeCount,
+		evictPodFunc:     defaultEvictPod,
 	}
 }
 
@@ -114,6 +121,11 @@ func (rs *Rescheduler) Start(ctx context.Context) {
 			rs.run(ctx)
 		}
 	}
+}
+
+// RunOnce 执行单次重调度扫描（供 CLI 手动触发）。
+func (rs *Rescheduler) RunOnce(ctx context.Context) {
+	rs.run(ctx)
 }
 
 // run 执行一次重调度扫描
@@ -182,7 +194,7 @@ func (rs *Rescheduler) run(ctx context.Context) {
 		slog.Debug("重调度：集群利用率均衡，无需迁移")
 		return
 	}
-	rs.migratePods(ctx, imbalanced, pods, nodes)
+	rs.migratePods(ctx, imbalanced, pods)
 }
 
 // computeNodeUtilization 计算每个节点的当前资源利用率
@@ -300,7 +312,7 @@ func isMigratable(pod *PodInfo) bool {
 }
 
 // migratePods 执行 Pod 迁移，并返回成功迁移的 Pod 数量
-func (rs *Rescheduler) migratePods(ctx context.Context, pairs []*imbalancePair, allPods []*PodInfo, allNodes []*NodeInfo) int {
+func (rs *Rescheduler) migratePods(ctx context.Context, pairs []*imbalancePair, allPods []*PodInfo) int {
 	maxMigrate := rs.maxMigrations
 	if maxMigrate <= 0 {
 		totalPods := len(allPods)
@@ -334,14 +346,17 @@ func (rs *Rescheduler) migratePods(ctx context.Context, pairs []*imbalancePair, 
 				continue
 			}
 
-			// 2. 迁移成功，更新 Pod 信息
+			// 2. 驱逐 Pod（K8s 重建 + Webhook 注入目标节点）
 			oldNode := p.NodeName
-			p.NodeName = node // 关键：更新 Pod 当前所在节点，这是重调度生效的根基
+			if err := rs.evictPodFunc(ctx, p); err != nil {
+				slog.Warn("驱逐 Pod 失败", "pod", p.Namespace+"/"+p.Name, "err", err)
+				continue
+			}
 
-			slog.Info("重调度：迁移 Pod",
+			slog.Info("重调度：驱逐 Pod",
 				"pod", p.Namespace+"/"+p.Name,
 				"from", oldNode,
-				"to", node,
+				"targetNode", node,
 				"reason", "imbalance",
 			)
 			migrated++
@@ -442,4 +457,19 @@ func (rs *Rescheduler) ReportOOM() {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	rs.lastOOM = time.Now()
+}
+
+// defaultEvictPod 通过 kubectl delete pod 驱逐 Pod，触发 K8s 重建 + Webhook 注目标节点。
+var defaultEvictPod = func(ctx context.Context, pod *PodInfo) error {
+	exec := executor.GetExecutor()
+	_, err := exec.Kubectl(ctx, "",
+		"delete", "pod", pod.Name,
+		"-n", pod.Namespace,
+		"--grace-period=30",
+		"--wait=false",
+	)
+	if err != nil {
+		return fmt.Errorf("kubectl delete pod %s/%s: %w", pod.Namespace, pod.Name, err)
+	}
+	return nil
 }
