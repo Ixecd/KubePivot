@@ -1,0 +1,11 @@
+feat(scheduler): Rescheduler eviction + kp scheduler CLI
+
+- Rescheduler: replace in-memory NodeName tracking with real kubectl delete
+  pod eviction (evictPodFunc function-variable injection for testability)
+- Rescheduler: add RunOnce() for CLI manual trigger without blocking ticker
+- Rescheduler: remove unused allNodes parameter from migratePods
+- cmd/kp scheduler: new subcommand (status + reschedule)
+- cmd/kp scheduler: extract computeClusterSummary for testable status logic
+- Fix webhook_test.go dead code (impossible nil != nil + duplicate assignment)
+- Delete dead realMigratePodsTest helper from rescheduler_test.go
+- Archive TODO.md -> archived/todo/TODO-v2.7.md, rewrite for v3.1
