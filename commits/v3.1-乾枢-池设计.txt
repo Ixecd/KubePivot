@@ -1,0 +1,10 @@
+docs: 池化调度与迁移引擎设计文档 (v3.1 前置)
+
+- 池化分层拓扑：Node Pool（物理隔离）→ CPU/Memory Pool（逻辑聚合）
+- In-memory + Annotation 持久化方案：池状态内存重建，迁移状态随 Pod annotation 走
+- Rescheduler（决策）+ MigrationManager（执行）职责分离 + 异步状态机
+- Stateful Cell Fencing 协议：Sidecar Informer Watch + gRPC 信号 + Point of No Return
+- 与 CBA 联动：Stateless/Stateful Cell 差异化迁移策略
+- 实施路线 v3.2-v3.3 + Dry-run 测试模式
+
+关联：scheduler.md / cell-based-architecture.md
