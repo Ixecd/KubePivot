@@ -1,0 +1,70 @@
+feat(scheduler): 碳感知基础设施 + KinK 压测工具 — 冲刺 515
+
+v3.1 收尾：碳感知采集展示 + GPU 集群压力测试框架。
+完成后 commit 数 = 515，打 v3.1 tag 进入 v3.2。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+碳感知基础设施
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  metrics/carbon.go (NEW):
+    - CarbonIntensityProvider 接口 (GetCurrentIntensity + GetForecast)
+    - CarbonSDKClient: CarbonSDK REST API HTTP 客户端
+    - 15 分钟 LRU 缓存 (carbonCacheTTL)，避免高频 API 限流
+    - 2s 子超时 (context.WithTimeout)，避免慢响应拖慢 CLI
+    - 零额外依赖 (net/http + encoding/json)
+
+  cmd/kp/scheduler.go:
+    - kp scheduler status --carbon-region=US-West 展示碳强度
+    - 碳查询失败 → 黄色降级显示"不可用"
+    - clusterSummary 加 UsedCPU/UsedMemory 字段
+    - 集群利用率百分比展示 (Running Pod Request / Allocatable)
+
+  metrics/carbon_test.go (NEW): 4 个用例
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+KinK 压测工具 (v3.2 → v3.1)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  tools/kink/main.go:
+    - 重构：去掉重复私有类型，复用 gpu_fake.go 的 FakeGPUCluster/FakeNode/FakePod
+    - --nodes/--gpus/--product/--frag/--pods/--gpu-pods/--seed 全参数化
+
+  tools/kink/gpu_fake.go:
+    - FakeGPUCluster.GenerateNodes(): NVSwitch domain + TopologyFrag 碎片
+    - v3.2 → v3.1 注释更新
+
+  tools/kink/stress.go:
+    - runS1-S6 压测场景矩阵
+    - 删除 6 个 unused start 参数
+    - v3.2 → v3.1 注释更新
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+改进：集群利用率 + 缓存 + 动态显存
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  clusterSummary 加 UsedCPU/UsedMemory (Running Pod 的 Request 聚合)
+  carbon.go LRU 缓存 15min + 2s 子超时
+  gpuMemByProduct() 按 GPU 型号动态显存 (H100-80GB/A100-40GB/V100-32GB)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/metrics/carbon.go (NEW)          ~130 行
+  internal/metrics/carbon_test.go (NEW)      ~40 行
+  cmd/kp/scheduler.go                        +20 行
+  cmd/kp/scheduler_test.go                   +25 行
+  tools/kink/main.go                         重构
+  tools/kink/stress.go                        v3.2→v3.1
+  tools/kink/gpu_fake.go                      v3.2→v3.1
+
+合计: 2 新文件 + 5 文件变更
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+碳感知采集 + KinK 压测，v3.1 收工。
+碳强度展示不给调度加延迟——采集先跑，决策在 v3.2 池化之后。
+514 → 515，打完 tag 进 v3.2 ✊

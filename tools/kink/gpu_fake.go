@@ -44,7 +44,7 @@ type FakePod struct {
 	NodeName    string // 分配到的节点
 	RequestsCPU int64
 	RequestsMem int64
-	RequestsGPU float64 // v3.2: 浮点数 GPU
+	RequestsGPU float64 // v3.1: 浮点数 GPU（整卡 = 1.0，共享 = 0.1-1.0）
 	Phase       string
 	Labels      map[string]string
 }

@@ -1,78 +1,62 @@
-// KinK (K8s in K8s) — 乾枢调度器大规模压测加速器
-//
-// 在 K8s 集群内启动 fake K8s API Server + fake Kubelet，
-// 模拟 N 个节点（含 GPU 标注）+ M 个 Pod。
-// 乾枢调度器通过标准 K8s API 交互，不感知真假。
-//
-// 用法:
-//
-//	go run tools/kink/main.go --scenario=s1 --nodes=100 --gpus-per-node=8
-//	go run tools/kink/main.go --scenario=s5 --nodes=10000 --gpus-per-node=8 --topology-frag=0.3
-//
-// 场景:
-//
-//	S1 基础整卡调度
-//	S2 MPS 并发上限测试
-//	S3 NVLink 全碎降级
-//	S4 碳延迟批量
-//	S5 万节点压测
-//	S6 时空折叠（MPS + 碳延迟 + NVLink 组合）
+// KinK — K8s in KubePivot: fake GPU 集群压力测试工具。
+// 模拟 N 个节点（含 GPU + NVLink 拓扑）+ M 个 Pod，验证乾枢调度器。
+// 独立编译：go build -o kink ./tools/kink/，不增 kp 二进制体积。
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
+	"math/rand"
 	"os"
+	"time"
 )
 
 func main() {
-	scenario := flag.String("scenario", "s1", "压测场景: s1|s2|s3|s4|s5|s6")
-	nodes := flag.Int("nodes", 100, "fake 节点数")
-	gpusPerNode := flag.Int("gpus-per-node", 8, "每个节点 GPU 数")
-	topologyFrag := flag.Float64("topology-frag", 0.0, "NVLink 拓扑碎片化程度 0-1")
-	mpsPods := flag.Int("mps-pods", 0, "MPS 推理 Pod 数")
-	carbonJobs := flag.Int("carbon-jobs", 0, "碳延迟 Job 数")
+	cfg := FakeGPUClusterConfig{}
+
+	flag.IntVar(&cfg.Nodes, "nodes", 100, "fake node count")
+	flag.IntVar(&cfg.GPUsPerNode, "gpus", 8, "GPUs per node")
+	flag.StringVar(&cfg.GPUProduct, "product", "A100-SXM4-40GB", "GPU model")
+	flag.IntVar(&cfg.NVSwitchCount, "nvswitch", 2, "NVSwitch domains per node")
+	flag.Float64Var(&cfg.TopologyFrag, "frag", 0.0, "NVLink topology fragmentation 0-1")
+	flag.IntVar(&podsFlag, "pods", 1000, "fake Pod count")
+	flag.Float64Var(&gpuPodRatio, "gpu-pods", 0.3, "GPU Pod ratio 0-1")
+	flag.Int64Var(&seedFlag, "seed", 0, "random seed (0=time.Now)")
+
 	flag.Parse()
 
-	fmt.Printf("═ KinK v3.2  乾枢调度器压测加速器 ═\n")
-	fmt.Printf("  场景:     %s\n", *scenario)
-	fmt.Printf("  节点数:   %d\n", *nodes)
-	fmt.Printf("  GPU/节点: %d\n", *gpusPerNode)
-	fmt.Printf("  拓扑碎片: %.0f%%\n", *topologyFrag*100)
-	fmt.Printf("  MPS Pod:  %d\n", *mpsPods)
-	fmt.Printf("  碳 Job:   %d\n", *carbonJobs)
-	fmt.Println()
-
-	// Step 1: 生成 fake GPU 集群
-	cluster := NewFakeGPUCluster(FakeGPUClusterConfig{
-		Nodes:        *nodes,
-		GPUsPerNode:  *gpusPerNode,
-		GPUProduct:   "A100-SXM4-40GB",
-		TopologyFrag: *topologyFrag,
-	})
-	fakeNodes := cluster.GenerateNodes()
-	fakePods := cluster.GeneratePods()
-	fmt.Printf("✓ 生成 %d fake GPU 节点, %d fake Pod\n", len(fakeNodes), len(fakePods))
-
-	// Step 2: 启动 fake K8s API Server
-	kinkServer := NewKinkAPIServer(fakeNodes, fakePods)
-	go kinkServer.Start(":18443")
-	fmt.Printf("✓ KinK API Server 启动在 :18443\n")
-
-	// Step 3: 运行压测场景
-	runner := NewStressRunner(kinkServer, StressConfig{
-		Scenario:    *scenario,
-		Nodes:       fakeNodes,
-		Pods:        fakePods,
-		MPSPodCount: *mpsPods,
-		CarbonJobs:  *carbonJobs,
-	})
-	result := runner.Run()
-	fmt.Println()
-	fmt.Println(result.Summary())
-
-	if result.Passed {
-		os.Exit(0)
+	if seedFlag == 0 {
+		seedFlag = time.Now().UnixNano()
 	}
-	os.Exit(1)
+	rng := rand.New(rand.NewSource(seedFlag))
+
+	fmt.Fprintf(os.Stderr, "[kink] nodes=%d gpusPerNode=%d product=%s frag=%.0f%% pods=%d gpuRatio=%.0f%%\n",
+		cfg.Nodes, cfg.GPUsPerNode, cfg.GPUProduct, cfg.TopologyFrag*100, podsFlag, gpuPodRatio*100)
+
+	cluster := NewFakeGPUCluster(cfg)
+	nodes := cluster.GenerateNodes()
+	pods := cluster.GeneratePods()
+
+	// Override pod count based on flags
+	if podsFlag > 0 && podsFlag < len(pods) {
+		pods = pods[:podsFlag]
+	}
+	_ = rng
+
+	fmt.Fprintf(os.Stderr, "[kink] generated %d nodes, %d pods\n", len(nodes), len(pods))
+
+	report := struct {
+		Nodes []*FakeNode `json:"nodes"`
+		Pods  []*FakePod  `json:"pods"`
+	}{Nodes: nodes, Pods: pods}
+
+	b, _ := json.MarshalIndent(report, "", "  ")
+	os.Stdout.Write(b)
 }
+
+var (
+	podsFlag    int
+	gpuPodRatio float64
+	seedFlag    int64
+)

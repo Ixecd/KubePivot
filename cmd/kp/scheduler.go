@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Ixecd/kubepivot/internal/audit"
+	"github.com/Ixecd/kubepivot/internal/metrics"
 	"github.com/Ixecd/kubepivot/internal/rbac"
 	"github.com/Ixecd/kubepivot/internal/scheduler"
 )
@@ -44,8 +45,10 @@ type clusterSummary struct {
 	NodeCount    int
 	PodCount     int
 	RunningCount int
-	TotalCPU     int64 // 毫核
-	TotalMemory  int64 // 字节
+	TotalCPU     int64 // 毫核，Allocatable 总量
+	TotalMemory  int64 // 字节，Allocatable 总量
+	UsedCPU      int64 // 毫核，Running Pod 的 Request 总量
+	UsedMemory   int64 // 字节，Running Pod 的 Request 总量
 }
 
 // computeClusterSummary 从 Node 和 Pod 列表计算集群摘要。
@@ -56,6 +59,8 @@ func computeClusterSummary(nodes []*scheduler.NodeInfo, pods []*scheduler.PodInf
 		s.PodCount++
 		if p.Phase == "Running" {
 			s.RunningCount++
+			s.UsedCPU += p.Requests.CPU
+			s.UsedMemory += p.Requests.Memory
 		}
 	}
 	for _, n := range nodes {
@@ -70,6 +75,7 @@ func computeClusterSummary(nodes []*scheduler.NodeInfo, pods []*scheduler.PodInf
 func runSchedulerStatus(args []string) {
 	flags := flag.NewFlagSet("scheduler status", flag.ExitOnError)
 	kubeconfig := flags.String("kubeconfig", "", "kubeconfig 路径")
+	carbonRegion := flags.String("carbon-region", "", "碳感知区域代码（如 US-West，为空则跳过碳查询）")
 	if err := flags.Parse(args); err != nil {
 		os.Exit(1)
 	}
@@ -104,6 +110,25 @@ func runSchedulerStatus(args []string) {
 	fmt.Printf("  %-20s %d 个\n", "Pods (Running):", s.RunningCount)
 	fmt.Printf("  %-20s %.1f cores\n", "集群总 CPU:", float64(s.TotalCPU)/1000)
 	fmt.Printf("  %-20s %.1f GiB\n", "集群总 Memory:", float64(s.TotalMemory)/(1024*1024*1024))
+
+	// 集群利用率（Running Pod 请求 / Allocatable）
+	if s.TotalCPU > 0 {
+		fmt.Printf("  %-20s %.1f%%\n", "CPU 利用率:", float64(s.UsedCPU)/float64(s.TotalCPU)*100)
+	}
+	if s.TotalMemory > 0 {
+		fmt.Printf("  %-20s %.1f%%\n", "Memory 利用率:", float64(s.UsedMemory)/float64(s.TotalMemory)*100)
+	}
+
+	// v3.1: 碳感知基础设施 — 可选展示碳强度
+	if *carbonRegion != "" {
+		carbonClient := metrics.NewCarbonSDKClient("")
+		intensity, err := carbonClient.GetCurrentIntensity(ctx, *carbonRegion)
+		if err != nil {
+			fmt.Printf("  %-20s %s\n", "碳排放强度:", colorize(colorYellow, fmt.Sprintf("不可用 (%v)", err)))
+		} else {
+			fmt.Printf("  %-20s %.1f gCO₂eq/kWh\n", "碳排放强度:", intensity)
+		}
+	}
 
 	fmt.Println()
 }

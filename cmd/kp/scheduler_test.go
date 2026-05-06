@@ -41,6 +41,30 @@ func TestComputeClusterSummary_Normal(t *testing.T) {
 	if s.TotalMemory != 12*1024*1024*1024 {
 		t.Errorf("TotalMemory = %d (bytes), want %d", s.TotalMemory, 12*1024*1024*1024)
 	}
+	if s.UsedCPU != 0 || s.UsedMemory != 0 {
+		t.Errorf("UsedCPU/Memory should be 0 (pods have no Request fields)")
+	}
+}
+
+func TestComputeClusterSummary_WithRequests(t *testing.T) {
+	nodes := []*scheduler.NodeInfo{
+		{Name: "node1", AllocatableCPU: 4000, AllocatableMemory: 8 * 1024 * 1024 * 1024},
+	}
+	pods := []*scheduler.PodInfo{
+		{Name: "pod-a", Phase: "Running", Requests: scheduler.ResourceRequest{CPU: 500, Memory: 1 * 1024 * 1024 * 1024, GPU: 4000}},
+		{Name: "pod-b", Phase: "Running", Requests: scheduler.ResourceRequest{CPU: 300, Memory: 512 * 1024 * 1024}},
+		{Name: "pod-c", Phase: "Pending", Requests: scheduler.ResourceRequest{CPU: 1000, Memory: 2 * 1024 * 1024 * 1024}},
+	}
+	s := computeClusterSummary(nodes, pods)
+	if s.UsedCPU != 800 {
+		t.Errorf("UsedCPU = %d, want 800 (500+300, pending excluded)", s.UsedCPU)
+	}
+	if s.UsedMemory != int64(1536*1024*1024) {
+		t.Errorf("UsedMemory = %d, want 1536Mi", s.UsedMemory)
+	}
+	if s.RunningCount != 2 {
+		t.Errorf("RunningCount = %d, want 2", s.RunningCount)
+	}
 }
 
 func TestComputeClusterSummary_OnlyNodes(t *testing.T) {
