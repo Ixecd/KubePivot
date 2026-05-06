@@ -9,7 +9,7 @@ import (
 )
 
 // kpVersion 当前版本，由 kp release 自动更新
-const kpVersion = "v3.1.0"
+const kpVersion = "v3.2.0"
 
 func runVersion() {
 	fmt.Printf("kp version %s\n", kpVersion)
