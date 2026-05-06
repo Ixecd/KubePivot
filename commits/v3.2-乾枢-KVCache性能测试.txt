@@ -1,0 +1,96 @@
+docs(design): KubePivot vs client-go Informer KVCache A/B benchmark report
+
+v3.2 第四步：KVCache 与 client-go cache.Indexer 全维度 A/B 基准测试。
+feature/v3.2-client-go-ab 分支隔离，build tag 引入 client-go v0.34.0。
+17 项 benchmark，5 维度，5000 Pod 数据规模。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+benchmark 基础设施
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/eventstream/testdata/gen.go (NEW):
+    - 确定性 seed 伪随机 Pod/Node 生成器
+    - 10 种容器模板（nginx/app/trainer/inference/redis/postgres 等）
+    - 20 个 K8s 标签 key，15 种 Deployment 名称
+    - FakePod / FakeNode / FakeContainer / FakeGPU 类型
+    - KP 和 client-go 共用，同 seed → 同数据
+
+  internal/eventstream/kv_cache_bench_test.go (NEW):
+    - KP 端 15 项 benchmark
+    - Get / ListAll / ListByNode / ListByNS / ConcurrentRead
+    - Put / PutCrossNode / Delete / PutBulk(1k/5k/10k)
+    - ColdStart(1k/5k/10k) / Memory(1k/5k/10k) / SubscribeNotify
+    - for-range 迭代防 Go 1.25 编译器死代码消除
+
+  benchmark/clientgo/client_cache.go (NEW, //go:build clientgo):
+    - PodIndexer 封装 client-go cache.Indexer
+    - byNode 二级索引 + FakePodToV1 / FakeNodeToV1 转换
+
+  benchmark/clientgo/client_bench_test.go (NEW, //go:build clientgo):
+    - client-go 端 14 项 benchmark（镜像 KP 端）
+    - Get / ListAll / ListByNode / ListByNS / ConcurrentRead
+    - Add / Update / Delete / AddBulk / ColdStart / Conversion / Memory
+
+  benchmark/results/v3.2-ab-20260506/analysis.md (NEW):
+    - 完整分析：总览 / 读路径 / 写路径 / 冷启动 / 内存 / 阈值判定
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+结果摘要（5000 Pod, Apple M4, Go 1.25）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  读路径 (KP 胜):
+    Get:           24.3 ns vs  38.9 ns  → KP 1.6x, 0 allocs
+    ListByNode:   204  ns vs 374  ns  → KP 1.8x
+    ConcurrentRead: 300  ns vs 301  ns  → tie
+    Node Get:       7.3 ns vs 6.7  ns  → tie
+    Node ListAll: 1516 ns vs 1120 ns  → client-go 1.35x
+
+  写路径:
+    单条 Put:    387 μs vs 2.4 μs  → client-go 161x  (CoW 全量快照代价)
+    跨节点 Put:  211 μs vs 177 ns  → client-go 1194x
+    Delete:      384 μs vs 1.3 μs  → client-go 295x
+    PutBulk 5k:  657 μs vs 1050 μs → KP 1.6x  (一次快照 vs 逐条 Add)
+    PutBulk 10k:1575 μs vs 2270 μs → KP 1.4x
+
+  冷启动:
+    1k:  122 μs vs 201 μs  → KP 1.6x (173kB vs 287kB)
+    5k:  611 μs vs 1041 μs → KP 1.7x (826kB vs 1300kB)
+    10k:1261 μs vs 2270 μs → KP 1.8x (1653kB vs 2603kB)
+
+  内存驻留:
+    1k:  2126 B/pod vs 7856 B/pod → KP 3.7x
+    5k:  2113 B/pod vs 7824 B/pod → KP 3.7x
+    10k: 2119 B/pod vs 7830 B/pod → KP 3.7x
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+v3.3 性能优化目标
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  P0: Delta CoW — diff old/new snapshot → 只 patch leaf (byNode upsert)
+      Put 387μs → ~10μs，与 client-go 同级
+
+  P1: Node ListAll copy-less iterator — 直接返回内部 snapshot slice 引用
+
+  P2: Real YAML benchmark — 从真实 kube-state-metrics 生成 fixture
+
+  P3: Ristretto sharded cache — 按 ns 分片，写并发 N 倍
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/eventstream/testdata/gen.go (NEW)          ~165 行
+  internal/eventstream/kv_cache_bench_test.go (NEW)    ~245 行
+  benchmark/clientgo/client_cache.go (NEW)             ~170 行
+  benchmark/clientgo/client_bench_test.go (NEW)        ~195 行
+  benchmark/results/v3.2-ab-20260506/analysis.md (NEW) ~190 行
+  docs/design/bench-client-go-ab.md (NEW)              ~90 行 (设计)
+  docs/design/bench-kp-vs-client-go.md (NEW)           ~255 行 (报告)
+  FORGET.md                                            更新 §48 / §51-54
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+自研 KVCache 读 1.6x 快，内存省 3.7x，冷启动 1.8x。
+CoW 单写慢 161x 但批量反超。v3.3 Delta CoW 解。
