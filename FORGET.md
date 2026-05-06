@@ -107,21 +107,43 @@
     - podSnapshot.list 预缓存（ListAll 零分配）+ Subscribe 4 种事件
     已知局限：MODIFIED Fast Pre-check / Map 压缩 / sync.Pool 复用留后续。
 
-## 三、v3.2 池化实施依赖（当前仅设计）
+## 三、v3.2 池化 + 迁移引擎
 
-34. **PoolInfo + computePoolUtilization** — 数据结构 + 按池聚合计算。
+34. **PoolInfo + computePoolUtilization** — ✅ 519。池级利用率 + 碎片率 + PoolScore（min 短板效应）。
 
-35. **池间不平衡检测 + 池内碎片率** — run() 需要从节点级升级到池级。
+35. **池间不平衡检测 + 池内碎片率** — ✅ 519。CPU/Mem/GPU 三维阈值检测。
 
-36. **Annotation Bundle + 僵尸迁移清理** — 7 个 migration annotation key + Controller 重启扫 annotations 恢复。
+36. **Annotation Bundle + 僵尸清理** — ✅ 520。7 个 key + ParseMigrationFromAnnotations + 僵尸超时检测。
 
-37. **MigrationManager 状态机（Stateless 路径）** — Evicting → WaitingForReady → Complete + Rollback。
+37. **MigrationManager 状态机（Stateless + Dual-Path）** — ✅ 520→522。Evicting→WaitingForReady→Complete + Stateful 超时 Paused+Retry + Rehydrate 重启恢复 + DryRun 克隆隔离。
 
-38. **Fencing 协议（Stateful 路径）** — Sidecar Informer + gRPC 信号注入 + Point of No Return。依赖 etcd Learner sidecar 暴露 gRPC fencing 端点。
+38. **MigrationLabel 索引** — ✅ 522。`kubepivot.io/migration-active` label + MigrationLabelSelector 支持 K8s LabelSelector List 过滤。
 
-39. **Dry-run 模式** — Rescheduler 打 annotation 但不执行 evict，验证碎片算法稳定性。
+39. **一致性哈希 Cell 映射** — ✅ 522。HashRing（40 vnodes/pod）替代 `hash%len(pods)`，Pod 扩缩容时仅 ~25% Cell 漂移。
 
-40. **池定义来源自动聚类** — v3.2 用 Node Label 推导，自动聚类留后续。
+40. **Migration target node 注入** — ✅ 522。Rescheduler evict 前写 `sync.Map` hint → webhook 重建时直接路由，防止 Pod 回弹到源节点。
+
+41. **K8s API 版本** — ✅ 无 K8s API import 依赖（kubectl CLI + HTTP/JSON webhook）。webhook 清单已用 `admissionregistration.k8s.io/v1`。
+
+### v3.2 留 v3.3 的刺
+
+42. **Fencer 接口（OOB 隔离确认）** — ⏳ v3.3。Stateful Cell 迁移需要 `Fencer.ConfirmIsolated` 确认旧 Pod 已物理隔离（网络断连/GPU reset），再拉起新 Pod。当前 SignalProtocol 抽象了信号方式但缺 OOB 确认闭环。
+
+43. **Fencing gRPC stub** — ⏳ v3.3。etcd Learner sidecar gRPC 接口未实现，SignalSIGTERM fallback 是通用兜底。
+
+44. **Weight-aware HashRing** — ⏳ v3.3。当前 40 vnodes/pod 对 CPU 池够用。GPU 池（A100 80GB vs H100）需要按节点迁移代价（显存大小、镜像拉取成本）加权分配虚拟节点。
+
+45. **Rescheduler → MigrationManager event pipeline** — ⏳ v3.3。当前 RWMutex 共享池视图在 5min ticker 下风险可控，但高频场景需要 `chan<PendingMigration>` 事件驱动解耦。
+
+46. **Annotation 瘦身** — ⏳ v3.3。1k GPU 节点 × migration annotation 逼近 1MB etcd 限制。大块迁移上下文（checkpoint 路径等）应下沉到外部 metadata store。
+
+47. **GPU 迁移可行性校验** — ⏳ v3.3。`NVIDIA_DRIVER_VERSION` / `CUDA_CAPABILITY` / MIG profile 亲和性未校验，跨代 GPU 迁移可能驱动不兼容。
+
+48. **池定义自动聚类** — ⏳ v3.3。当前用 Label 推导（人工标注）+ GPU product fallback。resources.requests profile hash 聚类未实现。
+
+49. **Deployment Pod 迁移 target 匹配** — ⏳ v3.3。当前 name-based hint 对 StatefulSet（同名）有效。Deployment Pod 重建后改名，需 label-based 匹配。
+
+50. **Chaos 测试** — ⏳ v3.3。litmus/chaos-monkey: node failure mid-evict / GPU OOM / NVLink 断连 / 1k Pod 10% 迁移负载。
 
 ---
 
@@ -149,7 +171,7 @@
 
 ## 五、已设计但未拍板（draft 状态，需 qc 决定做不做）
 
-50. **CBA（Cell-based Architecture）** — 2D Matrix-orchestration / Workload-class 自动判定 / Cell-to-Pod 映射 / 故障隔离策略。整体等 v3.2+ 重新评估。
+50. **CBA（Cell-based Architecture）** — ✅ v3.2 已实施。CellClass（Stateless/Stateful）+ Workload-class 判定 + Cell-to-Pod FNV hash 映射 + Fencing 协议骨架。完整 Fencing 闭环（Sidecar gRPC）留 v3.3。
 
 51. **ai-plan 2.0** — Phase 1-5 ✅ 已全部实施。已知局限：
     - GPU 关键词匹配为粗粒度 `strings.Contains`，文档文件或 `torchvision`（非 CUDA）可能误触发。需增加排除列表或路径过滤。

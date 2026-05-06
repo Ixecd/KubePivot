@@ -75,6 +75,9 @@ type PodInfo struct {
 	NodeName  string // ← 关键字段。当前从 kubectl get pod 获取，未来可由 Informer Skeleton 扩展
 	Phase     string
 	Labels    map[string]string // 用于亲和性/反亲和性判定
+	// Annotations carries K8s Pod annotations.
+	// Used by MigrationManager to persist/restore migration state, and by Fencing protocol.
+	Annotations map[string]string
 	// Requests 是 Pod 当前声明的资源请求。
 	// 部署时调度：来自 sizing 引擎的推荐值
 	// 运行时重调度：来自集群中实际 running Pod 的 spec.containers[].resources.requests

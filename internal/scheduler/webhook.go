@@ -8,8 +8,32 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 )
+
+// ─── Migration target hint ──────────────────────────────────────
+
+// migrationTargetHints stores pending migration target nodes.
+// Rescheduler writes before eviction, webhook reads during pod recreation.
+// Key: "ns/name" of the pod being evicted. For StatefulSet pods, the replacement
+// pod has the same name → lookup succeeds.
+// For Deployment pods (different names), label-based matching is deferred to v3.3.
+var migrationTargetHints sync.Map
+
+// SetMigrationTargetHint records the expected target node for a pod being evicted.
+func SetMigrationTargetHint(ns, name, targetNode string) {
+	migrationTargetHints.Store(ns+"/"+name, targetNode)
+}
+
+// PopMigrationTargetHint returns and removes the target hint for a pod.
+func PopMigrationTargetHint(ns, name string) (string, bool) {
+	v, ok := migrationTargetHints.LoadAndDelete(ns + "/" + name)
+	if !ok {
+		return "", false
+	}
+	return v.(string), true
+}
 
 // WebhookServer 是乾枢调度器的 HTTPS Admission Webhook 服务器。
 // Phase 1：仅处理 Pod 创建请求，实时分配 nodeSelector。
@@ -110,13 +134,21 @@ func (ws *WebhookServer) handleMutate(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 
-	// 调用实时轻量分配器
-	node, err := ws.scheduler.AssignPod(ctx, pod)
-	if err != nil {
-		slog.Warn("webhook: 分配失败，放行由 K8s 默认调度器处理",
-			"pod", pod.Namespace+"/"+pod.Name, "err", err)
-		ws.writeAdmissionResponse(w, review, true, nil)
-		return
+	// Migration target hint: 如果该 Pod 是迁移副本，直接路由到目标节点，避免回弹
+	var node string
+	if hint, ok := PopMigrationTargetHint(pod.Namespace, pod.Name); ok {
+		node = hint
+		slog.Info("webhook: 使用迁移目标节点", "pod", pod.Namespace+"/"+pod.Name, "node", node)
+	} else {
+		// 正常调度路径
+		var err error
+		node, err = ws.scheduler.AssignPod(ctx, pod)
+		if err != nil {
+			slog.Warn("webhook: 分配失败，放行由 K8s 默认调度器处理",
+				"pod", pod.Namespace+"/"+pod.Name, "err", err)
+			ws.writeAdmissionResponse(w, review, true, nil)
+			return
+		}
 	}
 
 	// 构造安全的 JSON Patch

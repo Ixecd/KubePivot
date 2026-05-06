@@ -1,8 +1,8 @@
 # 池化调度与迁移引擎设计文档
 
-> 编写日期：2026-05-05  
-> 状态：🌱 设计草案（v3.1 基础设施就绪，v3.2+ 实施）  
-> 关联文档：[scheduler.md](scheduler.md) / [cell-based-architecture.md](cell-based-architecture.md) / [sharding.md](sharding.md)
+> 编写日期：2026-05-05（更新 2026-05-06）
+> 状态：✅ 池化层 + MigrationManager + CBA 已实施（v3.2，commit 519-522）
+> 关联文档：[scheduler.md](scheduler.md) / [cell-based-architecture.md](cell-based-architecture.md) / [sharding.md](sharding.md) / [pool.go](../../internal/scheduler/pool.go) / [migration_manager.go](../../internal/scheduler/migration_manager.go) / [cba.go](../../internal/scheduler/cba.go)
 
 ---
 
@@ -342,18 +342,32 @@ controller 进程内：
 
 ### 7.2 实施路线
 
-| 阶段 | 内容 | 依赖 |
-|------|------|------|
-| v3.2 | PoolInfo 结构体 + computePoolUtilization | 当前 NodeInfo 加 PoolLabel |
-| v3.2 | 池间不平衡检测 + 池内碎片率 | PoolInfo |
-| v3.2 | Annotation Bundle 定义 + 僵尸清理逻辑 | - |
-| v3.3 | MigrationManager 状态机（Stateless 路径） | Annotation Bundle |
-| v3.3 | Fencing 协议（Stateful 路径） | Sidecar gRPC 接口 |
-| v3.3 | Dry-run 模式（只打 annotation，不执行 evict） | MigrationManager |
+| 阶段 | 内容 | 依赖 | 状态 |
+|------|------|------|------|
+| v3.2 | PoolInfo + computePoolUtilization | NodeInfo.Labels | ✅ 519 |
+| v3.2 | 池间不平衡检测 + 池内碎片率 | PoolInfo | ✅ 519 |
+| v3.2 | Annotation Bundle + 僵尸清理 + MigrationLabel 索引 | - | ✅ 520-522 |
+| v3.2 | MigrationManager 状态机（Stateless + Dual-Path） | Annotation Bundle | ✅ 520-522 |
+| v3.2 | CBA 类型系统 + Workload-class 判定 + 一致性哈希 Cell 映射 | CellClass | ✅ 522 |
+| v3.2 | Migration target node 注入（webhook hint） | Webhook | ✅ 522 |
+| v3.2 | DryRun 模式（克隆隔离） | MigrationManager | ✅ 522 |
+| v3.2 | Rehydrate 重启恢复 | PodInfo.Annotations | ✅ 522 |
+| v3.2 | FencingConfig fallback chain + HardTimeout | - | ✅ 522 |
+| v3.3 | Fencer 接口（OOB 隔离确认） | Sidecar gRPC 接口 | ⏳ |
+| v3.3 | Fencing 协议（Stateful 路径 e2e） | Fencer + etcd Learner | ⏳ |
+| v3.3 | Weight-aware HashRing（GPU 池） | GPU Node weight CRD | ⏳ |
+| v3.3 | Event pipeline（chan-based 解耦） | Rescheduler/MigrationManager | ⏳ |
+| v3.3 | GPU 迁移可行性校验（driver/capability/MIG） | GPUAdapter | ⏳ |
 
-### 7.3 Dry-run 测试模式
+### 7.3 实施偏差
 
-MigrationManager 支持 `DryRun` 模式：Rescheduler 正常打 annotation，但 MigrationManager 只记录日志不执行 evict 和 annotation 更新。用于验证碎片率算法是否会引起大规模非必要震荡。
+- **池定义来源**：设计 Q1 选 C（Label + 自动聚类）。实施先用 A（Label 优先 → GPU product → "cpu"），自动聚类留 v3.3。
+- **MigrationManager 提前**：原计划 v3.3，实际在 v3.2 完成 Stateless 路径 + Dual-Path（stateful Paused+Retry）。Decided：KV Cache 就绪后紧接 MigrationManager 更顺畅。
+- **Fencing 留 v3.3**：SignalProtocol + FallbackChain + HardTimeout 骨架已就绪，但 Fencer 接口（OOB `ConfirmIsolated`）和 etcd Learner sidecar gRPC 未实现。
+- **DryRun 已落地**：用 clone map 模式实现，每次 Reconcile 从真实状态出发计算，不产生副作用。
+- **MigrationTargetHint**：Rescheduler evict 前写 `sync.Map` → webhook 创建 Pod 时读取，直接路由到目标节点。name-based 匹配（StatefulSet 同名有效），Deployment label-based 匹配留 v3.3。
+- **HashRing 一致性哈希**：40 virtual nodes/pod 的真一致性哈希环，4→3 pod 时仅 ~25% Cell 漂移（非全量）。
+- **KubePivot 无 K8s API import**：通过 `kubectl` CLI + 原始 HTTP/JSON webhook 操作 K8s，不依赖 `k8s.io/api` 等包。webhook 清单使用 `admissionregistration.k8s.io/v1`。
 
 ---
 
@@ -385,7 +399,7 @@ Q3: MigrationManager 最大并发迁移数
 
 ```
 2026-05-05  创建
-            基于 qc + Claude 对话：
+            基于 qc + DeepSeek 对话：
             - 池化分层拓扑讨论
             - In-memory + Annotation 持久化方案
             - Rescheduler / MigrationManager 拆分 + 状态机

@@ -370,10 +370,14 @@ func (rs *Rescheduler) migratePods(ctx context.Context, pairs []*imbalancePair, 
 				continue
 			}
 
+			// 1.5. 注入迁移目标节点 hint — webhook 收到重建 Pod 时直接路由，防止回弹到源节点
+			SetMigrationTargetHint(p.Namespace, p.Name, node)
+
 			// 2. 驱逐 Pod（K8s 重建 + Webhook 注入目标节点）
 			oldNode := p.NodeName
 			if err := rs.evictPodFunc(ctx, p); err != nil {
-				slog.Warn("驱逐 Pod 失败", "pod", p.Namespace+"/"+p.Name, "err", err)
+				slog.Warn("驱逐 Pod 失败，清理目标 hint", "pod", p.Namespace+"/"+p.Name, "err", err)
+				PopMigrationTargetHint(p.Namespace, p.Name) // 驱逐失败，清理无用的 hint
 				continue
 			}
 

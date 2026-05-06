@@ -1,0 +1,124 @@
+feat(scheduler): 迁移引擎+CBA 挑刺加固 — 8项修复 + 一致性哈希 + 重启恢复 + target node注入
+
+v3.2 第三步（收尾加固）：两轮代码审查挑刺全修。MigrationManager 补全 Dual-Path /
+DryRun 克隆隔离 / Rehydrate 重启恢复。CBA 替换为非一致性哈希真 HashRing。
+Rescheduler evict 前注入 webhook target hint 防 Pod 回弹到源节点。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+第一轮：高风险裂缝 (Round 1)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  MigrationLabel 索引:
+    - MigrationLabelKey = "kubepivot.io/migration-active" (真 K8s label)
+    - MigrationLabelSelector() 返回 label 名，可用 LabelSelector API 过滤
+    - MigrationLabels() / MigrationCleanupLabels() 配套
+    - 替代原 annotation key 冒充 label selector 的 bug
+
+  Dual-Path Paused+Retry:
+    - PhasePaused: Stateful 迁移超时不直接 Failed，进入 Paused 等 backoff
+    - Migration.RetryCount + MigrationManager.maxRetries (default 3)
+    - reconcilePaused: backoff (30s) 后自动重试 WaitingForReady
+    - Stateless 迁移超时仍走 Failed（原行为不变）
+
+  SignalProtocol fallback chain:
+    - FencingConfig.FallbackChain(): AnnotationWatch → Webhook → SIGTERM
+    - FencingConfig.NextProtocol(): 指定当前协议，返回下一回退
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+第二轮回：分布式鲁棒性 (Round 2)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  一致性哈希 HashRing (替代 hash%len):
+    - 真一致性哈希环：每个 Pod 40 个虚拟节点，FNV32 hash 分布
+    - NewHashRing / GetPod / DiffCells (计算漂移)
+    - 4→3 Pod 时仅 ~25% Cell 漂移（vs 原 100% 全量漂移）
+    - MapCellsToPods 内部使用 HashRing
+
+  Rehydrate 重启恢复:
+    - MigrationManager.Rehydrate(pods) 从 Pod annotation 恢复内存状态
+    - PodInfo 新增 Annotations 字段
+    - 幂等：已有 migration 不覆盖
+
+  DryRun 真隔离:
+    - Reconcile 入口 clone migrations map → 在克隆上操作
+    - 真实状态完全不受影响
+    - 替代原 Dead Code (DryRun bool 从不检查)
+
+  time.Parse 错误处理:
+    - ParseMigrationFromAnnotations 检查 err
+    - 损坏时间戳 fallback 到 time.Now()（避免 Year 1 零值 → 瞬间判定超时）
+
+  Fencing HardTimeout:
+    - FencingConfig.HardTimeout (default 60min)
+    - FencingState.ShouldForceRelease(cfg): Draining/Paused 超硬超时 → 强制释放
+    - 损坏时间戳保守返回 true（不永久锁 Cell）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+第三轮：TargetNode 注入 + API 版本审查
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Migration target hint:
+    - webhook.go: migrationTargetHints sync.Map + Set/PopMigrationTargetHint
+    - Rescheduler evict 前写 hint → webhook 创建 Pod 时优先读取
+    - 直接路由到目标节点，防止 bin-packing 把 Pod 又放回源节点
+    - 驱逐失败时自动清理 hint
+
+  K8s API 版本审计:
+    - KubePivot go.mod 零 K8s API import（kubectl CLI + HTTP/JSON webhook）
+    - webhook_deploy.go 已用 admissionregistration.k8s.io/v1
+    - 无 v1beta3 漂移风险
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+测试: 30+ 用例
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  migration_manager_test.go:
+    - StatefulTimeoutPaused, StatefulRetriesExhausted (Dual-Path)
+    - Rehydrate(×3), DryRun(×2), CorruptTimestamp
+    - MigrationLabels, MigrationLabelSelector, MigrationCleanupLabels
+
+  cba_test.go:
+    - HashRing Deterministic / GetPod / Empty / DiffCells MinimalReshuffle
+    - ShouldForceRelease Draining / NotEligible / CorruptTimestamp
+    - FencingConfig FallbackChain / NextProtocol
+
+  webhook_test.go:
+    - MigrationTargetHint SetAndPop / Miss
+    - WebhookMutate_MigrationTargetHint (hint 优先于 scheduler)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+v3.3 预约 (已写入 FORGET.md + pooling-migration.md)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  - Fencer 接口（OOB 隔离确认：ConfirmIsolated）
+  - Fencing 协议 Stateful e2e（etcd Learner sidecar gRPC）
+  - Weight-aware HashRing（GPU 池按迁移代价加权）
+  - Event pipeline（chan-based Rescheduler→MigrationManager 解耦）
+  - GPU 迁移可行性校验（driver/capability/MIG profile）
+  - Annotation 瘦身（大块上下文下沉外部 store）
+  - Deployment Pod label-based target 匹配
+  - Chaos 测试（litmus/chaos-monkey）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/scheduler/migration_manager.go  新增 PhasePaused / Rehydrate / DryRun 克隆
+  internal/scheduler/migration_manager_test.go +13 用例
+  internal/scheduler/cba.go                 新增 HashRing / HardTimeout / FallbackChain
+  internal/scheduler/cba_test.go            +7 用例
+  internal/scheduler/webhook.go             新增 MigrationTargetHint 机制
+  internal/scheduler/webhook_test.go        +3 用例
+  internal/scheduler/rescheduler.go         写入 MigrationTargetHint
+  internal/scheduler/adapter.go             PodInfo 加 Annotations 字段
+  docs/design/pooling-migration.md          更新实施路线 + 偏差
+  FORGET.md                                  v3.2 状态更新 + v3.3 15 项新刺
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Rescheduler 决，MigrationManager 执，CBA 隔离。
+Stateless 秒级接管，Stateful Fencing 保数据完整。
+HashRing 一致性哈希抗缩容，target hint 防回弹，重启 Rehydrate 不断线。
+522 ✊
