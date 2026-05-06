@@ -1,0 +1,58 @@
+feat(scheduler): 池化调度层 — PoolInfo + 池级聚合 + 碎片率 + 不平衡检测
+
+v3.2 第二步：在 KV Cache 之上叠加池化层。将调度视角从"逐节点贪心"
+切换到"全局容量治理"——池是第一道过滤 + 翻译层。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PoolInfo + 池聚合
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  scheduler/pool.go (NEW):
+    - PoolInfo: Name/Labels/Nodes/CPU/Memory/GPU/Score/UpdatedAt
+    - PoolResource: Total/Used/Util/FragmentRate/Effective
+    - ComputePoolUtilization(): 按池聚合利用率 + 碎片率 + PoolScore
+    - poolNameForNode(): Labels(kubepivot.io/pool) > GPU product > "cpu"
+    - DetectPoolImbalance(): CPU/Mem/GPU 三维阈值检测
+    - poolFragmentRate() / poolGPUFragmentRate(): 池级碎片率
+
+  adapter.go: NodeInfo.Labels 字段
+  kubectl_adapter.go: 节点解析传递 Labels
+  rescheduler.go: nodeUsage.GPU + nodeUtilInfo.GPUUtil 补全
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PoolScore 公式
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Score = (1 - max(Util_cpu, Util_mem, Util_gpu)) × 0.5
+        + min(Frag_cpu, Frag_mem, Frag_gpu) × 0.5
+
+  短板效应：任一维度严重碎片→min 压低→Score 加速下降
+  严格池化隔离：跨不兼容资源类型的池不存在借调
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+测试: 9 用例
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  pool_test.go:
+    CPU-only pool / GPU+CPU 分池 / empty / pool imbalance
+    / no imbalance / PoolScore / Label priority
+    / GPU product fallback / CPU-only fallback
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/scheduler/pool.go (NEW)        ~230 行
+  internal/scheduler/pool_test.go (NEW)    ~130 行
+  internal/scheduler/adapter.go             +1 行
+  internal/scheduler/kubectl_adapter.go     +1 行
+  internal/scheduler/rescheduler.go         +5 行
+
+合计: 2 新文件 + 3 文件变更
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+池是翻译层 — Sizing 对着池容量决策，Placement 在池内做优化，
+Rescheduler 按池级碎片率触发迁移。519 ✊

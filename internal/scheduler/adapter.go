@@ -60,9 +60,10 @@ type GPUInfo struct {
 // 不引入 K8s 完整 Node 对象。
 type NodeInfo struct {
 	Name              string
-	AllocatableCPU    int64     // 毫核 (millicores)
-	AllocatableMemory int64     // 字节 (bytes)
-	GPU               []GPUInfo // v3.1: GPU 设备列表，len=0 表示非 GPU 节点
+	AllocatableCPU    int64             // 毫核 (millicores)
+	AllocatableMemory int64             // 字节 (bytes)
+	GPU               []GPUInfo         // v3.1: GPU 设备列表，len=0 表示非 GPU 节点
+	Labels            map[string]string // v3.2: 节点标签（池定义 / 拓扑标记）
 }
 
 // PodInfo 表示调度器视角下的一个 Pod。

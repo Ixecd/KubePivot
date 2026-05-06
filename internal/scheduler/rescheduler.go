@@ -22,6 +22,7 @@ type PodAssigner interface {
 type nodeUsage struct {
 	CPU    int64 // 毫核
 	Memory int64 // 字节
+	GPU    int64 // v3.2: 毫卡
 }
 
 // nodeUtilInfo 节点利用率信息
@@ -30,6 +31,7 @@ type nodeUtilInfo struct {
 	Usage      nodeUsage
 	CPUUtil    float64 // 0.0 - 1.0
 	MemoryUtil float64
+	GPUUtil    float64 // v3.2: GPU 利用率
 }
 
 // imbalancePair 不平衡节点对：从高负载节点迁移 Pod 到低负载节点
@@ -206,6 +208,7 @@ func (rs *Rescheduler) computeNodeUtilization(pods []*PodInfo, nodes []*NodeInfo
 			u := usageMap[p.NodeName]
 			u.CPU += p.Requests.CPU
 			u.Memory += p.Requests.Memory
+			u.GPU += p.Requests.GPU
 			usageMap[p.NodeName] = u
 		}
 	}
@@ -214,11 +217,17 @@ func (rs *Rescheduler) computeNodeUtilization(pods []*PodInfo, nodes []*NodeInfo
 	utils := make([]*nodeUtilInfo, 0, len(nodes))
 	for _, n := range nodes {
 		u := usageMap[n.Name]
+		gpuTotal := int64(len(n.GPU)) * MilliGPUUnit
+		gpuUtil := 0.0
+		if gpuTotal > 0 {
+			gpuUtil = float64(u.GPU) / float64(gpuTotal)
+		}
 		info := &nodeUtilInfo{
 			Node:       n,
 			Usage:      u,
 			CPUUtil:    float64(u.CPU) / float64(n.AllocatableCPU),
 			MemoryUtil: float64(u.Memory) / float64(n.AllocatableMemory),
+			GPUUtil:    gpuUtil,
 		}
 		utils = append(utils, info)
 	}
