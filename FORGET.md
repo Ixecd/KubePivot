@@ -99,7 +99,15 @@
 
 ---
 
-## 二、v3.2 池化实施依赖（当前仅设计）
+## 二、v3.2 实施中
+
+33a. **Informer KV Cache** — Phase 1（PodCache + NodeCache）+ Phase 3（InformerAdapter）+ Subscribe ✅ 已实施。Phase 2（Watch 接线）+ Phase 4（默认启用）留后续。经三轮挑刺加固：
+    - true CoW（O(1) per Put/Delete）+ atomic.Bool/Int64 + Labels 深拷贝
+    - Rate Limiter 10s + ErrCacheNotReady + Watchdog maxStale/2
+    - podSnapshot.list 预缓存（ListAll 零分配）+ Subscribe 4 种事件
+    已知局限：MODIFIED Fast Pre-check / Map 压缩 / sync.Pool 复用留后续。
+
+## 三、v3.2 池化实施依赖（当前仅设计）
 
 34. **PoolInfo + computePoolUtilization** — 数据结构 + 按池聚合计算。
 
@@ -117,7 +125,7 @@
 
 ---
 
-## 三、已完成但未在真实环境验证
+## 四、已完成但未在真实环境验证
 
 41. **多集群 e2e** — traffic-multi-env 设计声明多集群未验证（仅在单集群多 namespace 测过）。traffic-multi-env-impl-draft.md § 行 894-910。
 
@@ -139,7 +147,7 @@
 
 ---
 
-## 四、已设计但未拍板（draft 状态，需 qc 决定做不做）
+## 五、已设计但未拍板（draft 状态，需 qc 决定做不做）
 
 50. **CBA（Cell-based Architecture）** — 2D Matrix-orchestration / Workload-class 自动判定 / Cell-to-Pod 映射 / 故障隔离策略。整体等 v3.2+ 重新评估。
 
@@ -164,7 +172,7 @@
 
 ---
 
-## 五、已知设计局限 / 边界 trade-off（不修，但要知道）
+## 六、已知设计局限 / 边界 trade-off（不修，但要知道）
 
 57. **FNV hash 分布不均** — 连续短字符串（如 `kp-bench-001..050`）±40% 不均。生产名通常随机所以影响小，但未验证。sharding.md § 行 6.3。
 
@@ -204,7 +212,7 @@
 
 ---
 
-## 六、长期演进（v3.x+ / v4.0，纯粹备忘）
+## 七、长期演进（v3.x+ / v4.0，纯粹备忘）
 
 75. **多租户决策栈** — org 级 sizing + 资源配额。决策栈 "v3.0 后的展望"。
 

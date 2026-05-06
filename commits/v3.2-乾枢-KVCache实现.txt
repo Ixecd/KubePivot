@@ -1,0 +1,95 @@
+feat(eventstream): Informer KV Cache — PodCache + NodeCache + InformerAdapter + Subscribe
+
+v3.2 第一步：Informer Hot 层从 Skeleton 升级为完整调度字段 KV 缓存。
+scheduler 通过 InformerAdapter 读内存替代 kubectl 调用，为池化层提供 O(1) 数据通路。
+经三轮深度挑刺加固，代码接近生产级。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PodCache + NodeCache
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  eventstream/kv_cache.go (NEW):
+    - PodCache: map[string]*PodEntry + byNode 二级索引
+    - NodeCache: map[string]*NodeEntry
+    - atomic.Value + writeMu（lock-free 读，写间互斥）
+    - PutBulk 双缓冲（持锁纳秒级）+ Put/Delete 增量更新
+    - 冷启动 cache.IsReady() 信号
+
+  独立 PodEntry/NodeEntry 类型（避免 eventstream ↔ scheduler 循环依赖）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CoW 索引优化（三轮挑刺核心）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  - true CoW: O(N_nodes) → O(N_node_pods) per Put/Delete
+  - ensureTopCopy() 懒拷贝顶层 map，同次 Put 只拷贝一次
+  - byNode 索引泄漏修复（节点空时清理 key）
+  - Put 从缓存内部读旧 NodeName（不信任调用方传入）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+InformerAdapter
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  scheduler/informer_adapter.go (NEW):
+    - 实现 PodLister + NodeLister 接口
+    - 影子降级: cache 未 ready → 透传 kubectlAdapter
+    - Rate Limiter 10s（防 stale→false 时数千 kubectl 打爆 API）
+    - ErrCacheNotReady（区分"集群空"vs"数据不可用"）
+    - Labels 深拷贝（防调度器修改渗透回 cache）
+    - PodEntry ↔ PodInfo 类型转换
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Subscribe 回调
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  - CacheSubscriber 接口 + CacheChangeEvent
+  - 4 种事件: PodAdded/PodModified/PodDeleted/BulkResync
+  - PutBulk → BulkResync, Put → Added/Modified, Delete → Deleted
+  - 为事件驱动调度预留（v3.2 Rescheduler debounce 接线）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Stale Watchdog
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  - atomic.Int64 lastHeartbeat（无锁，不与 Put 抢 writeMu）
+  - Heartbeat() lock-free → 30s 超时 ready=false → 自动降级 kubectl
+  - ticker = maxStale/2（动态精度，最坏 1.5× maxStale 内检测）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+并发安全
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  - atomic.Bool ready（无锁读，防 data race）
+  - atomic.Int64 lastHeartbeat（无锁读写）
+  - snapshot atomic.Value 原子替换（读始终完整快照）
+  - ListAll 零分配（podSnapshot.list 预缓存）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+测试: 16 用例
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  kv_cache_test.go (13): PutBulk+ListAll, ListByNode, Get, CrossNode,
+    Delete, Heartbeat×2, IsReady, CoW untouched, IndexLeak,
+    IgnoreWrongOldNode, Subscribe×4
+
+  informer_adapter_test.go (3): ListAllPods+Nodes ready, GPU conversion
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/eventstream/kv_cache.go (NEW)       ~430 行
+  internal/eventstream/kv_cache_test.go (NEW)   ~280 行
+  internal/scheduler/informer_adapter.go (NEW)  ~103 行
+  internal/scheduler/informer_adapter_test.go(NEW) ~80 行
+  docs/design/informer-kv-cache-impl-notes.md (NEW) 实施日志
+  FORGET.md                                     更新
+
+合计: 4 新文件 + 2 文件变更
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+一次 kubectl 都不打 — Informer Watch 的数据，调度器直接用。
+KV Cache 是池化层的高速路基，先修路再跑车。518 ✊
