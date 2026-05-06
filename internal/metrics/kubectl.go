@@ -256,11 +256,11 @@ func convertPodMetrics(raw podMetricsV1) (*PodMetrics, error) {
 	memList := make([]Quantity, 0, len(raw.Containers))
 
 	for _, ct := range raw.Containers {
-		cpu, err := parseCPU(ct.Usage.CPU)
+		cpu, err := ParseCPU(ct.Usage.CPU)
 		if err != nil {
 			return nil, fmt.Errorf("container %q CPU: %w", ct.Name, err)
 		}
-		mem, err := parseMemory(ct.Usage.Memory)
+		mem, err := ParseMemory(ct.Usage.Memory)
 		if err != nil {
 			return nil, fmt.Errorf("container %q Memory: %w", ct.Name, err)
 		}
@@ -292,11 +292,11 @@ func convertPodMetrics(raw podMetricsV1) (*PodMetrics, error) {
 // 注意：v2.7.0 不调用 kubectl get node 取 allocatable
 // AllocatableCPU / AllocatableMemory 留 v2.7.x 补全。
 func convertNodeMetrics(raw nodeMetricsV1) (*NodeMetrics, error) {
-	cpu, err := parseCPU(raw.Usage.CPU)
+	cpu, err := ParseCPU(raw.Usage.CPU)
 	if err != nil {
 		return nil, fmt.Errorf("node %q CPU: %w", raw.Metadata.Name, err)
 	}
-	mem, err := parseMemory(raw.Usage.Memory)
+	mem, err := ParseMemory(raw.Usage.Memory)
 	if err != nil {
 		return nil, fmt.Errorf("node %q Memory: %w", raw.Metadata.Name, err)
 	}

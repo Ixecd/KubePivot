@@ -308,6 +308,21 @@ func isMigratable(pod *PodInfo) bool {
 	if v, ok := pod.Labels["kubepivot.io/blue-green-locked"]; ok && v == "true" {
 		return false
 	}
+
+	// v3.1: GPU Pod 粘滞策略 — 默认不迁移
+	// GPU 训练任务迁移意味着 preemption → checkpoint → restore，
+	// 对大部分训练框架是不可恢复的中断。
+	if pod.Requests.GPU > 0 {
+		// 唯一例外：GPU 硬件故障（DCGM Xid 48/61/94 等）
+		// 死在坏卡上比继续跑更糟 → 强制驱逐
+		if pod.Labels["kubepivot.io/gpu-hardware-failure"] == "true" {
+			return true
+		}
+		return false
+	}
+
+	// v3.2 候选：支持 checkpoint-aware GPU 迁移
+
 	return true
 }
 

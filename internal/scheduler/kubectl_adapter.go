@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/Ixecd/kubepivot/internal/executor"
+	"github.com/Ixecd/kubepivot/internal/metrics"
 )
 
 // kubectlAdapter 基于 kubectl 命令同时实现 PodLister 和 NodeLister。
@@ -31,12 +32,14 @@ func (a *kubectlAdapter) kubectl(ctx context.Context, args ...string) ([]byte, e
 
 type nodeJSON struct {
 	Metadata struct {
-		Name string `json:"name"`
+		Name   string            `json:"name"`
+		Labels map[string]string `json:"labels"`
 	} `json:"metadata"`
 	Status struct {
 		Allocatable struct {
 			CPU    string `json:"cpu"`
 			Memory string `json:"memory"`
+			GPU    string `json:"nvidia.com/gpu,omitempty"`
 		} `json:"allocatable"`
 	} `json:"status"`
 }
@@ -64,11 +67,17 @@ func (a *kubectlAdapter) ListAllNodes(ctx context.Context) ([]*NodeInfo, error) 
 		if err != nil {
 			return nil, fmt.Errorf("node %s: memory %q: %w", item.Metadata.Name, item.Status.Allocatable.Memory, err)
 		}
-		nodes = append(nodes, &NodeInfo{
+		node := &NodeInfo{
 			Name:              item.Metadata.Name,
 			AllocatableCPU:    cpu,
 			AllocatableMemory: mem,
-		})
+		}
+		// v3.1: 解析 GPU 资源
+		if gpuStr := item.Status.Allocatable.GPU; gpuStr != "" {
+			gpuCount, _ := parseGPUCount(gpuStr)
+			node.GPU = parseGPUNodeLabels(item.Metadata.Labels, gpuCount)
+		}
+		nodes = append(nodes, node)
 	}
 	return nodes, nil
 }
@@ -88,6 +97,7 @@ type podJSON struct {
 				Requests struct {
 					CPU    string `json:"cpu"`
 					Memory string `json:"memory"`
+					GPU    string `json:"nvidia.com/gpu,omitempty"`
 				} `json:"requests"`
 			} `json:"resources"`
 		} `json:"containers"`
@@ -113,12 +123,14 @@ func (a *kubectlAdapter) ListAllPods(ctx context.Context) ([]*PodInfo, error) {
 	pods := make([]*PodInfo, 0, len(list.Items))
 	for _, item := range list.Items {
 		// 汇总所有容器的资源请求
-		var totalCPU, totalMem int64
+		var totalCPU, totalMem, totalGPU int64
 		for _, c := range item.Spec.Containers {
 			cpu, _ := parseCPU(c.Resources.Requests.CPU)
 			mem, _ := parseMemory(c.Resources.Requests.Memory)
+			gpu, _ := parseGPUCount(c.Resources.Requests.GPU)
 			totalCPU += cpu
 			totalMem += mem
+			totalGPU += gpu
 		}
 
 		pods = append(pods, &PodInfo{
@@ -130,77 +142,78 @@ func (a *kubectlAdapter) ListAllPods(ctx context.Context) ([]*PodInfo, error) {
 			Requests: ResourceRequest{
 				CPU:    totalCPU,
 				Memory: totalMem,
+				GPU:    totalGPU,
 			},
 		})
 	}
 	return pods, nil
 }
 
-// ─── 临时资源解析（Phase 1） ──────────────────────────────
-// 后续可直接引用 internal/metrics/quantity.go 的公开函数
-// 消除此处的重复实现。当前先用简单 Scanf 覆盖核心格式。
+// ─── 资源解析适配层（v3.1） ─────────────────────────────────────
+// kubectlAdapter 的 parseCPU / parseMemory 原为 Phase 1 临时实现。
+// v3.1 统一到 internal/metrics/quantity.go 的公开函数 ParseCPU / ParseMemory / ParseGPUCount，
+// 此处保留薄封装以保持 (int64, error) 返回签名，避免修改所有调用方。
 
 func parseCPU(raw string) (int64, error) {
-	if raw == "" {
-		return 0, fmt.Errorf("empty cpu value")
+	q, err := metrics.ParseCPU(raw)
+	if err != nil {
+		return 0, err
 	}
-	// "10" → 10 cores → 10000m
-	if raw[len(raw)-1] == 'm' {
-		var v int64
-		_, err := fmt.Sscanf(raw, "%dm", &v)
-		return v, err
-	}
-	var v float64
-	_, err := fmt.Sscanf(raw, "%f", &v)
-	return int64(v * 1000), err
+	return q.Value, nil
 }
 
 func parseMemory(raw string) (int64, error) {
-	if raw == "" {
-		return 0, fmt.Errorf("empty memory value")
+	q, err := metrics.ParseMemory(raw)
+	if err != nil {
+		return 0, err
+	}
+	return q.Value, nil
+}
+
+func parseGPUCount(raw string) (int64, error) {
+	q, err := metrics.ParseGPUCount(raw)
+	if err != nil {
+		return 0, err
+	}
+	return q.Value, nil
+}
+
+// parseGPUNodeLabels 从 Node Labels 提取 GPU 设备信息。
+// NVIDIA GPU Operator 在节点上打的标签：
+//
+//	nvidia.com/gpu.product       → "NVIDIA-A100-SXM4-40GB"
+//	nvidia.com/gpu.count         → "8"
+//	nvidia.com/gpu.memory        → "40960" (MiB)
+//	nvidia.com/gpu.nvswitch      → "true" (有 NVSwitch)
+func parseGPUNodeLabels(labels map[string]string, gpuCount int64) []GPUInfo {
+	if gpuCount <= 0 {
+		return nil
+	}
+	product := labels["nvidia.com/gpu.product"]
+	memStr := labels["nvidia.com/gpu.memory"]
+	hasNVSwitch := labels["nvidia.com/gpu.nvswitch"] == "true"
+
+	var memTotal int64
+	if memStr != "" {
+		if m, err := fmt.Sscanf(memStr, "%d", &memTotal); m == 1 && err == nil {
+			memTotal *= 1024 * 1024 // MiB → bytes
+		}
 	}
 
-	// 二进制单位 (IEC)
-	if len(raw) >= 2 && raw[len(raw)-2:] == "Ki" {
-		var v int64
-		_, err := fmt.Sscanf(raw, "%dKi", &v)
-		return v * 1024, err
+	gpus := make([]GPUInfo, 0, gpuCount)
+	for i := int64(0); i < gpuCount; i++ {
+		domain := 0
+		if hasNVSwitch {
+			// 简化：每 4 个 GPU 一个 NVSwitch domain（A100 典型配置）
+			domain = int(i / 4)
+		}
+		gpus = append(gpus, GPUInfo{
+			Product:      product,
+			Index:        int(i),
+			MemTotal:     memTotal,
+			Health:       "Healthy",
+			NVLinkDomain: domain,
+		})
 	}
-	if len(raw) >= 2 && raw[len(raw)-2:] == "Mi" {
-		var v int64
-		_, err := fmt.Sscanf(raw, "%dMi", &v)
-		return v * 1024 * 1024, err
-	}
-	if len(raw) >= 2 && raw[len(raw)-2:] == "Gi" {
-		var v int64
-		_, err := fmt.Sscanf(raw, "%dGi", &v)
-		return v * 1024 * 1024 * 1024, err
-	}
-	if len(raw) >= 2 && raw[len(raw)-2:] == "Ti" {
-		var v int64
-		_, err := fmt.Sscanf(raw, "%dTi", &v)
-		return v * 1024 * 1024 * 1024 * 1024, err
-	}
-
-	// 十进制单位 (SI) — K8s 中不常用但合法
-	if raw[len(raw)-1] == 'k' || raw[len(raw)-1] == 'K' {
-		var v float64
-		_, err := fmt.Sscanf(raw, "%fK", &v)
-		return int64(v * 1000), err
-	}
-	if raw[len(raw)-1] == 'M' && (len(raw) < 2 || raw[len(raw)-2] != 'i') {
-		var v float64
-		_, err := fmt.Sscanf(raw, "%fM", &v)
-		return int64(v * 1000 * 1000), err
-	}
-	if raw[len(raw)-1] == 'G' && (len(raw) < 2 || raw[len(raw)-2] != 'i') {
-		var v float64
-		_, err := fmt.Sscanf(raw, "%fG", &v)
-		return int64(v * 1000 * 1000 * 1000), err
-	}
-
-	// 纯数字，默认单位为字节
-	var v int64
-	_, err := fmt.Sscanf(raw, "%d", &v)
-	return v, err
+	return gpus
 }

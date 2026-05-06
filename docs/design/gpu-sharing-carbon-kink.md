@@ -1,39 +1,50 @@
-# KubePivot v3.2 时空折叠 — GPU 共享 + 碳感知调度 + KinK 测试加速
+# 乾枢 GPU 共享 + 碳感知调度 + KinK 测试加速
 
 > 状态：📝 draft — 待 qc 拍板
-> 日期：2026-05-02
+> 日期：2026-05-02（更新 2026-05-06）
 > 关联：[gpu-scheduling-draft.md](gpu-scheduling-draft.md) / [scheduler](../../internal/scheduler/) / [sizing](../../internal/sizing/) / [metrics](../../internal/metrics/)
-> 背景：v3.1 完成 GPU 整卡调度。v3.2 在整卡之上做三件事：
->       空间维度榨干每张卡、时间维度对齐绿色能源、测试维度大规模验证
+> 版本归属：
+>   **§3 碳感知调度 → v3.1**（GPU 整卡 + 三维 DP + 碳感知基础设施）
+>   **§2 GPU 共享 + §4 KinK → v3.2**（池化之后，共享 + 大规模验证）
+> 背景：v3.1 完成 GPU 整卡调度 + 碳感知。v3.2 在整卡之上做共享 + 测试加速
 
 ---
 
 ## 一、目标
 
-v3.1 解决"怎么把 GPU 卡分下去"。v3.2 解决三个上层问题：
+本文档跨 v3.1 和 v3.2 两个版本：
+
+**v3.1（当前）**：GPU 整卡调度 + 三维 DP + 碳感知基础设施。碳感知部分见 §3——
+CarbonIntensityProvider 接口 + CarbonSDK 对接 + `kp scheduler status` 碳强度展示。
+不包含 Waiting Queue 延迟调度（那是 v3.2 的事）。
+
+**v3.2（池化之后）**：GPU 共享 + KinK 测试加速。
 
 1. **空间维度**：一张卡别浪费。MPS/MIG/TimeSlicing 把 GPU 利用率从 40% 推到 85%+
-2. **时间维度**：非紧急 Job 别在脏电时段跑。碳感知调度把碳排降到合理水平
-3. **测试维度**：没有 8×A100 也能验证拓扑调度。KinK 模拟上万个 fake 节点压测乾枢
+2. **测试维度**：没有 8×A100 也能验证拓扑调度。KinK 模拟上万个 fake 节点压测乾枢
+3. **碳感知深化**：Waiting Queue 延迟调度 + 碳成本进入调度决策 CostFactor
 
 三者关系：
 
 ```
 v3.1 整卡调度（基础层）
-  ├─ v3.2a 空间维度：GPU 共享
+  ├─ GPU 资源感知 + 三维 DP
+  ├─ 碳感知基础设施（CarbonIntensityProvider + 碳强度展示）
+  └─ KinK 第一层：fake GPU 节点基础压测
+        │
+        ▼ 打完 v3.1 tag
+v3.2 池化 + 共享 + 测试加速
+  ├─ 空间维度：GPU 共享（MPS/TimeSlicing/MIG）
   │     RecommendedGPU 从整数 → 浮点数 (0.1 粒度)
   │     bin_pack 加共享并发限制
   │     MIG Auto-Config 动态硬件分区
-  │
-  ├─ v3.2b 时间维度：碳感知调度
+  ├─ 时间维度：碳感知深化
   │     调度成本 = ResourceUsage × CarbonIntensity(t)
   │     coordinator 加 Waiting Queue
   │     非紧急 Job 自动延迟到低碳窗口
-  │
-  └─ v3.2c 测试维度：KinK 加速
+  └─ 测试维度：KinK 全功能
         模拟 10000+ 假节点GPU + NVLink 拓扑
         vcluster 式多租户隔离验证
-        不需要真实 A100 集群
 ```
 
 ---

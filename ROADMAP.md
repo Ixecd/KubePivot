@@ -382,33 +382,46 @@ v3.1 完成后打 tag，然后进入 v3.2 池化实现。
 
 ---
 
-## v3.2 — Informer KV Cache + 池化调度层
+## v3.2 — ai-plan 2.0 + KV Cache + GPU 共享 + 池化 + CBA
 
-> 设计文档：[docs/design/informer-kv-cache.md](docs/design/informer-kv-cache.md) / [docs/design/pooling-migration.md](docs/design/pooling-migration.md)
+> 设计文档：
+>   [docs/design/informer-kv-cache.md](docs/design/informer-kv-cache.md) /
+>   [docs/design/pooling-migration.md](docs/design/pooling-migration.md) /
+>   [docs/design/gpu-sharing-carbon-kink.md](docs/design/gpu-sharing-carbon-kink.md) /
+>   [docs/design/cell-based-architecture.md](docs/design/cell-based-architecture.md) /
+>   [docs/design/ai-plan-2.0-draft.md](docs/design/ai-plan-2.0-draft.md)
 
 ### 目标
 
-v3.2 分两阶段推进：先做 **Informer KV Cache**，把调度器数据通路从
-“kubectl → JSON → parse”压缩成”内存 map → O(1) 读”，再做**池化调度层**，
-将调度视角从”逐节点贪心”切换到”全局容量治理”。
+v3.1 做完 GPU 整卡 + 三维 DP + 碳感知基础设施后，v3.2 推进五件事——
+按依赖顺序：
 
-顺序逻辑：池化需要频繁扫全集群 Pod/Node 算池级聚合（碎片率、PoolScore）。
-KV Cache 不落地，池化层就得每 5min 打一次 kubectl 全量查询——1000 Pod
-场景下 JSON 解析是纯浪费。KV Cache 先把数据通路修好，池化层坐享 O(1) 读。
+1. **ai-plan 2.0** — 多语言依赖扫描 + GPU 库检测 + Sizing 反馈循环
+2. **Informer KV Cache** — 调度器数据通路从 kubectl 切换到内存 O(1) 读
+3. **GPU 共享** — MPS/TimeSlicing/MIG Auto-Config，利用率 40%→85%
+4. **池化调度层** — 全局容量治理，碎片率驱动的跨节点迁移
+5. **CBA** — Cell-based Architecture，有状态故障隔离
 
-实际执行节奏（交替推进，非严格串行）：
-
-```
-KV Cache Phase 1-2 (数据结构 + Watch 接线)
-  → 池化 A（PoolInfo + computePoolUtilization，直接读 cache）
-  → 池化 B（池间不平衡检测 + 碎片率）
-  → KV Cache Phase 3-4 (InformerAdapter 切换 + 默认启用)
-  → 池化 C-D（MigrationManager + Fencing + Dry-run）
-```
+顺序逻辑：
+- ai-plan 2.0 独立于 KV Cache 和池化，可以先做
+- KV Cache 是池化的数据通路前提（池化需频繁扫全集群）
+- GPU 共享依赖池化提供全局碎片视图（哪张卡碎片严重）
+- CBA 依赖 MigrationManager（池化 C）的 Fencing 协议
 
 ### 核心交付
 
-#### A. Informer KV Cache（先导）
+#### A. ai-plan 2.0（先导，可独立推进）
+
+```
+- Phase 1 增强：多语言依赖扫描（requirements.txt/pyproject.toml/package.json 等）
+- GPU 库检测：torch/tensorflow/vllm 等推断 GPU 需求
+- Sizing 反馈循环：冷启动 vs 热更新 / code-metric 关联 / OOM 感知
+- GPU 智能检测三层：代码 imports → 环境依赖 → Dockerfile base image
+- Confidence Score：每决策因子可信度展示
+- 最终输出：framework + profile + GPU 字段留白（sizing + GPU detection 填充）
+```
+
+#### B. Informer KV Cache
 
 ```
 - PodCache + NodeCache: map[string]*PodInfo + byNode 二级索引
@@ -422,7 +435,17 @@ KV Cache Phase 1-2 (数据结构 + Watch 接线)
 - 7 个监控指标（含 Watch Heartbeat stale 检测）
 ```
 
-#### B. 池化分层拓扑
+#### C. GPU 共享
+
+```
+- MPS: Multi-Process Service，多推理 Pod 共享单卡（48 client 上限）
+- TimeSlicing: 时间片轮转，允许 3x 超卖
+- MIG Auto-Config: nvidia-smi mig wrapper 动态重组硬件分区
+- RecommendedGPU int → float64（0.1 粒度）
+- resources.yaml sharingMode: mps | timeslicing | mig | exclusive
+```
+
+#### D. 池化分层拓扑
 
 ```
 - Node Pool（物理边界）：从 Node Label 推导，第一道过滤
@@ -431,7 +454,7 @@ KV Cache Phase 1-2 (数据结构 + Watch 接线)
 - PoolScore 动态健康度字段
 ```
 
-#### C. MigrationManager 迁移执行引擎
+#### E. MigrationManager 迁移执行引擎
 
 ```
 - Rescheduler（决策）+ MigrationManager（执行）职责分离
@@ -441,7 +464,7 @@ KV Cache Phase 1-2 (数据结构 + Watch 接线)
 - 并发迁移数按池健康度动态调整
 ```
 
-#### D. Fencing 协议（Stateful Cell）
+#### F. Fencing 协议（Stateful Cell）
 
 ```
 - Sidecar Informer Watch 自身 Pod Annotation 感知 Fencing 阶段
@@ -450,7 +473,7 @@ KV Cache Phase 1-2 (数据结构 + Watch 接线)
 - fencing-ready: true 标记确认后推进 Complete
 ```
 
-#### E. 池级碎片整理
+#### G. 池级碎片整理
 
 ```
 - 碎片率传感器：周期性检测池内”碎片率 > 阈值”
@@ -459,19 +482,32 @@ KV Cache Phase 1-2 (数据结构 + Watch 接线)
 - Dry-run 模式：只记录不执行，验证碎片算法稳定性
 ```
 
+#### H. CBA（Cell-based Architecture）
+
+```
+- 2D Matrix-orchestration: Shard × Workload-class
+- Workload-class 自动判定（Stateless vs Stateful）
+- Cell-to-Pod 映射管理
+- 相对健康排名 + 故障可视化
+- 前置条件：集群 ≥ 100 ns + 有状态迁移路径就绪
+```
+
 ### 务实声明
 
-- **MigrationManager 做在 Controller 进程内**：共享 Informer pool + 池视图，
-  不做独立二进制，避免 dual-write 并发冲突和部署复杂度
-- **池定义来源**：v3.2 先用 Node Label 推导（人工标注），自动聚类留后续
-- **Fencing 依赖 Sidecar gRPC 接口**：需 etcd Learner sidecar 暴露 fencing 端点
+- **ai-plan 2.0 独立推进**：不依赖 KV Cache 或池化，先交付再集成
+- **GPU 共享依赖池化**：碎片视图对共享决策至关重要，共享在池化之后
+- **CBA 依赖 MigrationManager**：Fencing 协议是 CBA Stateful Cell 的基础
+- **KinK 贯穿始终**：tools/kink/ 独立编译，不增 kp 二进制体积
 
 ### 验收
 
 ```
+✓ ai-plan 2.0: 多语言 dp detect 输出 GPU 推荐（不含真实 GPU 验证）
+✓ KV Cache: InformerAdapter 替换 kubectlAdapter，ListAllPods < 1ms
+✓ GPU 共享: MPS 48 client 上限 + TimeSlicing 3x 超卖 + MIG 分区
 ✓ PoolInfo 聚合计算（碎片率 / 有效容量 / PoolScore）
 ✓ 池间不平衡检测 + 池内碎片率阈值触发
-✓ MigrationManager 状态机完整路径（不含 Fencing）
+✓ MigrationManager 状态机完整路径（含 Fencing）
 ✓ Dry-run 模式输出迁移建议不执行实际 evict
 ✓ make dev 全绿
 ```
@@ -516,18 +552,17 @@ Org 级多租户（v4.0 候选）:
 ```
 v2.6.0 → v2.7.0 → v2.8 → v2.9 → v3.0（全部已完成，2026-04-26 ~ 04-30）
   ↓
-v3.1 GPU 三维 DP + 碳排放感知（当前，预计 2026-05/06）
+v3.1 GPU 整卡 + 三维 DP + 碳感知基础设施（当前，预计 2026-05/06）
   ↓ 打完 v3.1 tag 后进入
-v3.2 Informer KV Cache → 池化调度层（预计 2026-06/07）
+v3.2 ai-plan 2.0 → KV Cache → GPU 共享 → 池化 → CBA（预计 2026-06/07）
   ↓
 v4.0 平台化探索（触发条件满足后启动，预计 2027+）
 ```
 
 **关键依赖**：
-- v3.1 依赖真实 GPU 集群或 KinK 模拟环境用于验证；Write-heavy Cache 基准测试
-  结果决定细粒度锁改造范围；碳排放数据源依赖云厂商 API 或 Electricity Maps
-- v3.2 KV Cache 依赖 Informer Watch 流已稳定（v2.7.0 落地）；池化层依赖
-  KV Cache 提供 O(1) Pod/Node 查询；Fencing 协议依赖 etcd Learner sidecar gRPC 接口
+- v3.1 依赖真实 GPU 集群或 KinK 模拟环境用于验证；碳排放数据源依赖 CarbonSDK/WattTime
+- v3.2 ai-plan 2.0 独立推进；KV Cache 依赖 Informer Watch 流（v2.7.0 已稳定）；
+  GPU 共享依赖池化提供全局碎片视图；CBA 依赖 MigrationManager 的 Fencing 协议
   
 **务实声明**：
 - 所有”预计”时间线均为单人开发的估算，实际交付日期取决于真实 GPU 集群的

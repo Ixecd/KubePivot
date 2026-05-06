@@ -18,6 +18,39 @@ func dpNode(node *NodeInfo, availablePods []*PodInfo) []*PodInfo {
 		return nil
 	}
 
+	// v3.1: GPU 约束 — 预过滤 GPU Pod（按型号匹配健康 GPU）
+	hasGPU := false
+	// 按 GPU product 统计健康 GPU 数（同一节点可能混合 A100/H100）
+	healthyByProduct := make(map[string]int64)
+	for _, g := range node.GPU {
+		if g.Health == "Healthy" {
+			healthyByProduct[g.Product]++
+			healthyByProduct[""]++ // "" 匹配所有 GPU（Pod 未指定型号时用）
+		}
+	}
+
+	var gpuFiltered []*PodInfo
+	for _, p := range availablePods {
+		if p.Requests.GPU > 0 {
+			hasGPU = true
+			// 毫卡转换：4000 = 4 整卡
+			gpuCards := p.Requests.GPU / MilliGPUUnit
+			// 按 Pod 指定的 GPU 型号匹配（从 label 读取）
+			product := ""
+			if p.Labels != nil {
+				product = p.Labels["nvidia.com/gpu.product"]
+			}
+			if healthyByProduct[product] < gpuCards {
+				continue // 该型号健康 GPU 不足
+			}
+		}
+		gpuFiltered = append(gpuFiltered, p)
+	}
+
+	if hasGPU && len(healthyByProduct) == 0 {
+		return nil // GPU Pod 存在但节点无健康 GPU
+	}
+
 	// 离散化
 	cpuSlots := int(node.AllocatableCPU / cpuStep)
 	memSlots := int(node.AllocatableMemory / (memoryStep * 1024 * 1024))
@@ -31,8 +64,8 @@ func dpNode(node *NodeInfo, availablePods []*PodInfo) []*PodInfo {
 		cpu       int   // 离散化 CPU 槽位
 		mem       int64 // 内存需求（字节）
 	}
-	reqs := make([]podReq, 0, len(availablePods))
-	for i, p := range availablePods {
+	reqs := make([]podReq, 0, len(gpuFiltered))
+	for i, p := range gpuFiltered {
 		cpu := int(p.Requests.CPU / cpuStep)
 		if cpu == 0 {
 			cpu = 1 // 至少占 1 个槽位
@@ -91,7 +124,7 @@ func dpNode(node *NodeInfo, availablePods []*PodInfo) []*PodInfo {
 	currC := bestC
 	for i := len(reqs) - 1; i >= 0; i-- {
 		if currC >= reqs[i].cpu && keep[i][currC] {
-			p := availablePods[reqs[i].origIndex]
+			p := gpuFiltered[reqs[i].origIndex]
 			selected = append(selected, p)
 			currC -= reqs[i].cpu
 		}
@@ -113,11 +146,28 @@ func BinPack(nodes []*NodeInfo, pods []*PodInfo) (*SchedulingPlan, error) {
 		}, nil
 	}
 
+	// v3.1: GPU Pod 存在时，预过滤候选节点
+	hasGPU := false
+	for _, p := range pods {
+		if HasGPURequest(p) {
+			hasGPU = true
+			break
+		}
+	}
+	if hasGPU {
+		nodes = FilterGPUNode(nodes, "", 1) // 至少 1 张健康 GPU
+		if len(nodes) == 0 {
+			return nil, errNoNodes
+		}
+	}
+
 	// 只处理 Running 状态的 Pod
 	runningPods := make([]*PodInfo, 0, len(pods))
 	for _, p := range pods {
-		if p.Phase == "Running" && p.Requests.CPU > 0 && p.Requests.Memory > 0 {
-			runningPods = append(runningPods, p)
+		if p.Phase == "Running" {
+			if p.Requests.CPU > 0 || p.Requests.Memory > 0 || p.Requests.GPU > 0 {
+				runningPods = append(runningPods, p)
+			}
 		}
 	}
 
@@ -216,12 +266,103 @@ func sortPods(pods []*PodInfo, alpha, beta float64, nodes []*NodeInfo) []*PodInf
 }
 
 // normalizedSize 计算 Pod 的归一化资源吞噬程度。
+// v3.1: GPU Pod 额外乘以 GPU 因子（以 maxGPUs 为归一化基准）。
 func normalizedSize(p *PodInfo, alpha, beta float64, maxCPU, maxMem int64) float64 {
-	return alpha*float64(p.Requests.CPU)/float64(maxCPU) +
+	score := alpha*float64(p.Requests.CPU)/float64(maxCPU) +
 		beta*float64(p.Requests.Memory)/float64(maxMem)
+
+	// v3.1: GPU Pod 按 GPU 请求加权（FFD 大 Pod 优先）
+	if p.Requests.GPU > 0 && maxGPUsForSort > 0 {
+		gpuScore := float64(p.Requests.GPU) / float64(maxGPUsForSort*MilliGPUUnit)
+		// GPU 权重取 alpha+beta 的均值（1/3 各维度）
+		score += (alpha + beta) / 2 * gpuScore
+	}
+	return score
 }
+
+// maxGPUsForSort 全局变量：sortPods 前的 GPU 归一化基准。
+// 在 sortPods 中由调用方设置。
+var maxGPUsForSort int64
 
 // podSizeSimple 简单求和排序（归一化不可用时的 fallback）。
 func podSizeSimple(p *PodInfo) int64 {
 	return p.Requests.CPU + p.Requests.Memory
+}
+
+// ─── v3.1 GPU ──────────────────────────────────────────────────
+
+// FilterGPUNode 过滤出满足 GPU 需求的节点。
+// 调用 BinPack 前，如果任何 Pod 有 GPU 请求，先用本函数缩小候选节点集。
+// product 为空时不过滤型号。
+func FilterGPUNode(nodes []*NodeInfo, product string, minGPUs int64) []*NodeInfo {
+	filtered := make([]*NodeInfo, 0)
+	for _, n := range nodes {
+		if len(n.GPU) == 0 {
+			continue
+		}
+		if product != "" && !hasGPUProduct(n, product) {
+			continue
+		}
+		if int64(len(n.GPU)) < minGPUs {
+			continue
+		}
+		filtered = append(filtered, n)
+	}
+	return filtered
+}
+
+func hasGPUProduct(n *NodeInfo, product string) bool {
+	for _, g := range n.GPU {
+		if g.Product == product {
+			return true
+		}
+	}
+	return false
+}
+
+// ScoreGPUNode 为 GPU 节点计算拓扑友好度得分。
+// 设计文档 §5.2：同 NVSwitch domain 内空闲 GPU ≥ 需求数 → 3x 得分权重。
+// 返回值 > 1.0 = 拓扑友好，≤ 1.0 = 碎片化降级。
+func ScoreGPUNode(node *NodeInfo, requiredGPUs int64) float64 {
+	if requiredGPUs <= 0 || len(node.GPU) == 0 {
+		return 1.0
+	}
+
+	// 统计每个 NVLink domain 的健康 GPU 数
+	domainFree := make(map[int]int)
+	totalHealthy := 0
+	for _, g := range node.GPU {
+		if g.Health == "Healthy" {
+			domainFree[g.NVLinkDomain]++
+			totalHealthy++
+		}
+	}
+
+	if int64(totalHealthy) < requiredGPUs {
+		return 0 // 健康 GPU 总数不够，不可调度
+	}
+
+	// 基础分：健康 GPU 比例
+	base := float64(totalHealthy) / float64(requiredGPUs)
+
+	// 找最大的同 domain 连续空闲数
+	bestDomain := 0
+	for _, free := range domainFree {
+		if free > bestDomain {
+			bestDomain = free
+		}
+	}
+
+	if bestDomain >= int(requiredGPUs) {
+		return base * 3.0 // 同一 NVSwitch domain 装得下 → 3x 优先
+	}
+	if bestDomain >= int(requiredGPUs)/2 {
+		return base * 1.5 // 跨 2 个 domain → 轻微加分
+	}
+	return base // 全碎了 → 基础分
+}
+
+// HasGPURequest 判断 Pod 是否请求了 GPU。
+func HasGPURequest(pod *PodInfo) bool {
+	return pod.Requests.GPU > 0
 }

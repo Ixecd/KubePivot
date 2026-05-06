@@ -18,7 +18,7 @@ import (
 )
 
 // =============================================================================
-// 1. 权重逻辑测试 (getWeights)
+// 1. 权重逻辑测试 (sizing.GetWeights)
 // =============================================================================
 
 func TestGetWeights(t *testing.T) {
@@ -31,14 +31,15 @@ func TestGetWeights(t *testing.T) {
 		{sizing.ProfileBatch, 0.3, 0.7},   // Batch 侧重吞吐，内存权重高
 		{sizing.ProfileDB, 0.3, 0.7},      // DB 侧重缓存，内存权重高
 		{sizing.ProfileDefault, 0.5, 0.5}, // 默认对等
+		{sizing.ProfileGPU, 0.1, 0.2},     // v3.1: GPU 任务 CPU/Mem 权重低
 		{"unknown", 0.5, 0.5},             // 未知类型降级到对等
 	}
 
 	for _, tt := range tests {
 		t.Run(string(tt.profile), func(t *testing.T) {
-			cpuW, memW := getWeights(tt.profile)
+			cpuW, memW := sizing.GetWeights(tt.profile)
 			if cpuW != tt.expectedCPUW || memW != tt.expectedMemW {
-				t.Errorf("getWeights(%s) = (%.1f, %.1f), want (%.1f, %.1f)",
+				t.Errorf("sizing.GetWeights(%s) = (%.1f, %.1f), want (%.1f, %.1f)",
 					tt.profile, cpuW, memW, tt.expectedCPUW, tt.expectedMemW)
 			}
 		})

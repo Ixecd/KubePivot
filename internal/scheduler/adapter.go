@@ -35,13 +35,34 @@ import (
 // 核心数据类型（乾枢自有，与 internal 包解耦）
 // ────────────────────────────────────────────────────────────
 
+// GPU 资源单位常量。与 K8s CPU 毫核逻辑对称：
+//
+//	resources.yaml 写 gpu.count: 4  → parser 转成 4000（4 × MilliGPUUnit）
+//	resources.yaml 写 gpu.count: 0.2 → parser 转成 200（v3.2 共享）
+const (
+	MilliGPUUnit = 1000       // 1 GPU 卡 = 1000 毫卡
+	WholeGPU     = 1 * MilliGPUUnit
+)
+
+// GPUInfo 描述单个 GPU 设备在调度器视角下的关键属性。
+// 数据来源：DCGM exporter → Prometheus → MetricsProvider。
+type GPUInfo struct {
+	Product     string   // 型号，如 "NVIDIA-A100-SXM4-40GB"
+	Index       int      // GPU index on node
+	MemTotal    int64    // 显存总量（字节）
+	MemUsed     int64    // 显存已用量（字节）
+	Health      string   // "Healthy" | "Degraded" | "Failed"
+	NVLinkDomain int     // NVSwitch domain ID（同 domain 内 GPU 有 NVLink 互联）
+}
+
 // NodeInfo 表示调度器视角下的一个 K8s 节点。
 // 字段仅包含 bin packing 需要的容量信息，
 // 不引入 K8s 完整 Node 对象。
 type NodeInfo struct {
 	Name              string
-	AllocatableCPU    int64 // 毫核 (millicores)
-	AllocatableMemory int64 // 字节 (bytes)
+	AllocatableCPU    int64     // 毫核 (millicores)
+	AllocatableMemory int64     // 字节 (bytes)
+	GPU               []GPUInfo // v3.1: GPU 设备列表，len=0 表示非 GPU 节点
 }
 
 // PodInfo 表示调度器视角下的一个 Pod。
@@ -63,6 +84,7 @@ type PodInfo struct {
 type ResourceRequest struct {
 	CPU    int64 // 毫核
 	Memory int64 // 字节
+	GPU    int64 // v3.1: 毫卡（MilliGPU），0=无 GPU，1000=1 整卡。resources.yaml gpu.count 由 parser 按 MilliGPUUnit 缩放
 }
 
 // SchedulingPlan 是调度器的一次完整输出。

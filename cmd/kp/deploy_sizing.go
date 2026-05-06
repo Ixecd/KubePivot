@@ -503,16 +503,3 @@ func findComponentsSequence(node *yaml.Node) *yaml.Node {
 	return nil
 }
 
-// getWeights 内联权重计算 (临时方案，避免跨包调用未导出的 weights 函数)
-// 逻辑必须与 internal/sizing/dp.go 的 weights 函数完全同步
-// Level5 重构: 统一导出或提取公共包
-func getWeights(p sizing.Profile) (float64, float64) {
-	switch p {
-	case sizing.ProfileWeb:
-		return 0.7, 0.3
-	case sizing.ProfileBatch, sizing.ProfileDB:
-		return 0.3, 0.7
-	default:
-		return 0.5, 0.5
-	}
-}

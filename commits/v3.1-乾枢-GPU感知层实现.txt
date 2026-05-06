@@ -1,0 +1,111 @@
+feat(scheduler): GPU 感知层 + 三维 DP 保守模式 + BinPack GPU + Rescheduler GPU 约束
+
+v3.1 GPU 调度系统第一步：整卡感知、保守 sizing、拓扑评分、粘滞迁移策略。
+严格按照设计文档 §十一 Step 1-4 实施顺序落地。碳感知 + KinK 下一步。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Step 1: GPU 资源感知层
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  scheduler/adapter.go:
+    - MilliGPUUnit=1000 / WholeGPU 常量（resources.yaml "4"→parser→4000 毫卡）
+    - GPUInfo struct: Product/Index/MemTotal/MemUsed/Health/NVLinkDomain
+    - NodeInfo.GPU []GPUInfo + ResourceRequest.GPU int64
+
+  metrics/quantity.go:
+    - parseCPU→ParseCPU, parseMemory→ParseMemory 导出
+    - 新增 ParseGPUCount (支持 "4"/"0.2"/"4000m"→毫卡)
+    - kubectl_adapter.go 删 80 行重复实现，改为薄封装调用 metrics.Parse*
+
+  metrics/gpu.go (NEW):
+    - GPUMetrics+NodeGPUMetrics+GPUStalenessError
+    - PrometheusClient.QueryGPUMetrics() — DCGM 四指标并行查询
+    - DefaultGPUStalenessThreshold=60s
+
+  scheduler/kubectl_adapter.go:
+    - nodeJSON 加 Labels+Allocatable.GPU 字段
+    - podJSON 加 nvidia.com/gpu 请求字段
+    - parseGPUNodeLabels() — 从 NVIDIA GPU Operator labels 构建 GPUInfo
+    - ListAllNodes/Pods 中聚合 GPU 资源
+
+  sizing/gpu_policy.go (NEW):
+    - MIGProfiles (A100-40GB/80GB/H100-80GB)
+    - QuantizeGPUMem() — 推荐值量化到 MIG 分区大小
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Step 2b: 三维 DP 保守模式
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  sizing/dp.go:
+    - ProfileGPU ("gpu") + GetGPUWeights() (0.1/0.2/0.7)
+    - Suggestion 加 5 个 GPU 字段 (CurrentGPUCount/Mem, RecommendedGPUMem/Count, SavingsGPU)
+    - ComputeGPU() — CPU/Mem 走 2D DP，GPU 推荐值=当前值（保守不缩容）
+      等 DCGM 数据流就绪后升级为完整 3D DP
+
+  cmd/kp/deploy_sizing.go:
+    - 移除重复的 getWeights() 副本 (v2.9 遗留)
+    - 测试切换到 sizing.GetWeights()
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Step 3: BinPack GPU
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  scheduler/bin_pack.go:
+    - FilterGPUNode() — 按 product+minGPUs 过滤节点
+    - ScoreGPUNode() — NVLink 拓扑评分（同 domain≥需求→3x，跨2 domain→1.5x）
+    - HasGPURequest() — Pod GPU 请求检测
+    - BinPack: GPU Pod 存在时预过滤候选节点
+    - dpNode: GPU 约束改为按 product 型号匹配健康 GPU（healthyByProduct）
+    - normalizedSize: GPU Pod 加权到 FFD 排序
+
+  scheduler/bin_pack_gpu_test.go (NEW):
+    - FilterGPUNode 3 用例 + ScoreGPUNode 4 用例 + HasGPURequest
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Step 4: Rescheduler GPU 迁移约束
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  scheduler/rescheduler.go:
+    - isMigratable(): GPU Pod 默认粘滞（Sticky），不迁移
+    - GPU 硬件故障例外: kubepivot.io/gpu-hardware-failure=true → 强制驱逐
+      (Xid 48/61/94 Double Bit ECC / Micro-controller / Unrecovered ECC)
+    - v3.2 预留 checkpoint-aware 迁移入口
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+教训: grep 先行，Python 后动
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  - kubectl_adapter.go 被 awk/sed 搞乱 2 次 → git checkout 还原 → Python 精确替换
+  - quantity.go parseCPU/parseMemory 重复定义 → grep 发现 → 导出 + 薄封装
+  - deploy_sizing.go getWeights 副本 → grep 确认无调用 → 删除
+  - 每个 replace 前 assert in content → 零编译错误交付
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/scheduler/adapter.go              +30 行
+  internal/scheduler/kubectl_adapter.go       +50/-80 行
+  internal/scheduler/bin_pack.go              +80 行
+  internal/scheduler/rescheduler.go           +18 行
+  internal/scheduler/gpu_parse_test.go (NEW)  ~100 行
+  internal/scheduler/bin_pack_gpu_test.go(NEW)~130 行
+  internal/metrics/quantity.go                +30 行
+  internal/metrics/gpu.go (NEW)              ~120 行
+  internal/metrics/gpu_test.go (NEW)          ~40 行
+  internal/sizing/dp.go                       +40 行
+  internal/sizing/dp_test.go                  +60 行
+  internal/sizing/gpu_policy.go (NEW)         ~50 行
+  internal/sizing/gpu_policy_test.go (NEW)    ~50 行
+  cmd/kp/deploy_sizing.go                     +2/-15 行
+  FORGET.md                                   +5 行
+
+合计: 11 个文件变更 + 5 个新文件, ~780 行新增
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+加维度，不改架构。GPU 感知层零破坏性变更 —
+CPU/Mem 调度路径完全不变，所有 GPU 逻辑走独立分支。
+3D DP 保守模式等 DCGM 数据流就绪后升级。

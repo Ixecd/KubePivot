@@ -15,6 +15,11 @@
 1. **`kp sizing recommend` 独立 CLI** — 当前 sizing 只在 `kp deploy` hook 里跑，没有独立命令让用户单独触发推荐。决策栈 §2.6 标注"待完成"。
 
 2. **Confidence-based 自动应用 sizing 建议** — `Confidence < 0.7` 跳过，但高置信度也需用户确认，没做自动应用。决策栈 §2.6 标注"待完成"。
+   后续建议：阈值不应硬编码 0.7。Batch 任务启动期 CV 偏高导致置信度偏低是正常现象，
+   应根据 Profile 动态调整阈值（如 ProfileGPU 对稀疏数据更宽容，阈值可降到 0.5）。
+
+2a. **VPA 建议仅生成第一个 Pod** — deploy_sizing.go:152 标注"Level6 支持批量"，
+    当前只写第一个成功 Pod 到 vpa-suggestion.yaml。GPU 调度场景下批量生成优先级更高。
 
 3. **多项目 sizing 批量报告** — 一次扫全集群所有项目的资源优化建议。决策栈 §2.6 标注。
 
@@ -28,7 +33,11 @@
 
 8. **Pod affinity/anti-affinity / 拓扑约束** — 设计提到应做外层 `ConstraintChecker`，未实现。scheduler.md § 行 95。
 
-9. **GPU/Disk/扩展资源 BinPack** — 当前 BinPack 只做 CPU/Memory，GPU 和其他扩展资源未接入。scheduler.md § 行 94。
+9. **GPU/Disk/扩展资源 BinPack** — v3.1 已加 GPU 节点过滤 + dpNode GPU 约束，完整 3D BinPack 待 v3.2。scheduler.md § 行 94。
+
+9a. **GPU 迁移冷启动代价** — GPU Pod 通常伴随数 GB CUDA 镜像拉取。Rescheduler 迁移（含故障迁移）时应评估目标节点是否有镜像缓存，避免驱逐后新 Pod 长时间 ImagePullBackOff。
+
+9b. **显存碎片化（vGPU/共享显存）** — 当前 DP 以整卡为粒度。v3.2 共享场景下离散化步长需从"卡数"细化到"GB"，`compute` 的 GPU 维度量化步长参考 MIG 分区大小。
 
 10. **三维 DP 仅对 training profile 升维** — Web 服务（profile=web/batch/db）无 GPU 需求，继续走 2D DP（cpu+mem）。只有 `profile=training` 且 `resources.yaml` 声明了 `gpu` 字段的任务才激活三维 DP（cpu+mem+gpu）。Solver 入口需按 workload-class 做 dispatch，避免全体状态空间膨胀。
 
@@ -140,11 +149,11 @@
 
 53. **canary 全功能** — 指标健康检查（5xx rate/p99 latency）/ shadow traffic mirroring。traffic-layer.md。
 
-54. **GPU sharing（MPS/TimeSlicing/MIG Auto-Config）** — v3.1 只做整卡调度，共享留 v3.2。MIG Auto-Config 涉及"写硬件"能力。gpu-scheduling-draft.md / v3.2-gpu-sharing-carbon-kink-draft.md。
+54. **GPU sharing（MPS/TimeSlicing/MIG Auto-Config）** — v3.2，池化之后。MIG Auto-Config 涉及"写硬件"能力。gpu-scheduling-draft.md / gpu-sharing-carbon-kink.md。
 
-55. **碳感知正式化** — CarbonIntensityProvider / Waiting Queue / 碳成本进入调度决策。当前只设计，v3.1 计划落地。v3.2-gpu-sharing-carbon-kink-draft.md。
+55. **碳感知基础设施** — CarbonIntensityProvider + CarbonSDK 对接 + `kp scheduler status` 展示。v3.1 单卡阶段落地。Waiting Queue 延迟调度留 v3.2。gpu-sharing-carbon-kink.md §3。
 
-56. **KinK 大规模 GPU 模拟工具** — 10000+ 假 GPU 节点 + 6 个测试场景。v3.2-gpu-sharing-carbon-kink-draft.md。
+56. **KinK 大规模 GPU 模拟工具** — 10000+ 假 GPU 节点 + 6 个测试场景。v3.2，tools/kink/ 独立编译。gpu-sharing-carbon-kink.md §4。
 
 ---
 

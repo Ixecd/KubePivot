@@ -100,7 +100,7 @@ var memoryMultiplier = map[string]int64{
 
 // ─── 解析函数 ────────────────────────────────────────────────────
 
-// parseCPU 解析 CPU 字符串为 milli-cores。
+// ParseCPU 解析 CPU 字符串为 milli-cores。
 //
 // 支持格式：
 //   "100m"   → 100
@@ -112,7 +112,7 @@ var memoryMultiplier = map[string]int64{
 //   ""       → 0（空字符串视为 0，方便测试）
 //
 // 不支持：负数 / 科学计数法
-func parseCPU(s string) (Quantity, error) {
+func ParseCPU(s string) (Quantity, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return Quantity{}, nil
@@ -136,7 +136,7 @@ func parseCPU(s string) (Quantity, error) {
 	return Quantity{Value: value, Raw: s}, nil
 }
 
-// parseMemory 解析 Memory 字符串为 bytes。
+// ParseMemory 解析 Memory 字符串为 bytes。
 //
 // 支持格式：
 //   "256Mi"  → 268,435,456
@@ -147,7 +147,7 @@ func parseCPU(s string) (Quantity, error) {
 //   "1k"     → 1000 (SI 小写 k)
 //
 // 注意：1G ≠ 1Gi（SI vs 二进制）
-func parseMemory(s string) (Quantity, error) {
+func ParseMemory(s string) (Quantity, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return Quantity{}, nil
@@ -169,6 +169,42 @@ func parseMemory(s string) (Quantity, error) {
 	}
 
 	return Quantity{Value: value, Raw: s}, nil
+}
+
+// ParseGPUCount 解析 GPU 数量字符串，返回毫卡 (MilliGPU)。
+//
+// 与 CPU/内存的 Quantity 模型统一：GPU 也走 int64 标准化值。
+// 1 整卡 = 1000 毫卡（对齐 scheduler.MilliGPUUnit）。
+//
+// 支持格式：
+//
+//	"4"     → 4000（4 整卡 × 1000）
+//	"0.2"   → 200（0.2 卡，v3.2 共享场景）
+//	"4000m" → 4000（毫卡后缀）
+//	""      → 0（无 GPU）
+func ParseGPUCount(s string) (Quantity, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return Quantity{}, nil
+	}
+
+	// "4000m" 后缀形式
+	if len(s) > 1 && s[len(s)-1] == 'm' {
+		var v int64
+		_, err := fmt.Sscanf(s, "%dm", &v)
+		if err != nil {
+			return Quantity{}, fmt.Errorf("metrics: ParseGPUCount(%q): %w", s, err)
+		}
+		return Quantity{Value: v, Raw: s}, nil
+	}
+
+	// 整数或浮点数 × 1000
+	var base float64
+	_, err := fmt.Sscanf(s, "%f", &base)
+	if err != nil {
+		return Quantity{}, fmt.Errorf("metrics: ParseGPUCount(%q): %w", s, err)
+	}
+	return Quantity{Value: int64(base * 1000), Raw: s}, nil
 }
 
 // splitBaseUnit 把 "1.5Gi" 拆为 (1.5, "Gi")。

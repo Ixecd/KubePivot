@@ -144,8 +144,8 @@ Webhook: Mutating Admission → 自动写 nodeSelector
 | `init-multi-lang-draft.md` | 12 语言脚手架（壳+核架构） |
 | `controller-update-sizing-draft.md` | Controller 分片/副本自适应推导 |
 | `etcd-learner-bootstrap-draft.md` | Learner 自举集群 + etcd IAM |
-| `gpu-scheduling-draft.md` | v3.1 整卡调度 + v3.2 时空闭环 |
-| `v3.2-gpu-sharing-carbon-kink-draft.md` | GPU 共享 + 碳感知 + KinK |
+| `gpu-scheduling-draft.md` | v3.1 GPU 整卡调度 + 三维 DP |
+| `gpu-sharing-carbon-kink.md` | v3.1 碳感知 + v3.2 GPU 共享 + KinK |
 | `ai-plan-2.0-draft.md` | LLM 框架 + Sizing 填充 + GPU 感知 |
 | `eventstream-draft.md` | 自研 Informer + Cache 设计 |
 | `traffic-layer.md` | 声明式蓝绿 + 流量层抽象 |

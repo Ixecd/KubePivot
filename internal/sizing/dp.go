@@ -22,24 +22,35 @@ const (
 	ProfileWeb     Profile = "web"     // CPU 优先，低延迟
 	ProfileBatch   Profile = "batch"   // Mem 优先，吞吐优先
 	ProfileDB      Profile = "db"      // Mem 优先，缓存敏感
+	ProfileGPU     Profile = "gpu"     // v3.1: GPU 优先，显存权重最高
 	ProfileDefault Profile = "default" // 均衡
 )
 
-// weights 按 Profile 返回 (cpuWeight, memWeight)
-func weights(p Profile) (float64, float64) {
+// weights 按 Profile 返回 (cpuWeight, memWeight, gpuWeight)
+// v3.1: 新增 GPU 维度权重。非 GPU profile 的 gpuWeight 返回 0。
+func weights(p Profile) (float64, float64, float64) {
 	switch p {
 	case ProfileWeb:
-		return 0.7, 0.3
+		return 0.7, 0.3, 0.0
 	case ProfileBatch, ProfileDB:
-		return 0.3, 0.7
+		return 0.3, 0.7, 0.0
+	case ProfileGPU:
+		return 0.1, 0.2, 0.7 // GPU 任务：显存优先
 	default:
-		return 0.5, 0.5
+		return 0.5, 0.5, 0.0
 	}
 }
 
-// GetWeights 导出函数: 按 Profile 返回 (cpuWeight, memWeight)
-// Level5 扩展: 供外部调用 (如 deploy_sizing.go 的 weight_learning)
+// GetWeights 按 Profile 返回 (cpuWeight, memWeight)。
+// 维持 v2.9 签名兼容。GPU 权重通过 GetGPUWeights 获取。
 func GetWeights(p Profile) (float64, float64) {
+	cpuW, memW, _ := weights(p)
+	return cpuW, memW
+}
+
+// GetGPUWeights 按 Profile 返回 (cpuWeight, memWeight, gpuWeight)。
+// v3.1: 供三维 DP 和 GPU sizing 调用方使用。
+func GetGPUWeights(p Profile) (float64, float64, float64) {
 	return weights(p)
 }
 
@@ -79,6 +90,17 @@ type Suggestion struct {
 	SavingsCPU     float64 // 节省百分比 (负值=增加)
 	SavingsMem     float64
 	SampleCount    int // 参与计算的采样点数量
+
+	// v3.1: GPU 维度字段
+	// 整卡调度场景下 RecommendedGPUCount 为整数（1/2/4/8），
+	// v3.2 共享场景扩展到浮点（0.2/0.5）。
+	// 单位：毫卡（MilliGPU），1000 = 1 整卡。
+	// 非 GPU profile（web/batch/db/default）下所有 GPU 字段为 0。
+	CurrentGPUCount    int     // 当前申请的 GPU 卡数（从 resources.yaml 解析）
+	CurrentGPUMem      int64   // 当前申请的显存 (bytes)
+	RecommendedGPUCount int     // 推荐的 GPU 卡数
+	RecommendedGPUMem  int64   // 推荐的显存 (bytes)，量化到 MIG 分区大小
+	SavingsGPU         float64 // GPU 节省率（负值=增加）
 }
 
 // =============================================================================
@@ -109,9 +131,47 @@ type Suggestion struct {
 //   - 可解释: 置信度 + 节省率帮助用户决策
 //
 // Level5 备注: 如需自定义权重，请使用 ComputeWithWeights
+// v3.1 备注: GPU profile 请使用 ComputeGPU，本函数仅处理 CPU/Mem
 func Compute(ctx context.Context, samples []*metrics.PodMetrics, profile Profile) (*Suggestion, error) {
 	cpuW, memW := GetWeights(profile)
 	return compute(samples, profile, cpuW, memW)
+}
+
+// ComputeGPU 单 Pod GPU sizing (v3.1: 保守模式，GPU 不基于历史缩容)。
+//
+// 与 Compute 的区别：
+//   - CPU/Mem 走 2D DP（同 Compute）
+//   - GPU 推荐值 = 当前值（保守不缩容），等 DCGM 数据流就绪后升级为 3D DP
+//   - 置信度额外受 GPU 指标新鲜度影响（Staleness → 置信度=0）
+//
+// 参数:
+//   - currentGPUCount: resources.yaml 声明的当前 GPU 卡数（毫卡）
+//   - currentGPUMem: 当前声明显存 (bytes)
+func ComputeGPU(ctx context.Context, samples []*metrics.PodMetrics, profile Profile,
+	currentGPUCount int, currentGPUMem int64) (*Suggestion, error) {
+
+	// CPU/Mem 走既有 2D DP
+	cpuW, memW, _ := GetGPUWeights(profile)
+	sug, err := compute(samples, profile, cpuW, memW)
+	if err != nil {
+		return nil, err
+	}
+
+	// GPU 保守模式: 不缩容，只透传当前值
+	sug.CurrentGPUCount = currentGPUCount
+	sug.CurrentGPUMem = currentGPUMem
+	sug.RecommendedGPUCount = currentGPUCount
+	sug.RecommendedGPUMem = currentGPUMem
+	sug.SavingsGPU = 0
+
+	// v3.2 TODO: 当 DCGM 数据流就绪后，升级为完整 3D DP
+	//  - 从 samples 提取 GPU 利用率 + 显存使用历史
+	//  - 估算 P95 GPU 利用率 + P95 显存
+	//  - 3D 网格搜索: dp[cpu][mem][gpu] 联合优化
+	//  - 显存量化为 MIG 分区大小 (QuantizeGPUMem)
+	//  - 显著节省时 → SavingsGPU > 0
+
+	return sug, nil
 }
 
 // ComputeWithWeights 支持自定义权重的 sizing 计算 (Level5 新增)

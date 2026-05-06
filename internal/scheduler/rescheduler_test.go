@@ -138,10 +138,17 @@ func TestIsMigratable(t *testing.T) {
 		{"blue-green locked", map[string]string{"kubepivot.io/blue-green-locked": "true"}, false},
 		{"blue-green unlocked", map[string]string{"kubepivot.io/blue-green-locked": "false"}, true},
 		{"other labels", map[string]string{"app": "web"}, true},
+		// v3.1: GPU sticky strategy
+		{"gpu pod default sticky", map[string]string{"app": "train"}, false},
+		{"gpu hw failure force evict", map[string]string{"app": "train", "kubepivot.io/gpu-hardware-failure": "true"}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pod := &PodInfo{Labels: tt.labels}
+			// GPU sticky: 模拟 GPU Pod
+			if tt.name == "gpu pod default sticky" || tt.name == "gpu hw failure force evict" {
+				pod.Requests = ResourceRequest{CPU: 1000, Memory: 2 * 1024 * 1024 * 1024, GPU: 4000}
+			}
 			if got := isMigratable(pod); got != tt.expected {
 				t.Errorf("isMigratable() = %v, want %v", got, tt.expected)
 			}

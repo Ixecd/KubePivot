@@ -47,7 +47,7 @@ func TestParseCPU(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			q, err := parseCPU(tt.input)
+			q, err := ParseCPU(tt.input)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("parseCPU(%q) err=%v, wantErr=%v", tt.input, err, tt.wantErr)
 			}
@@ -113,7 +113,7 @@ func TestParseMemory(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			q, err := parseMemory(tt.input)
+			q, err := ParseMemory(tt.input)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("parseMemory(%q) err=%v, wantErr=%v", tt.input, err, tt.wantErr)
 			}
