@@ -339,6 +339,9 @@ func (c *grokClient) Complete(ctx context.Context, prompt string) (string, error
 
 // ── 工具 ──────────────────────────────────────────────────────────────────────
 
+// sharedHTTPClient 包级单例连接池，避免每次请求创建新 Client 导致 TIME_WAIT 堆积。
+var sharedHTTPClient = &http.Client{Timeout: 60 * time.Second}
+
 func httpClient() *http.Client {
-	return &http.Client{Timeout: 60 * time.Second}
+	return sharedHTTPClient
 }

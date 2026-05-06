@@ -143,7 +143,14 @@
 
 50. **CBA（Cell-based Architecture）** — 2D Matrix-orchestration / Workload-class 自动判定 / Cell-to-Pod 映射 / 故障隔离策略。整体等 v3.2+ 重新评估。
 
-51. **ai-plan 2.0** — 五阶段流水线（Phase 1-5）：多语言依赖扫描 / GPU 库检测 / Sizing 反馈循环 / GPU 智能检测 / Confidence Score。全部未实施。
+51. **ai-plan 2.0** — Phase 1-5 ✅ 已全部实施。已知局限：
+    - GPU 关键词匹配为粗粒度 `strings.Contains`，文档文件或 `torchvision`（非 CUDA）可能误触发。需增加排除列表或路径过滤。
+    - 显存推断静态映射 Llama-70B→80GB，未考虑 4/8-bit 量化。需加量化感知启发式或让用户声明。
+    - MIG 推荐仅 1g.10gb 单一规格，缺少 2g.20gb 等多实例推荐逻辑。
+    - scanner 仅扫描 `cmd/` 目录，不支持 `services/` 等单目录结构。
+    - conf 路径硬编码 `configs/components.yaml`，不支持 HELM 或自定义路径。
+    - 2000 字符截断对 `package-lock.json`/`pom.xml` 可能不够。
+    - `client.go` `io.ReadAll` 静默忽略错误，网络断开时 `json.Unmarshal` 抛 EOF 而非真实错误。
 
 52. **`kp controller update`** — 三维 sizing 模型（P→S→C）/ 安全截断 / 孤儿 Lease 清理 / 28 个计划测试用例。controller-update-sizing-draft.md。
 

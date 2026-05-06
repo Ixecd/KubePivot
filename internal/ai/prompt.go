@@ -14,21 +14,35 @@ type AIPlan struct {
 
 // AIComponent 单个组件的资源规划
 type AIComponent struct {
-	Name     string `json:"name"`
-	Port     int    `json:"port"`
-	Image    string `json:"image"`
-	Replicas int    `json:"replicas"`
-	CPU      string `json:"cpu"`
-	Memory   string `json:"memory"`
-	Storage  string `json:"storage"`
+	Name     string   `json:"name"`
+	Port     int      `json:"port"`
+	Image    string   `json:"image"`
+	Replicas int      `json:"replicas"`
+	CPU      string   `json:"cpu"`
+	Memory   string   `json:"memory"`
+	Storage  string   `json:"storage"`
+	Profile  string   `json:"profile,omitempty"`
+	Deps     []string `json:"deps,omitempty"`
+	Source   string   `json:"source,omitempty"`
 }
 
-// BuildPrompt 构建发给 LLM 的 prompt
+// BuildPrompt 构建发给 LLM 的 prompt。
+// v2.0: LLM 角色从"数值决定者"变为"框架构建者"。
 func BuildPrompt(ctx *RepoContext) string {
 	var sb strings.Builder
 
-	sb.WriteString(`你是一个 Go 云原生项目的资源规划专家。
-我会给你一个项目的代码仓库信息，请帮我分析项目结构，生成合理的 components.yaml 配置。
+	sb.WriteString(`你是一个云原生项目的资源规划专家。
+我会给你一个项目的代码仓库信息，请帮我分析项目结构，生成 components.yaml 框架。
+
+## 重要：v2.0 角色转变
+
+你不再负责决定 CPU/Memory/GPU 的具体数值。你的职责是：
+1. 组件拓扑：项目有哪些服务、它们的依赖关系
+2. 每个组件的 profile（web/batch/db/gpu）
+3. 哪些字段应该走自动 sizing
+
+具体数值由 KubePivot 的 sizing 引擎基于 Prometheus 历史数据 + GPU 检测填充。
+因此，cpu/memory 字段填 "auto"，不要猜具体数值。
 
 ## 输出格式要求
 
@@ -37,27 +51,46 @@ func BuildPrompt(ctx *RepoContext) string {
 {
   "components": [
     {
-      "name": "服务名（小写，和 cmd/ 下目录名一致）",
+      "name": "服务名",
       "port": 8080,
-      "image": "镜像名（和服务名一致，纯 CLI 工具设为空字符串）",
+      "image": "镜像名",
       "replicas": 1,
-      "cpu": "100m",
-      "memory": "128Mi",
-      "storage": "1Gi"
+      "profile": "web",
+      "cpu": "auto",
+      "memory": "auto",
+      "storage": "1Gi",
+      "deps": ["redis"]
     }
   ],
   "reasoning": "简短说明你的判断依据，中文，不超过 200 字"
 }
 
-## 规划原则
+## 字段说明
 
-- replicas：默认 1，生产环境高可用服务建议 2+
-- cpu：轻量服务 100m，中等业务 200-500m，高负载 1000m+
-- memory：最小 64Mi，普通服务 128-256Mi，有缓存或高并发 512Mi+
-- storage：有持久化需求时填写，纯无状态服务填 "0"
-- image：如果是纯 CLI 工具（不对外提供 HTTP kp 会跳过 build/push
-- 不要把 postgres/etcd/controller 等基础设施组件列进来，只列业务服务
+- name: 服务名（小写，和代码目录一致）
+- port: 服务端口
+- image: 镜像名（纯 CLI 工具设为空字符串）
+- replicas: 副本数（默认 1，你仍可建议）
+- profile: web | batch | db | gpu
+  - web: HTTP/API 服务，CPU 优先
+  - batch: 定时任务/数据处理，内存优先
+  - db: 数据库/缓存，内存优先
+  - gpu: GPU 推理/训练任务（检查上下文中的 GPU 库）
+- cpu/memory: 请不要猜数值，填 "auto" 即可
+- storage: 有持久化需求时填写，无状态填 "0"
+- deps: 依赖的其他服务名列表
 
+## profile 推断指南
+
+- 提供 HTTP/gRPC API → web
+- 定时任务/队列消费 → batch
+- 检测到 torch/tensorflow/vllm/jax → gpu
+- 不确定 → web
+
+## 注意事项
+
+- 不要把 postgres/etcd/controller 等基础设施组件列进来
+- 如果上下文中有 GPU 库检测结果，相关组件 profile 应设为 gpu
 `)
 
 	// 项目目录结构
@@ -85,9 +118,28 @@ func BuildPrompt(ctx *RepoContext) string {
 		}
 	}
 
+	// v2.0: GPU 库检测结果
+	if len(ctx.GPULibs) > 0 {
+		sb.WriteString("## GPU 库检测结果\n\n")
+		sb.WriteString("以下 GPU 相关库在项目中检测到：\n")
+		for _, lib := range ctx.GPULibs {
+			sb.WriteString(fmt.Sprintf("- %s\n", lib))
+		}
+		sb.WriteString("\n请将使用这些库的服务 profile 设为 gpu。\n\n")
+	}
+
+	// v2.0: Docker 基础镜像
+	if len(ctx.DockerBaseImages) > 0 {
+		sb.WriteString("## Docker 基础镜像\n\n")
+		for _, img := range ctx.DockerBaseImages {
+			sb.WriteString(fmt.Sprintf("- %s\n", img))
+		}
+		sb.WriteString("\n")
+	}
+
 	// 现有 components.yaml
 	if ctx.ExistingPlan != "" {
-		sb.WriteString("## 现有 components.yaml（供参考，可更新）\n\n```yaml\n")
+		sb.WriteString("## 现有 components.yaml（供参考）\n\n```yaml\n")
 		sb.WriteString(ctx.ExistingPlan)
 		sb.WriteString("\n```\n\n")
 	}
@@ -116,13 +168,12 @@ func BuildPrompt(ctx *RepoContext) string {
 		sb.WriteString("\n\n")
 	}
 
-	sb.WriteString("请根据以上信息生成 components.yaml 配置，只输出 JSON：")
+	sb.WriteString("请根据以上信息生成 components.yaml 框架，只输出 JSON：")
 	return sb.String()
 }
 
 // ParsePlan 解析 LLM 返回的 JSON
 func ParsePlan(raw string) (*AIPlan, error) {
-	// 清理可能的 markdown 代码块
 	raw = strings.TrimSpace(raw)
 	raw = strings.TrimPrefix(raw, "```json")
 	raw = strings.TrimPrefix(raw, "```")
@@ -138,21 +189,25 @@ func ParsePlan(raw string) (*AIPlan, error) {
 		return nil, fmt.Errorf("LLM 没有返回任何组件")
 	}
 
-	// 补全默认值
+	// v2.0: 补全默认值。数值字段默认 "auto"（由 sizing 引擎填充），不再硬编码。
 	for i := range plan.Components {
 		c := &plan.Components[i]
 		if c.Replicas == 0 {
 			c.Replicas = 1
 		}
 		if c.CPU == "" {
-			c.CPU = "100m"
+			c.CPU = "auto"
 		}
 		if c.Memory == "" {
-			c.Memory = "128Mi"
+			c.Memory = "auto"
 		}
 		if c.Storage == "" {
 			c.Storage = "1Gi"
 		}
+		if c.Profile == "" {
+			c.Profile = "web"
+		}
+		c.Source = "llm-estimated"
 	}
 
 	return &plan, nil
@@ -173,6 +228,12 @@ func RenderComponentsYAML(plan *AIPlan) string {
 		sb.WriteString(fmt.Sprintf("    cpu: %s\n", c.CPU))
 		sb.WriteString(fmt.Sprintf("    memory: %s\n", c.Memory))
 		sb.WriteString(fmt.Sprintf("    storage: %s\n", c.Storage))
+		if c.Profile != "" {
+			sb.WriteString(fmt.Sprintf("    profile: %s\n", c.Profile))
+		}
+		if c.Source != "" && c.Source != "llm-estimated" {
+			sb.WriteString(fmt.Sprintf("    # source: %s\n", c.Source))
+		}
 		sb.WriteString("\n")
 	}
 

@@ -1,0 +1,88 @@
+feat(ai): ai-plan 2.0 五阶段 Pipeline 全部交付 — LLM 从决策者降级为框架构建者
+
+ai-plan 从 v1.0 "LLM 全权猜资源" 升级为 v2.0 "LLM 建框架 + KubePivot 填充数据"。
+五阶段 Pipeline（扫描→LLM分析→Sizing验证→GPU感知→Diff展示）全部落地，
+LLM 不再负责 CPU/Mem/GPU 具体数值，改填 "auto" 由 sizing 引擎处理。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Phase 1: 仓库扫描增强
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  scanner.go:
+    - RepoContext 加 MultiLangDeps/GPULibs/DockerBaseImages
+    - scanLangDeps(): 6 种依赖文件 (requirements.txt ~ CMakeLists.txt)
+    - extractGPULines(): 流式扫描 GPU 关键行，防截断漏检，跳过注释行
+    - gpuBroadPatterns: dep 文件中 torch 不带 .cuda 也视为 GPU 信号
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Phase 2: LLM 角色转变
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  prompt.go:
+    - BuildPrompt() 重写: LLM 输出框架+profile，CPU/Mem 填 "auto"
+    - 新增 GPU 库检测结果 + Docker 镜像 + profile 推断指南注入 prompt
+    - ParsePlan() 默认值: CPU/Mem→auto, Source→llm-estimated
+    - AIComponent 加 Profile/Deps 字段
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Phase 3: Sizing 反馈环
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  sizing_check.go (NEW):
+    - RunSizingCheck(): 冷启动 vs 热更新分支
+    - 热更新检测到已有配置但 Prometheus 未接入 → 标注 warning
+    - 冲突解决表预留 (v3.2 接 Prometheus 数据源后激活)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Phase 4: GPU 智能感知
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  gpu_detect.go (NEW):
+    - DetectGPU(): 三层检测 (deps→Dockerfile→型号推断)
+    - inferGPUModel(): 11 条启发式规则
+    - GPUConfidenceByLib()/MaxGPUConfidence(): 信任分层 (vllm=100%, torch=60%)
+    - RecommendMIG(): ≤10GB+MIG 可用→1g.10gb 优先
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Phase 5: Diff 展示
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  diff.go (NEW):
+    - DiffComponents(): 新增/删除/变更检测 (cpu/mem/replicas/profile/storage)
+    - FormatDiff(): 人类可读 +/~/~ 格式 + Source 标记
+    - PopulateSources(): 按组件标记来源，仅 profile=gpu 的组件标记 gpu-detected
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+工程改进
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  client.go: sharedHTTPClient 包级单例
+  gpu_detect.go: GB 常量消魔法数字
+  7 条已知局限记入 FORGET.md
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/ai/scanner.go                   +50 行
+  internal/ai/scanner_test.go (NEW)          ~60 行
+  internal/ai/prompt.go                      重写
+  internal/ai/gpu_detect.go (NEW)          ~170 行
+  internal/ai/gpu_detect_test.go (NEW)      ~135 行
+  internal/ai/sizing_check.go (NEW)         ~70 行
+  internal/ai/sizing_check_test.go (NEW)    ~50 行
+  internal/ai/diff.go (NEW)                ~130 行
+  internal/ai/diff_test.go (NEW)            ~75 行
+  internal/ai/client.go                      +2 行
+  docs/design/ai-plan-2.0-impl-notes.md      实施日志
+  FORGET.md                                 更新
+
+合计: 6 新文件 + 5 文件变更, ~740 行新增
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+LLM 从"猜"到"证"——五阶段 Pipeline 全部落地。
+LLM 说"这是框架"，KubePivot 说"这是数据"。
+517 ✊
