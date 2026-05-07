@@ -1,0 +1,71 @@
+perf(eventstream): KVCache 内存放大率 1.13x + 并发压测 + Labels 黑洞分析
+
+v3.2.1 收尾：内存放大率 benchmark + 64gor 并发 Put + Delta storm + 内存 breakdown。
+seenPool 复用 merge-on-read 临时 map，mergeThreshold 调优注释。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+内存放大率
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  BenchmarkPodCache_MemoryAmp (TotalAlloc / theoretical):
+    N=1000:  1732 B/pod, 1.57 MB heap, 1.15x amp
+    N=5000:  1691 B/pod, 7.91 MB heap, 1.13x amp
+    N=10000: 1688 B/pod, 15.85 MB heap, 1.13x amp
+
+  对比:
+    v2.7 SkeletonCache: 1.65x
+    v3.2.1 PodCache:    1.13x ← 更好！CoW 指针共享
+    client-go v1.Pod:   4.69x (无可救药)
+
+  10k Pod 堆占用: KP 15.85 MB vs client-go 76 MB = 4.8x
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+并发压测
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  BenchmarkPodCache_ParallelPut (64 goroutines, 16 shards):
+    160 ns/op, 170 B, 5 allocs
+    64 并发 vs 16 分片 = 4 goroutine/shard
+    deltaMu 竞争极小 (+33% vs 单线 120ns)
+
+  BenchmarkPodCache_DeltaStorm (500 delta + ListAll):
+    ListAll:   2.1 ms, 8.0 MB, 8400 allocs
+    ListByNode: 1.1 ms, 5.5 MB, 3200 allocs
+    比正常 1.6μs 慢 1000x，但 delta=500 是极端场景
+    async flush 触发后回归快路径
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+内存 breakdown
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  BenchmarkPodEntry_Alloc: 1432 B/op, 26 allocs/op
+  BenchmarkLabels_Alloc:   1400 B/op, 24 allocs/op
+  Labels map 占 98% 分配。PodEntry struct ~100B 被 map 淹没。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/eventstream/kv_cache_bench_test.go (NEW)
+    BenchmarkPodCache_ParallelPut      64gor 并发写
+    BenchmarkPodCache_DeltaStorm       500 delta + ListAll
+    BenchmarkPodCache_DeltaStorm_ListByNode
+    BenchmarkPodEntry_Alloc            单 PodEntry 分配
+    BenchmarkLabels_Alloc              Labels map 单独测
+    BenchmarkPodCache_MemoryAmp        1k/5k/10k 内存放大率
+    TestPodEntry_MemoryBreakdown       内存明细
+
+  internal/eventstream/kv_cache.go
+    seenPool (sync.Pool) 复用 merge-on-read 临时 map
+    mergeThreshold 调优注释 (pprof >5% → 降 100)
+
+  docs/design/kvcache-perf-analysis.md
+    §5.1 并发对比 §5.2 Delta Storm §5.3 Labels 黑洞 §5.4 内存放大率
+    §六 pprof 链 §七 EKS pilot §八 v3.3 待办
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+放大率 1.13x（v2.7 1.65x → v3.2.1 反降），CoW 指针共享省。
+64 并发 160ns，Labels 占 98% 分配，delta storm 2.1ms 可控。
