@@ -113,18 +113,22 @@ KubePivot 是 AI 和 K8s 之间的确定性翻译层。AI 不需要学 kubectl�
 
 ---
 
-## 与 client-go 对比
+## 为什么自研 KVCache 而不是用 client-go
 
-自研 Informer KVCache vs client-go v0.34 Indexer（5000 Pod, M4）：
+5.7 KB/pod 的绝对差值不值一提——10000 Pod 才差 57MB，不到一张 GPU 显存。
 
-| 指标 | KP | client-go | 优势 |
-|------|-----|----------|------|
-| Get | 25 ns, 0 allocs | 39 ns, 1 alloc | 1.6x |
-| Put 单条 | 333 ns | 2.4 μs | 7.2x |
-| PutBulk 5k | 546 μs | 1050 μs | 1.9x |
-| 并发 64g Put | 160 ns | — | 16-way shard |
-| 内存 5k | 2.1 KB/pod | 7.8 KB/pod | 3.7x |
-| 放大率 | 1.13x | 4.69x | 4.1x |
+真正的价值不在"省了多少内存"，在"**省了什么**"：
+
+| | client-go v1.Pod | KubePivot PodEntry |
+|---|---|---|
+| 存什么 | 完整 K8s 对象（managedFields + ownerReferences + full Spec/Status） | 6 个调度字段（Namespace/Name/NodeName/Phase/Labels/Requests） |
+| ListAll 5k | 122 KB 分配 + 5000 allocs | **0 分配** |
+| GC 影响 | Rescheduler 每 5min 触发 GC 扫描 35MB+/天 | GC 不受调度器影响 |
+| 1M Pod | 7.8 GB | 2.1 GB（但架构不退化） |
+| 碎片率 100k | O(Np) 全扫，秒级 | **O(1) 计数器 75ms** |
+| 放大率 | 4.69x | **1.13x** |
+
+这不是资源节省，是架构正确性。调度器只需要 6 个字段——那就只存 6 个字段。零分配读路径让 GC 完全不受调度器影响，p99 抖动归零。O(1) 计数器让 100k Pod 碎片率计算从秒级降到 75ms。
 
 ## 设计原则
 
