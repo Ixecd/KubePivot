@@ -223,7 +223,55 @@ go tool pprof -http=:8083 block.out
 | SIMD ListAll (ARM Neon) | iterate 2x (0.3→0.15ns/el) | 半天探索 | 纯娱乐 |
 | buf_pool 激活 | — | — | GC<5%, 当前不需要 |
 
-## 十、v3.2 后续待办
+## 十、规模化路径
+
+### 10.1 规模上限预估
+
+| 规模 | PodCache 内存 | Frag Calc | 瓶颈 |
+|------|-------------|-----------|------|
+| 1k Pod / 20 Node | 0.5 MB | <1 ms | 无 |
+| 10k Pod / 200 Node | 5 MB | ~10 ms | 无 |
+| 100k Pod / 2k Node | 50 MB | ~200 ms | frag calc 冒头 |
+| 1M Pod / 10k Node | 500 MB | **2 s+** | **O(Nn×Np) 炸** |
+| 10M Pod / 50k Node | 5 GB | 不可行 | 单机物理极限 |
+
+KVCache 本身不构成瓶颈——100k Pod 才 50MB。第一个断点是 `poolFragmentRate` 的 O(N_nodes × N_pods) 全扫。5min/tick 下 100k Pod 可控，高变更频率（>1次/min）下 CPU 100%。
+
+### 10.2 断点1解法：Reservoir Sampling
+
+`poolFragmentRate` 不需要精确——碎片率本身就是个统计量。Reservoir sampling 1% pods（错误率 <1%，O(1k) 恒定）：
+
+```
+utilMap := samplePods(pods, 1000) // O(1000) vs O(Np), 100k Pods
+for node := range nodes {
+    frag[node] = rate(utilMap, node.alloc)
+}
+```
+
+PoolScore 阈值 0.1% 容错足够，A/B test 验证误差分布。备选方案：bloom filter per-pool（false positive 0.1%，无需采样排序）。
+
+### 10.3 断点2解法：Node-hash Shard
+
+当前 ShardedPodCache 按 namespace FNV hash 分片。扩展到按 node hash 分片：
+- ListAll 跨 node shard merge O(shard_count) — 与 ns-hash 同模式
+- PoolUtilCache 预分区聚合 — Rescheduler 只读预计算值，不经 merge
+- Shard 数 = controller pod 数（etcd lease 选举），每 pod 持部分 node 的 cache
+
+百万级 Pod 需要真正的分布式：dist controller etcd sync（leader elect + CRD state）。当前 ns-hash 16 shards 在单机上够用，node-hash 扩展到多机。
+
+### 10.4 小规模甜区
+
+1k Pod 独立开发者：KubePivot 零配——kubectl fallback 丝滑，不需要 Informer 接线。PodCache 冷启动 122μs（1k Pod），Rescheduler tick 5min，碎片率计算 <1ms。单机 M4 8GB 足够。
+
+### 10.5 刺与对策
+
+| 刺 | 对策 |
+|----|------|
+| sampling err 能否接受 | PoolScore 阈值宽松 0.1%，A/B test vs 精确值 |
+| node shard merge storm | pre-partition pool util，避免 ListAll 跨分片 merge |
+| etcd lease vs CRD state | 轻量先用 lease，复杂状态下沉 CRD (v3.4) |
+
+## 十一、v3.2 后续待办
 
 | 项目 | 优先级 | 说明 |
 |------|--------|------|

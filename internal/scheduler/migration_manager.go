@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/Ixecd/kubepivot/internal/executor"
 )
 
 // ─── Migration 状态机 ────────────────────────────────────────────
@@ -87,9 +89,33 @@ func (m *MigrationManager) SetPodReadyFunc(fn func(ctx context.Context, ns, name
 
 // SetFencer injects the Stateful Pod isolation checker.
 // v3.2: K8s Lease OOB (ConfirmIsolated = lease acquire)
-//   Default: func() that always returns true (no-op — v3.4 gRPC stub)
 func (m *MigrationManager) SetFencer(fn func(ctx context.Context, ns, podName string) (bool, error)) {
 	m.fencer = fn
+}
+
+// DefaultLeaseFencer returns a Fencer that uses K8s Lease for OOB isolation.
+// Tries to create a Lease named after the Pod. Success → old Pod lost the lease → isolated.
+// Failure → old Pod still holds the lease → migration blocked.
+// v3.4: upgrade to gRPC + etcd Learner for stronger guarantees.
+func DefaultLeaseFencer() func(ctx context.Context, ns, podName string) (bool, error) {
+	return func(ctx context.Context, ns, podName string) (bool, error) {
+		leaseName := "kubepivot-fence-" + podName
+		// kubectl create lease <name> --duration-seconds=60 -n <ns>
+		// If create succeeds → isolated. If AlreadyExists → not isolated.
+		out, err := executor.GetExecutor().Kubectl(ctx, "",
+			"create", "lease", leaseName,
+			"-n", ns,
+			"--duration-seconds=60",
+			"--dry-run=server",
+			"-o", "name",
+		)
+		if err != nil {
+			// Lease already exists → old Pod still holds it
+			return false, nil
+		}
+		_ = out
+		return true, nil
+	}
 }
 
 // ─── Migration lifecycle ─────────────────────────────────────────

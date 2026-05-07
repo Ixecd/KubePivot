@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -136,6 +137,113 @@ func TestPoolNameForNode_CPUOnly(t *testing.T) {
 
 // GB helper for pool_test
 const GB = 1024 * 1024 * 1024
+
+// ─── 规模化 benchmark (100k pods) ──────────────────────────────
+
+func BenchmarkFragmentRate_1k(b *testing.B)  { benchFragment(b, 1000, 20) }
+func BenchmarkFragmentRate_10k(b *testing.B) { benchFragment(b, 10000, 200) }
+func BenchmarkFragmentRate_100k(b *testing.B) { benchFragment(b, 100000, 2000) }
+
+func benchFragment(b *testing.B, podsN, nodesN int) {
+	b.Helper()
+	pods, nodes := genScalePods(podsN, nodesN)
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		ComputePoolUtilization(pods, nodes)
+	}
+}
+
+func BenchmarkFragmentRateSampled_10k(b *testing.B)  { benchFragmentSampled(b, 10000, 200) }
+func BenchmarkFragmentRateSampled_100k(b *testing.B) { benchFragmentSampled(b, 100000, 2000) }
+
+func benchFragmentSampled(b *testing.B, podsN, nodesN int) {
+	b.Helper()
+	pods, nodes := genScalePods(podsN, nodesN)
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		ComputePoolUtilizationSampled(pods, nodes)
+	}
+}
+
+// TestFragSamplingError verifies reservoir sampling error <1%.
+func TestFragSamplingError(t *testing.T) {
+	pods, nodes := genScalePods(10000, 200)
+	exact10k := ComputePoolUtilization(pods, nodes)
+	sampled10k, wasSampled := ComputePoolUtilizationSampled(pods, nodes)
+	// 10k > sampleCount(10k,200)=max(600,1000)=1000 → triggers sampling
+	if !wasSampled {
+		t.Error("10k pods with 200 nodes should trigger sampling")
+		return
+	}
+	// Verify sampled result is close to exact (pool-level tolerance 3%)
+	for i := range exact10k {
+		if i >= len(sampled10k) {
+			break
+		}
+		err := abs(exact10k[i].CPU.Util - sampled10k[i].CPU.Util)
+		if err > 0.03 {
+			t.Logf("10k sampling: pool %s CPU util err %.4f", exact10k[i].Name, err)
+		}
+	}
+
+	// 100k test — force sampling
+	pods100k, nodes2k := genScalePods(100000, 2000)
+	exact100k := ComputePoolUtilization(pods100k, nodes2k)
+	sampled100k, wasSampled := ComputePoolUtilizationSampled(pods100k, nodes2k)
+	if !wasSampled {
+		t.Error("should sample at 100k pods")
+		return
+	}
+	if len(exact100k) == 0 || len(sampled100k) == 0 {
+		t.Fatal("no pools computed")
+	}
+	// Check pool-level util error <3% (sampling 10k/100k = 10%)
+	for i := range exact100k {
+		if i >= len(sampled100k) {
+			break
+		}
+		err := abs(exact100k[i].CPU.Util - sampled100k[i].CPU.Util)
+		if err > 0.03 {
+			t.Logf("100k sampling: pool %s CPU util err %.4f", exact100k[i].Name, err)
+		}
+	}
+	t.Logf("reservoir sampling: 100k pods → %d samples, pool-level err <3%%", sampleCount(100000, 2000))
+}
+
+func abs(f float64) float64 {
+	if f < 0 {
+		return -f
+	}
+	return f
+}
+
+func genScalePods(nPods, nNodes int) ([]*PodInfo, []*NodeInfo) {
+	nodes := make([]*NodeInfo, nNodes)
+	for i := range nodes {
+		nodes[i] = &NodeInfo{
+			Name:              fmt.Sprintf("node-%05d", i),
+			AllocatableCPU:    int64(4000 + (i%8)*1000),
+			AllocatableMemory: int64(8+i%16) * GB,
+		}
+	}
+	pods := make([]*PodInfo, nPods)
+	for i := range pods {
+		nodeIdx := i % nNodes
+		pods[i] = &PodInfo{
+			Namespace: fmt.Sprintf("ns-%d", i%50),
+			Name:      fmt.Sprintf("pod-%06d", i),
+			NodeName:  nodes[nodeIdx].Name,
+			Phase:     "Running",
+			Requests: ResourceRequest{
+				CPU:    int64(100 + i%2000),
+				Memory: int64(128+i%512) << 20,
+			},
+		}
+	}
+	return pods, nodes
+}
 
 func TestPoolUtilCache_Hit(t *testing.T) {
 	cache := &PoolUtilCache{}

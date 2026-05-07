@@ -243,6 +243,14 @@ bench.kp:
 	@echo "===========> Running KP KVCache benchmarks"
 	@go test -bench=. -benchmem -count=3 -benchtime=1s -run='^$$' ./internal/eventstream/
 
+## bench.scale: Run scalability benchmarks (1k/10k/100k pods, fragment + sampling).
+.PHONY: bench.scale
+bench.scale:
+	@echo "===========> Scalability benchmark (1k/10k/100k pods)"
+	@go test -bench='BenchmarkFragmentRate' -benchmem -benchtime=5s -run='^$$' ./internal/scheduler/
+	@echo "===========> Sampling accuracy test"
+	@go test -run='TestFragSamplingError' -v ./internal/scheduler/
+
 ## bench.regression: Run KP benchmarks and compare against baseline (prune gate).
 .PHONY: bench.regression
 bench.regression: bench.kp
