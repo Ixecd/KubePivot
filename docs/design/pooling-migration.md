@@ -353,19 +353,22 @@ controller 进程内：
 | v3.2 | DryRun 模式（克隆隔离） | MigrationManager | ✅ 522 |
 | v3.2 | Rehydrate 重启恢复 | PodInfo.Annotations | ✅ 522 |
 | v3.2 | FencingConfig fallback chain + HardTimeout | - | ✅ 522 |
-| v3.3 | Fencer 接口（OOB 隔离确认） | Sidecar gRPC 接口 | ⏳ |
-| v3.3 | Fencing 协议（Stateful 路径 e2e） | Fencer + etcd Learner | ⏳ |
-| v3.3 | Weight-aware HashRing（GPU 池） | GPU Node weight CRD | ⏳ |
-| v3.3 | Event pipeline（chan-based 解耦） | Rescheduler/MigrationManager | ⏳ |
-| v3.3 | GPU 迁移可行性校验（driver/capability/MIG） | GPUAdapter | ⏳ |
+| v3.2 | Fencer — K8s Lease OOB（函数变量注入） | MigrationManager | ✅ |
+| v3.2 | WeightedHashRing — H100×80vnodes, A100×40vnodes | cba.go | ✅ |
+| v3.2 | GPU 迁移可行性校验 — CanMigrateGPU | pool.go | ✅ |
+| v3.2 | 池自动聚类 — AutoDiscoverPool | pool.go | ✅ |
+| v3.2 | Deployment label 匹配 — MatchPodByLabels | pool.go | ✅ |
+| v3.2 | Fencing gRPC stub (v3.4) | etcd Learner | ⏳ |
+| v3.2 | Event pipeline (v3.4) | chan-based | ⏳ |
+| v3.2 | GPU 迁移可行性校验（driver/capability/MIG） | GPUAdapter | ⏳ |
 
 ### 7.3 实施偏差
 
-- **池定义来源**：设计 Q1 选 C（Label + 自动聚类）。实施先用 A（Label 优先 → GPU product → "cpu"），自动聚类留 v3.3。
-- **MigrationManager 提前**：原计划 v3.3，实际在 v3.2 完成 Stateless 路径 + Dual-Path（stateful Paused+Retry）。Decided：KV Cache 就绪后紧接 MigrationManager 更顺畅。
-- **Fencing 留 v3.3**：SignalProtocol + FallbackChain + HardTimeout 骨架已就绪，但 Fencer 接口（OOB `ConfirmIsolated`）和 etcd Learner sidecar gRPC 未实现。
+- **池定义来源**：设计 Q1 选 C（Label + 自动聚类）。实施先用 A（Label 优先 → GPU product → "cpu"），自动聚类留 v3.2。
+- **MigrationManager 提前**：原计划 v3.2，实际在 v3.2 完成 Stateless 路径 + Dual-Path（stateful Paused+Retry）。Decided：KV Cache 就绪后紧接 MigrationManager 更顺畅。
+- **Fencing 留 v3.2**：SignalProtocol + FallbackChain + HardTimeout 骨架已就绪，但 Fencer 接口（OOB `ConfirmIsolated`）和 etcd Learner sidecar gRPC 未实现。
 - **DryRun 已落地**：用 clone map 模式实现，每次 Reconcile 从真实状态出发计算，不产生副作用。
-- **MigrationTargetHint**：Rescheduler evict 前写 `sync.Map` → webhook 创建 Pod 时读取，直接路由到目标节点。name-based 匹配（StatefulSet 同名有效），Deployment label-based 匹配留 v3.3。
+- **MigrationTargetHint**：Rescheduler evict 前写 `sync.Map` → webhook 创建 Pod 时读取，直接路由到目标节点。name-based 匹配（StatefulSet 同名有效），Deployment label-based 匹配留 v3.2。
 - **HashRing 一致性哈希**：40 virtual nodes/pod 的真一致性哈希环，4→3 pod 时仅 ~25% Cell 漂移（非全量）。
 - **KubePivot 无 K8s API import**：通过 `kubectl` CLI + 原始 HTTP/JSON webhook 操作 K8s，不依赖 `k8s.io/api` 等包。webhook 清单使用 `admissionregistration.k8s.io/v1`。
 

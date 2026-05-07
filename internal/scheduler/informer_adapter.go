@@ -82,17 +82,12 @@ func (a *InformerAdapter) ListAllNodes(ctx context.Context) ([]*NodeInfo, error)
 func convertPodEntries(entries []*eventstream.PodEntry) []*PodInfo {
 	pods := make([]*PodInfo, len(entries))
 	for i, e := range entries {
-		// 深拷贝 Labels：防止调度器修改 map 渗透回 eventstream cache
-		labels := make(map[string]string, len(e.Labels))
-		for k, v := range e.Labels {
-			labels[k] = v
-		}
 		pods[i] = &PodInfo{
 			Namespace: e.Namespace,
 			Name:      e.Name,
 			NodeName:  e.NodeName,
 			Phase:     e.Phase,
-			Labels:    labels,
+			Labels:    e.LabelsToMap(), // 从 CommonLabels+ExtraLabels 重建 map（深拷贝）
 			Requests: ResourceRequest{
 				CPU:    e.Requests.CPU,
 				Memory: e.Requests.Memory,

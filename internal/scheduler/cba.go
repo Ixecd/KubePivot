@@ -181,25 +181,56 @@ type HashRing struct {
 	nodes  []ringNode // 按 hash 排序的环节点
 }
 
-// NewHashRing 创建一致性哈希环。
-// vnodes 控制每个 Pod 的虚拟节点数（0 使用默认 40）。
+// NewHashRing 创建一致性哈希环（等权）。
 func NewHashRing(pods []string, vnodes int) *HashRing {
-	if vnodes <= 0 {
-		vnodes = 40
+	weights := make(map[string]int, len(pods))
+	for _, p := range pods {
+		weights[p] = vnodes
 	}
-	r := &HashRing{vnodes: vnodes}
-	r.build(pods)
+	return NewWeightedHashRing(pods, weights, vnodes)
+}
+
+// NewWeightedHashRing 创建加权一致性哈希环。
+// weights[pod] 决定该 Pod 的虚拟节点数比例。H100 (权重 80) 比 A100 (权重 40) 多一倍虚拟节点，
+// 被分配到的 Cell 比例也高一倍，减少 GPU 密集型 Cell 的跨代迁移。
+// 未出现在 weights 中的 Pod 默认为 1×baseVnodes。
+func NewWeightedHashRing(pods []string, weights map[string]int, baseVnodes int) *HashRing {
+	if baseVnodes <= 0 {
+		baseVnodes = 40
+	}
+	r := &HashRing{vnodes: baseVnodes}
+	r.buildWeighted(pods, weights)
 	return r
 }
 
 func (r *HashRing) build(pods []string) {
+	weights := make(map[string]int, len(pods))
+	for _, p := range pods {
+		weights[p] = r.vnodes
+	}
+	r.buildWeighted(pods, weights)
+}
+
+func (r *HashRing) buildWeighted(pods []string, weights map[string]int) {
 	if len(pods) == 0 {
 		r.nodes = nil
 		return
 	}
-	r.nodes = make([]ringNode, 0, len(pods)*r.vnodes)
+	total := 0
+	for _, p := range pods {
+		w := weights[p]
+		if w <= 0 {
+			w = r.vnodes
+		}
+		total += w
+	}
+	r.nodes = make([]ringNode, 0, total)
 	for _, pod := range pods {
-		for i := 0; i < r.vnodes; i++ {
+		w := weights[pod]
+		if w <= 0 {
+			w = r.vnodes
+		}
+		for i := 0; i < w; i++ {
 			h := fnv.New32a()
 			h.Write([]byte(fmt.Sprintf("%s#v%d", pod, i)))
 			r.nodes = append(r.nodes, ringNode{hash: h.Sum32(), pod: pod})

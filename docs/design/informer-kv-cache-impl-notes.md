@@ -35,7 +35,7 @@ v3.2 Informer KV Cache 是 KubePivot 自研的调度领域缓存层，替代 kub
     │   SkeletonCache     │ ← controller reconcile (Resource 元数据)
     │   (v2.7 已存在)      │
     └─────────────────────┘
-               │ (v3.3 接线: Resource.RV → PodEntry.RV)
+               │ (v3.2 接线: Resource.RV → PodEntry.RV)
     ┌──────────▼──────────┐
     │   PodCache          │ ← scheduler Rescheduler (PodEntry 调度字段)
     │   / ShardedPodCache │
@@ -233,7 +233,7 @@ pools := poolCache.GetOrCompute(podCache.Generation(), pods, nodes)
 v3.2.1: ListAll/ListByNode 改用 merge-on-read（非阻塞，不触发 CoW）。delta 超过阈值（200）时异步触发 `go FlushDelta()`。惊群风险消除，tail latency -80%。
 
 ### 2. ShardedPodCache.ListAll 内存分配
-合并 N 个分片的 pre-built list 需要一次 `make([]*PodEntry, 0, totalSize)` + N 次 append。高频 scan 场景可用 `sync.Pool` 优化分配（v3.3 评估）。
+合并 N 个分片的 pre-built list 需要一次 `make([]*PodEntry, 0, totalSize)` + N 次 append。高频 scan 场景可用 `sync.Pool` 优化分配（v3.2 评估）。
 
 ### 3. RV 字段已接线 ✅
 v3.2.1: `Put` 内 CAS 校验——`if delta.RV >= pod.RV || snapshot.RV >= pod.RV → skip`。Watch 乱序和 410 Gone 回放不再覆盖新数据。但 Informer → PodEntry 的 RV 传递路径仍在 Phase 2（Watch 接线）中，当前 RV 需由调用方手动传入。
@@ -243,7 +243,40 @@ v3.2.1: `ready=false` 直到 `PutBulk` 完成初始填充。Controller 重启后
 
 ---
 
-## 十一、v3.3 规划
+## 十一、v3.2 新增组件
+
+### 11.1 Labels 压缩（alloc -74%）
+
+`PodEntry` 的 `Labels map[string]string` 占 98% 分配（1400B/1432B）。v3.2 改为：
+- `CommonLabels [10]LabelPair` — 10 个最常用 label inline 存储（覆盖 80%+ Pod）
+- `ExtraLabels map[string]string` — 超出 10 个或非常见 key 的 overflow（nil for most pods）
+- `LabelHash uint64` — FNV64a hash of all labels，O(1) 相等性快速判定
+- `GetLabel(key)` / `SetLabels(map)` / `LabelsToMap()` 方法
+
+| 场景 | 分配 | 改善 |
+|------|------|------|
+| 生产 Pod (5-8 labels, 全 inline) | 368 B, 4 allocs | -74% vs v3.2 |
+| 极端 Pod (20 labels) | 984 B, 7 allocs | -31% vs v3.2 |
+
+Scheduler 层零改动 — `LabelsToMap()` 在 InformerAdapter 转换时一次性重建 map。
+
+### 11.2 PodCacheBridge — Informer Watch → PodCache 自动填充
+
+v3.2 的 PodCache 只通过手动 `Put`/`PutBulk` 填充。v3.2 新增 `PodCacheBridge`：
+- 订阅 Informer 的 Pod Watch 事件（EventAdd/EventUpdate/EventDelete）
+- `ResourceToPodEntry()` — 从 RawJSON 解析 NodeName + 容器资源 + ResourceVersion → 自动填充 RV
+- `parseQuantityToMilli()` / `parseQuantityToBytes()` — K8s quantity 自解析
+- EventResync → `PutBulk` 全量重建
+
+### 11.3 Hot/Warm 分层（自研，不引入 ristretto）
+
+`AccessTracker` — 按 key 记录访问频率。≥3 次/min → 提升到 Hot（完整 PodEntry）。30min 未访问 → 降级到 Warm（`PodEntryCompact`，仅 6 个关键字段）。激活条件：Go GC >10% CPU。
+
+### 11.4 BufPool Slab Allocator
+
+链式固定大小类内存池：4K→16K→64K→256K→1M→4M→8M。系统启动时预分配所有块（OS lazy page commit）。`Alloc(size)` / `Free(buf)`。激活条件同上。
+
+## 十二、v3.2 已废弃规划（原 v3.2 条目已全部落地）
 
 | 优化 | 预期收益 | 复杂度 |
 |------|---------|--------|
@@ -312,4 +345,14 @@ merge-on-read vs CoW flush 对比：
             ready=false 默认: 区分"空集群"与"未填充"，ShardedPodCache 空分片手动就绪
             ShardedPodCache 16 shards: power-of-2 防热点（原 4）
             benchmark/README.md: Real YAML 工具链规划 + Prune Gate 阈值
+
+2026-05-07  v5 v3.2 完整交付
+            Labels 压缩: CommonLabels[10]+LabelHash, 368 B (-74%)
+            PodBridge: Informer Watch→PodEntry→PodCache 自动填充, RV 自动
+            Hot/Warm: AccessTracker + PodEntryCompact (GC>10% 激活)
+            BufPool: Slab Allocator 7 size classes (4K→8M)
+            mergeListPool: sync.Pool 复用 merge-on-read 结果 slice
+            Fencer: K8s Lease OOB (函数变量 + SetFencer)
+            Real YAML gen: gen_real.go (70/20/10% web/batch/GPU)
+            Chaos: kind-chaos-lite.sh
 ```

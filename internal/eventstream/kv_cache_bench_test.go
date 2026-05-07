@@ -79,8 +79,8 @@ func makePods(n int, nsFmt, nameFmt string) []*PodEntry {
 			Name:      fmt.Sprintf(nameFmt, i),
 			NodeName:  fmt.Sprintf("node-%d", i%50),
 			Phase:     "Running",
-			Labels:    makeLabels(20),
 		}
+		pods[i].SetLabels(makeLabels(20))
 	}
 	return pods
 }
@@ -106,18 +106,50 @@ func makeLabels(n int) map[string]string {
 // ─── 内存 breakdown ────────────────────────────────────────────
 
 // BenchmarkPodEntry_Alloc measures per-PodEntry allocation.
+// BenchmarkPodEntry_Alloc — with 20 labels (only 7 of 10 common → ExtraLabels has 13).
 func BenchmarkPodEntry_Alloc(b *testing.B) {
 	b.ReportAllocs()
+	lbls := makeLabels(20)
 	for i := 0; i < b.N; i++ {
-		_ = &PodEntry{
+		e := &PodEntry{
 			Namespace: "default",
 			Name:      fmt.Sprintf("api-gateway-%d", i),
 			NodeName:  "node-0001",
 			Phase:     "Running",
-			Labels:    makeLabels(20),
 			Requests:  ResourceRequest{CPU: 500, Memory: 512 << 20},
 			RV:        12345,
 		}
+		e.SetLabels(lbls)
+	}
+}
+
+// BenchmarkPodEntry_AllocCommon — with 8 common labels (all inline, 0 ExtraLabels alloc).
+func BenchmarkPodEntry_AllocCommon(b *testing.B) {
+	b.ReportAllocs()
+	lbls := makeCommonLabels()
+	for i := 0; i < b.N; i++ {
+		e := &PodEntry{
+			Namespace: "default",
+			Name:      fmt.Sprintf("api-gateway-%d", i),
+			NodeName:  "node-0001",
+			Phase:     "Running",
+			Requests:  ResourceRequest{CPU: 500, Memory: 512 << 20},
+			RV:        12345,
+		}
+		e.SetLabels(lbls)
+	}
+}
+
+func makeCommonLabels() map[string]string {
+	return map[string]string{
+		"app.kubernetes.io/name":      "api-gateway",
+		"app.kubernetes.io/instance":  "api-gateway-prod",
+		"app.kubernetes.io/component": "backend",
+		"tier":                  "frontend",
+		"environment":           "production",
+		"kubepivot.io/pool":     "cpu",
+		"kubepivot.io/shard":    "shard-1",
+		"prometheus.io/scrape":  "true",
 	}
 }
 
@@ -143,10 +175,10 @@ func TestPodEntry_MemoryBreakdown(t *testing.T) {
 			Name:      fmt.Sprintf("pod-%05d", i),
 			NodeName:  fmt.Sprintf("node-%04d", i%200),
 			Phase:     "Running",
-			Labels:    makeLabels(20),
 			Requests:  ResourceRequest{CPU: 500, Memory: 512 << 20},
 			RV:        int64(i + 1),
 		}
+		pods[i].SetLabels(makeLabels(20))
 	}
 	_ = pods
 
@@ -161,11 +193,12 @@ func TestPodEntry_MemoryBreakdown(t *testing.T) {
 	t.Logf("  HeapInuse:  %d bytes (%.0f B/pod)", heapInUse, float64(heapInUse)/5000)
 
 	// Estimate struct sizes
-	t.Logf("Breakdown estimates:")
-	t.Logf("  PodEntry struct: ~104 B (7 string headers×16 + 3 int64s×8 + map ptr×8 + RV×8)")
-	t.Logf("  Labels map (20 keys): ~1500 B (Go map overhead ~40B + 20 keys×~50B + 20 values×~20B)")
-	t.Logf("  20 label strings: ~800 B (avg 40B per key string)")
-	t.Logf("  Total estimated: ~2400 B/pod")
+	t.Logf("Breakdown estimates (with Labels compression):")
+	t.Logf("  PodEntry struct: ~200 B (string headers + CommonLabels[10] + LabelHash + RV)")
+	t.Logf("  CommonLabels[10]: ~320 B (10 LabelPair × 32B inline, zero alloc)")
+	t.Logf("  ExtraLabels map: ~0 B (80%% pods fit in 10 common keys)")
+	t.Logf("  LabelHash: 8 B (FNV64a, O(1) equality check)")
+	t.Logf("  Total estimated: ~500 B/pod (v3.2: 1432 B/pod, -65%%)")
 }
 
 // ─── 内存放大率 ───────────────────────────────────────────────

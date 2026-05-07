@@ -311,3 +311,83 @@ func (c *PoolUtilCache) GetOrCompute(gen int64, pods []*PodInfo, nodes []*NodeIn
 	c.mu.Unlock()
 	return r
 }
+
+// ─── GPU 迁移可行性校验 ─────────────────────────────────────
+
+// CanMigrateGPU checks if a GPU pod can safely migrate from source to target node.
+// Returns false if driver or CUDA capability mismatch would cause CrashLoop.
+// This is a pre-flight check — Rescheduler should call before eviction.
+func CanMigrateGPU(source, target *NodeInfo) bool {
+	if len(source.GPU) == 0 || len(target.GPU) == 0 {
+		return false
+	}
+	src := source.GPU[0]
+	tgt := target.GPU[0]
+
+	// Same product → compatible (e.g. A100-SXM4-80GB ↔ A100-SXM4-80GB)
+	if src.Product == tgt.Product {
+		return true
+	}
+	// Cross-generation: H100 can run A100 workloads (CUDA backward compat)
+	// A100 cannot run H100 workloads (missing compute capability 9.0)
+	if tgt.Product == "H100" && src.Product == "A100" {
+		return false // H100 code won't run on A100
+	}
+	// Same generation, different variant (e.g. A100-SXM vs A100-PCIe)
+	if tgt.Product[:4] == src.Product[:4] {
+		return true
+	}
+	return false
+}
+
+// ─── 池自动聚类 ──────────────────────────────────────────────
+
+// AutoDiscoverPool assigns a node to a pool based on its resource profile.
+// Falls back to explicit label (kubepivot.io/pool) if present.
+// Otherwise clusters by GPU product → compute/memory ratio → "cpu" default.
+func AutoDiscoverPool(n *NodeInfo) string {
+	// 1. Explicit label wins (user override)
+	if n.Labels != nil {
+		if pool, ok := n.Labels["kubepivot.io/pool"]; ok && pool != "" {
+			return pool
+		}
+	}
+	// 2. GPU product → "gpu-<product>" pool
+	if len(n.GPU) > 0 && n.GPU[0].Product != "" {
+		return "gpu-" + n.GPU[0].Product
+	}
+	// 3. Resource profile clustering
+	if n.AllocatableMemory > 0 {
+		ratio := float64(n.AllocatableMemory) / float64(n.AllocatableCPU)
+		if ratio > 12 { // >12 GB/core → memory-optimized
+			return "memory"
+		}
+	}
+	return "cpu"
+}
+
+// ─── Deployment Pod label 匹配 ──────────────────────────────
+
+// MatchPodByLabels checks if two PodInfo share a common Deployment label.
+// Used for MigrationTargetHint to match Deployment pods after rename.
+// Returns true if they share app.kubernetes.io/name or app label.
+func MatchPodByLabels(a, b *PodInfo) bool {
+	if a.Labels == nil || b.Labels == nil {
+		return false
+	}
+	if a.Namespace != b.Namespace {
+		return false // cross-ns pods are never the same Deployment
+	}
+	// Match by app.kubernetes.io/name (preferred) or app label
+	if name, ok := a.Labels["app.kubernetes.io/name"]; ok {
+		if bName, ok2 := b.Labels["app.kubernetes.io/name"]; ok2 && name == bName {
+			return true
+		}
+	}
+	if name, ok := a.Labels["app"]; ok {
+		if bName, ok2 := b.Labels["app"]; ok2 && name == bName {
+			return true
+		}
+	}
+	return false
+}

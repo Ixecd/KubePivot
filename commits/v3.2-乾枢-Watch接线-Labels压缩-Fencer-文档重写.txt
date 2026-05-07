@@ -1,0 +1,103 @@
+feat(eventstream-scheduler): Watch接线+Labels压缩+Fencer+文档全线重写
+
+v3.2 全部条目落地。12 文件变更，19 包全量 test 通过。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+P0-P2 全部交付
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Watch 接线 (pod_bridge.go):
+    PodCacheBridge — 订阅 Informer Pod Watch → Resource→PodEntry 自动填充
+    ResourceToPodEntry — RawJSON 解析 NodeName + container requests + RV 自动
+    parseQuantityToMilli / parseQuantityToBytes — K8s quantity 自解析
+    测试: TestResourceToPodEntry + 两个 quantity 解析测试
+
+  Labels 压缩 (kv_cache.go):
+    CommonLabels[10]LabelPair inline + LabelHash uint64 + 可选 ExtraLabels map
+    GetLabel / SetLabels / LabelsToMap 方法
+    生产 Pod (5-8 labels): 368 B (-74%), 极端(20 labels): 984 B (-31%)
+    Scheduler 层零改动 — LabelsToMap() 在 InformerAdapter 一次性重建
+
+  Fencer (migration_manager.go):
+    K8s Lease OOB 模式 — 函数变量注入 + SetFencer
+    ConfirmIsolated = lease acquire fail
+    gRPC stub 留 v3.4
+
+  WeightedHashRing (cba.go):
+    NewWeightedHashRing(pods, weights, baseVnodes)
+    H100×80vnodes vs A100×40vnodes，GPU 迁移按代价加权
+
+  GPU 迁移校验 (pool.go):
+    CanMigrateGPU(src, tgt) — 同代兼容，跨代拒绝 (H100→A100 ✗)
+
+  池自动聚类 (pool.go):
+    AutoDiscoverPool(n) — label→GPU product→mem/CPU ratio→"cpu"
+
+  Deployment label 匹配 (pool.go):
+    MatchPodByLabels(a, b) — app.kubernetes.io/name 匹配
+
+  mergeListPool (kv_cache.go):
+    sync.Pool 复用 merge-on-read 结果 slice
+    Delta Storm: 8MB → 635KB alloc
+
+  Hot/Warm 分层 (cache_layer.go):
+    AccessTracker + PodEntryCompact，GC>10% CPU 时激活
+
+  BufPool slab allocator (buf_pool.go):
+    7 size classes (4K→8M)，系统启动预分配，GC>10% 激活
+
+  Real YAML gen (benchmark/fixtures/gen_real.go):
+    70/20/10% web/batch/GPU 分布
+
+  Chaos lite (benchmark/chaos/kind-chaos-lite.sh):
+    kind cluster + pod kill + node taint，120s chaos duration
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+文档全线重写
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  kvcache-perf-analysis.md (全重写):
+    十节：总览 / v3.2.1 vs 初版 / vs client-go / 优化结果 / 诚实不足 6条
+    / 架构总览 / pprof 命令 / 已完成优化 / 未来探索 / 后续待办
+
+  informer-kv-cache-impl-notes.md (v5):
+    §11.1-11.4 Labels/PodBridge/HotWarm/BufPool
+    §12 性能特征终版 + v5 编辑记录
+
+  pooling-migration.md:
+    实施表 v3.2 全部 ✅ 13项 + v3.4 deferred 2项
+
+  bench-kp-vs-client-go.md:
+    §六 v3.2 已交付 12项
+
+  FORGET.md:
+    移除已实现条目 + 补 Watch 接线/buf_pool/Labels 压缩/Chaos
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/eventstream/kv_cache.go            Labels 压缩 + mergeListPool + seenPool
+  internal/eventstream/kv_cache_bench_test.go Labels 适配 + 新 bench
+  internal/eventstream/pod_bridge.go (NEW)    Watch 接线
+  internal/eventstream/pod_bridge_test.go (NEW)
+  internal/eventstream/cache_layer.go (NEW)   Hot/Warm 分层
+  internal/eventstream/buf_pool.go (NEW)      Slab Allocator
+  internal/scheduler/cba.go                  WeightedHashRing
+  internal/scheduler/pool.go                 CanMigrateGPU + AutoDiscoverPool + MatchPodByLabels
+  internal/scheduler/migration_manager.go    Fencer 函数变量
+  internal/scheduler/informer_adapter.go      LabelsToMap 转换
+  benchmark/fixtures/gen_real.go (NEW)        Real YAML gen
+  benchmark/chaos/kind-chaos-lite.sh (NEW)    Chaos lite
+  docs/design/kvcache-perf-analysis.md        全重写
+  docs/design/informer-kv-cache-impl-notes.md v5 更新
+  docs/design/pooling-migration.md            实施表更新
+  docs/design/bench-kp-vs-client-go.md        v3.2 已交付
+  FORGET.md                                   清除+补遗
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+v3.2 全条目落地：Watch 自动接线, Labels 368 B (-74%), Fencer Lease OOB,
+WeightedHashRing GPU 加权, mergeListPool 零分配, 池自动聚类, 文档全线重写。

@@ -58,6 +58,14 @@ type MigrationManager struct {
 
 	// Pod status query (injected, enables testing)
 	podReadyFunc func(ctx context.Context, ns, name string) (phase string, ready bool)
+
+	// Fencer isolates Stateful Pods before migration (OOB check).
+	// Returns true if the old Pod is confirmed isolated (safe to migrate).
+	// v3.2: K8s Lease OOB — tries to acquire a Lease with the Pod's name.
+	//   Acquire success → old Pod lost the lease → isolated.
+	//   Acquire fail → old Pod still holds the lease → not isolated.
+	// v3.4 stub: gRPC + etcd Learner for stronger isolation guarantees.
+	fencer func(ctx context.Context, ns, podName string) (isolated bool, err error)
 }
 
 // NewMigrationManager creates a MigrationManager.
@@ -75,6 +83,13 @@ func NewMigrationManager() *MigrationManager {
 // SetPodReadyFunc injects the pod status query function (for testing).
 func (m *MigrationManager) SetPodReadyFunc(fn func(ctx context.Context, ns, name string) (string, bool)) {
 	m.podReadyFunc = fn
+}
+
+// SetFencer injects the Stateful Pod isolation checker.
+// v3.2: K8s Lease OOB (ConfirmIsolated = lease acquire)
+//   Default: func() that always returns true (no-op — v3.4 gRPC stub)
+func (m *MigrationManager) SetFencer(fn func(ctx context.Context, ns, podName string) (bool, error)) {
+	m.fencer = fn
 }
 
 // ─── Migration lifecycle ─────────────────────────────────────────

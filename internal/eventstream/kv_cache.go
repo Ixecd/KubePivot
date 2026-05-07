@@ -19,17 +19,104 @@ import (
 
 // ─── 缓存条目类型（独立于 scheduler 包，避免循环依赖） ──────────
 
+// LabelPair is an inline key-value label pair (zero alloc).
+type LabelPair struct {
+	Key, Value string
+}
+
+// CommonLabelKeys defines the 10 most frequently accessed labels for inline storage.
+// Extracted from Pod labels on Put; covers all scheduler access patterns.
+var CommonLabelKeys = [10]string{
+	"app.kubernetes.io/name",
+	"app.kubernetes.io/instance",
+	"app.kubernetes.io/component",
+	"tier",
+	"environment",
+	"kubepivot.io/pool",
+	"kubepivot.io/shard",
+	"statefulset.kubernetes.io/pod-name",
+	"kubepivot.io/blue-green-locked",
+	"kubepivot.io/gpu-hardware-failure",
+}
+
 // PodEntry 调度视角下的 Pod 缓存条目。
-// RV 是 etcd ResourceVersion（单调递增），用于双 Cache 一致性校验：
-// Put 仅接受 RV >= 当前值的写入，防止旧 Watch 事件覆盖新数据。
+// Labels 压缩为 CommonLabels[10] + LabelHash + 可选 ExtraLabels map。
+// 10 个常用 label inline 存储（零分配），hash 用于 O(1) 相等性快速判定。
 type PodEntry struct {
-	Namespace string
-	Name      string
-	NodeName  string
-	Phase     string
-	Labels    map[string]string
-	Requests  ResourceRequest
-	RV        int64 // etcd ResourceVersion（0=未初始化/测试数据）
+	Namespace    string
+	Name         string
+	NodeName     string
+	Phase        string
+	CommonLabels [10]LabelPair // inline 10 common labels (key==empty → unused slot)
+	ExtraLabels  map[string]string // overflow (>10 or uncommon keys), nil for 80%+ pods
+	LabelHash    uint64        // FNV64a hash of all labels (O(1) equality pre-check)
+	Requests     ResourceRequest
+	RV           int64         // etcd ResourceVersion
+}
+
+// GetLabel returns a label value by key. Checks CommonLabels first (O(10)), then ExtraLabels.
+func (e *PodEntry) GetLabel(key string) (string, bool) {
+	for i := range e.CommonLabels {
+		if e.CommonLabels[i].Key == key {
+			return e.CommonLabels[i].Value, true
+		}
+	}
+	if e.ExtraLabels != nil {
+		v, ok := e.ExtraLabels[key]
+		return v, ok
+	}
+	return "", false
+}
+
+// SetLabels compresses a label map into CommonLabels + ExtraLabels + LabelHash.
+// CommonLabelKeys[10] are stored inline; remaining keys go to ExtraLabels.
+func (e *PodEntry) SetLabels(labels map[string]string) {
+	h := fnv.New64a()
+	for i, key := range CommonLabelKeys {
+		if v, ok := labels[key]; ok {
+			e.CommonLabels[i] = LabelPair{Key: key, Value: v}
+			h.Write([]byte(key))
+			h.Write([]byte(v))
+		} // else: leave zero-value LabelPair (key=="" → unused)
+	}
+	for k, v := range labels {
+		isCommon := false
+		for _, ck := range CommonLabelKeys {
+			if k == ck {
+				isCommon = true
+				break
+			}
+		}
+		if !isCommon {
+			if e.ExtraLabels == nil {
+				e.ExtraLabels = make(map[string]string)
+			}
+			e.ExtraLabels[k] = v
+			h.Write([]byte(k))
+			h.Write([]byte(v))
+		}
+	}
+	e.LabelHash = h.Sum64()
+}
+
+// LabelsToMap reconstructs the full labels map (used by InformerAdapter for PodInfo conversion).
+func (e *PodEntry) LabelsToMap() map[string]string {
+	n := len(e.ExtraLabels)
+	for _, lp := range e.CommonLabels {
+		if lp.Key != "" {
+			n++
+		}
+	}
+	m := make(map[string]string, n)
+	for _, lp := range e.CommonLabels {
+		if lp.Key != "" {
+			m[lp.Key] = lp.Value
+		}
+	}
+	for k, v := range e.ExtraLabels {
+		m[k] = v
+	}
+	return m
 }
 
 // ResourceRequest Pod 资源请求。
@@ -193,6 +280,19 @@ const mergeThreshold = 200
 // seenPool reuses temporary maps for ListAll merge-on-read.
 var seenPool = sync.Pool{New: func() any { return make(map[string]bool, mergeThreshold) }}
 
+// mergeListPool reuses merge result slices for ListAll merge-on-read.
+// Caller (InformerAdapter) should call ReleaseMergeList after conversion.
+var mergeListPool = sync.Pool{New: func() any { return make([]*PodEntry, 0, 1024) }}
+
+// getMergeList returns a pre-sized slice from the pool (or allocates if too small).
+func getMergeList(minCap int) []*PodEntry {
+	sl := mergeListPool.Get().([]*PodEntry)
+	if cap(sl) < minCap {
+		return make([]*PodEntry, 0, minCap)
+	}
+	return sl[:0]
+}
+
 // ListAll 返回所有 Pod。delta 为空 → 零分配预缓存 slice。
 // delta 非空 → merge-on-read（非阻塞），超过阈值时异步 flush。
 // 返回的 slice（merge 路径）由调用方负责回收：eventstream.ReleaseMergeList(list)。
@@ -204,7 +304,7 @@ func (c *PodCache) ListAll() []*PodEntry {
 		c.deltaMu.RUnlock()
 		return snap.list // fast path: pre-built, 0 alloc
 	}
-	list := make([]*PodEntry, 0, len(snap.list)+nd)
+	list := getMergeList(len(snap.list) + nd)
 	seen := seenPool.Get().(map[string]bool)
 	for k := range seen {
 		delete(seen, k)

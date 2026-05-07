@@ -152,9 +152,26 @@ v2.7 的 SkeletonCache 在纯元数据路径上仍然是最优方案（Get 3.1x,
 
 ---
 
-## 六、v3.3 优化路线
+## 六、v3.2 已完成优化（2026-05-07）
 
-基于 benchmark 暴露的弱点，v3.3 四刀优化：
+| 优化 | 效果 |
+|------|------|
+| Labels 压缩 | 368 B, 4 allocs (-74%) |
+| PodBridge (Watch 接线) | RV 自动填充 |
+| ShardedPodCache 16 shards | 64g Put 160ns |
+| mergeListPool (sync.Pool) | 0 alloc 回归 |
+| Fencer (K8s Lease OOB) | 函数变量注入 |
+| WeightedHashRing | GPU 按迁移代价加权 |
+| CanMigrateGPU | 跨代 GPU 迁移拒绝 |
+| AutoDiscoverPool | 资源 profile 自动聚类 |
+| Hot/Warm 分层 | GC>10% 时激活 |
+| BufPool slab allocator | 7 size classes |
+| gen_real.go | 70/20/10% web/batch/GPU 分布 |
+| kind-chaos-lite.sh | pod kill + node taint |
+
+## 七、v3.2 待办
+
+基于 benchmark 暴露的弱点，v3.2 四刀优化：
 
 ### 优先级 P0：Delta CoW 写优化
 
