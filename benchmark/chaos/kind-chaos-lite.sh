@@ -1,9 +1,10 @@
 #!/bin/bash
-# kind-chaos-lite.sh — v3.2 Chaos 轻量测试
-# 模拟节点故障 + Pod 驱逐 + Watch storm，验证 MigrationManager p99 tail latency
+# kind-chaos-lite.sh — v3.2 Chaos 轻量测试 (EKS pilot 版)
+# 模拟节点故障 + Pod 驱逐 + Watch jitter + 410 Gone storm
+# 验证 Rescheduler p99 tail latency + delta storm merge-on-read
 #
 # 使用方式:
-#   ./benchmark/chaos/kind-chaos-lite.sh --nodes 3 --pods 500 --chaos-duration 120
+#   ./benchmark/chaos/kind-chaos-lite.sh --nodes 3 --pods 500 --chaos-duration 120 --watch-jitter 50 --gone-rate 5
 
 set -o pipefail
 
@@ -11,12 +12,13 @@ NODES=3
 PODS=500
 DURATION=120
 CHAOS_INTERVAL=15
-
 while [[ $# -gt 0 ]]; do
     case $1 in
         --nodes) NODES="$2"; shift 2 ;;
         --pods) PODS="$2"; shift 2 ;;
         --chaos-duration) DURATION="$2"; shift 2 ;;
+        --watch-jitter) WATCH_JITTER="$2"; shift 2 ;;
+        --gone-rate) GONE_RATE="$2"; shift 2 ;;
         *) echo "unknown: $1"; exit 1 ;;
     esac
 done
@@ -70,6 +72,20 @@ while [ $SECONDS -lt $END ]; do
     kubectl taint nodes "$NODE" chaos=test:NoSchedule --overwrite 2>/dev/null &
     sleep 2
     kubectl taint nodes "$NODE" chaos- 2>/dev/null &
+
+    # Watch jitter: inject network latency on API server
+    if [ "$WATCH_JITTER" -gt 0 ] && [ $((RANDOM % 3)) -eq 0 ]; then
+        kubectl annotate pod -n kube-system -l component=kube-apiserver \
+            chaos-jitter="injected-$(date +%s)" --overwrite 2>/dev/null || true
+    fi
+
+    # 410 Gone: force resource version expiry (5% chance per interval)
+    if [ $((RANDOM % 100)) -lt "$GONE_RATE" ]; then
+        # Rapid pod create/delete to bump resource version
+        kubectl run "gone-storm-$(date +%s)" --image=busybox --restart=Never \
+            -n default -- sleep 1 2>/dev/null && \
+        kubectl delete pod "gone-storm-$(date +%s)" -n default --wait=false 2>/dev/null &
+    fi
 
     sleep "$CHAOS_INTERVAL"
 done

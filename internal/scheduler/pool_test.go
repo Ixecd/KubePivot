@@ -219,6 +219,83 @@ func abs(f float64) float64 {
 	return f
 }
 
+func BenchmarkPoolIndex_Compute_10k(b *testing.B)  { benchPoolIndex(b, 10000, 200) }
+func BenchmarkPoolIndex_Compute_100k(b *testing.B) { benchPoolIndex(b, 100000, 2000) }
+
+func benchPoolIndex(b *testing.B, podsN, nodesN int) {
+	b.Helper()
+	pods, nodes := genScalePods(podsN, nodesN)
+	idx := NewPoolIndex()
+	idx.Rebuild(pods, nodes)
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		ComputeFromIndex(idx, nodes)
+	}
+}
+
+func BenchmarkPoolUtil_O1_10k(b *testing.B)  { benchPoolUtilO1(b, 10000, 200) }
+func BenchmarkPoolUtil_O1_100k(b *testing.B) { benchPoolUtilO1(b, 100000, 2000) }
+
+func benchPoolUtilO1(b *testing.B, podsN, nodesN int) {
+	b.Helper()
+	pods, nodes := genScalePods(podsN, nodesN)
+	tracker := NewPoolUtilTracker(nodes)
+	for _, p := range pods {
+		tracker.Add(p)
+	}
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		tracker.ComputeUtilO1(nodes)
+	}
+}
+
+func TestPoolUtilTracker_AddRemove(t *testing.T) {
+	nodes := []*NodeInfo{{Name: "n1", AllocatableCPU: 4000, AllocatableMemory: 8 * GB}}
+	tracker := NewPoolUtilTracker(nodes)
+
+	tracker.Add(&PodInfo{Name: "p1", Namespace: "ns", NodeName: "n1", Phase: "Running", Requests: ResourceRequest{CPU: 500, Memory: GB}})
+	tracker.Add(&PodInfo{Name: "p2", Namespace: "ns", NodeName: "n1", Phase: "Running", Requests: ResourceRequest{CPU: 300, Memory: GB / 2}})
+
+	pools := tracker.ComputeUtilO1(nodes)
+	if len(pools) != 1 {
+		t.Fatal("expected 1 pool")
+	}
+	// 500 + 300 = 800 millicores / 4000 = 0.2 utilization
+	if pools[0].CPU.Used != 800 || pools[0].CPU.Util != 0.2 {
+		t.Errorf("CPU used=%d util=%.2f, want used=800 util=0.20", pools[0].CPU.Used, pools[0].CPU.Util)
+	}
+
+	// Remove one pod
+	tracker.Remove(&PodInfo{Name: "p1", Namespace: "ns", NodeName: "n1", Requests: ResourceRequest{CPU: 500, Memory: GB}})
+	pools = tracker.ComputeUtilO1(nodes)
+	if pools[0].CPU.Used != 300 {
+		t.Errorf("after remove: CPU used=%d, want 300", pools[0].CPU.Used)
+	}
+}
+
+func TestPoolIndex_Upsert(t *testing.T) {
+	idx := NewPoolIndex()
+	nodes := []*NodeInfo{{Name: "n1", AllocatableCPU: 4000, AllocatableMemory: 8 * GB}}
+	pods := []*PodInfo{
+		{Namespace: "ns", Name: "p1", NodeName: "n1", Phase: "Running", Requests: ResourceRequest{CPU: 500, Memory: GB}},
+	}
+	idx.Rebuild(pods, nodes)
+
+	// Upsert a new pod
+	idx.Upsert(&PodInfo{Namespace: "ns", Name: "p2", NodeName: "n1", Phase: "Running", Requests: ResourceRequest{CPU: 300, Memory: GB / 2}}, "")
+	if len(idx.PodsInPool("cpu")) != 2 {
+		t.Errorf("expected 2 pods in pool, got %d", len(idx.PodsInPool("cpu")))
+	}
+
+	// Remove
+	idx.Remove("ns", "p1", "n1")
+	if len(idx.PodsInPool("cpu")) != 1 {
+		t.Errorf("expected 1 pod after remove, got %d", len(idx.PodsInPool("cpu")))
+	}
+}
+
 func genScalePods(nPods, nNodes int) ([]*PodInfo, []*NodeInfo) {
 	nodes := make([]*NodeInfo, nNodes)
 	for i := range nodes {

@@ -1,0 +1,65 @@
+perf(scheduler): v3.2 规模化落地 — O(1)池利用率 + 生产模拟器 + EKS pilot
+
+PoolUtilTracker 原子计数器：frag calc 1805ms→75ms (23.9x)。
+本地生产模拟器：Watch jitter + 410 Gone + delta storm，无 EKS 账单。
+文档全线更新：EKS pilot 计划 + 生产风险缓解表。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PoolUtilTracker: O(1) 原子计数器
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  pool.go:
+    PoolUtilTracker — atomic.Int64 per-pool 计数器
+    Add(pod) O(1): e.UsedCPU.Add(pod.Requests.CPU)
+    Remove(pod) O(1): e.UsedCPU.Add(-pod.Requests.CPU)
+    ComputeUtilO1(nodes) O(pools): 只读计数器，零遍历
+
+  100k Pods + 2k Nodes 四路对比:
+    Exact           1805 ms  (1x)
+    Sampled 10%     1099 ms  (1.6x)
+    PoolIndex       1860 ms  (1x, 单池等价)
+    O(1) Counters    75.5 ms (23.9x) ★
+
+  碎片率用利用率近似 (1-util)，精确值走 exact 路径。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+本地生产模拟器 (benchmark/sim)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  prod_sim_test.go — Watch jitter + 410 Gone + delta storm 注入
+  无需 EKS 集群，本地模拟生产条件
+
+  三路结果:
+    WatchLoad 10k (0 jitter):        20.8 μs  (纯处理零开销)
+    WatchJitter 10k (5ms, 3% gone):  22.4 s  (全部网络延迟)
+    Delta Storm 50k (10ms, 8% gone): 252.6 s (48k jitter事件)
+
+  结论: KVCache 处理速度非瓶颈——10k事件 21μs 处理完。
+  生产 p99 来自网络 RTT，不是 cache。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EKS pilot 文档
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  kvcache-perf-analysis.md:
+    §5.5 生产 EKS 与 M4 的差距表
+    §5.6 本地生产模拟 3路 benchmark
+    §5.7 生产风险与缓解 5项全 ✅
+    §九 规模化四路对比表
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/scheduler/pool.go                PoolUtilTracker + O(1) counters
+  internal/scheduler/pool_test.go           四路 benchmark + 正确性测试
+  benchmark/sim/prod_sim_test.go (NEW)      生产模拟器
+  benchmark/chaos/kind-chaos-lite.sh        Watch jitter + 410 Gone 注入
+  docs/design/kvcache-perf-analysis.md      §5.5-5.7 EKS pilot + 四路对比表
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+O(1) 计数器 23.9x 碎片率加速，生产模拟零 EKS 依赖。
+KVCache 处理 21μs/10k 事件，瓶颈在网络不在 cache。

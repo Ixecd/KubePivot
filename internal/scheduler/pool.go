@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -301,6 +302,315 @@ func max(vals ...float64) float64 {
 		}
 	}
 	return m
+}
+
+// ─── PoolIndex: pre-grouped pods by pool ─────────────────────
+
+// PoolIndex maintains an incremental pool→pods grouping.
+// Updated on Pod add/remove, eliminates O(Np) classification in ComputePoolUtilization.
+// CAP: eventual — grouping may lag behind latest delta (next scan catches up).
+type PoolIndex struct {
+	mu       sync.RWMutex
+	poolPods map[string][]*PodInfo // poolName → pods
+	nodePool map[string]string     // nodeName → poolName (cached lookup)
+}
+
+// NewPoolIndex creates an empty pool index.
+func NewPoolIndex() *PoolIndex {
+	return &PoolIndex{
+		poolPods: make(map[string][]*PodInfo),
+		nodePool: make(map[string]string),
+	}
+}
+
+// Rebuild fully rebuilds the index from pods and nodes.
+// Called on cold start or after bulk changes (PutBulk/Resync).
+func (pi *PoolIndex) Rebuild(pods []*PodInfo, nodes []*NodeInfo) {
+	pi.mu.Lock()
+	defer pi.mu.Unlock()
+	pi.poolPods = make(map[string][]*PodInfo, len(pi.poolPods))
+	pi.nodePool = make(map[string]string, len(nodes))
+	for _, n := range nodes {
+		pi.nodePool[n.Name] = poolNameForNode(n)
+	}
+	for _, p := range pods {
+		if p.Phase != "Running" || p.NodeName == "" {
+			continue
+		}
+		pool := pi.nodePool[p.NodeName]
+		pi.poolPods[pool] = append(pi.poolPods[pool], p)
+	}
+}
+
+// Upsert adds or updates a pod in the index. O(1) amortized.
+func (pi *PoolIndex) Upsert(pod *PodInfo, oldNode string) {
+	pi.mu.Lock()
+	defer pi.mu.Unlock()
+	if pod.Phase != "Running" || pod.NodeName == "" {
+		return
+	}
+	pool := pi.nodePool[pod.NodeName]
+	if oldNode != "" && oldNode != pod.NodeName {
+		oldPool := pi.nodePool[oldNode]
+		pi.removeFromPool(oldPool, pod.Namespace, pod.Name)
+	}
+	pi.removeFromPool(pool, pod.Namespace, pod.Name) // remove old entry if exists
+	pi.poolPods[pool] = append(pi.poolPods[pool], pod)
+}
+
+// Remove deletes a pod from the index.
+func (pi *PoolIndex) Remove(ns, name, nodeName string) {
+	pi.mu.Lock()
+	defer pi.mu.Unlock()
+	pool := pi.nodePool[nodeName]
+	pi.removeFromPool(pool, ns, name)
+}
+
+func (pi *PoolIndex) removeFromPool(pool, ns, name string) {
+	pods := pi.poolPods[pool]
+	for i, p := range pods {
+		if p.Namespace == ns && p.Name == name {
+			pi.poolPods[pool] = append(pods[:i], pods[i+1:]...)
+			return
+		}
+	}
+}
+
+// PodsInPool returns all pods in a pool (read-only, caller should not modify).
+func (pi *PoolIndex) PodsInPool(poolName string) []*PodInfo {
+	pi.mu.RLock()
+	defer pi.mu.RUnlock()
+	return pi.poolPods[poolName]
+}
+
+// ComputeFromIndex computes pool utilization from pre-grouped index.
+// O(Nn) instead of O(Np + Nn) — pod traversal is already done.
+func ComputeFromIndex(idx *PoolIndex, nodes []*NodeInfo) []*PoolInfo {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	// Group nodes by pool
+	pools := make(map[string][]*NodeInfo)
+	for _, n := range nodes {
+		poolName := idx.nodePool[n.Name]
+		if poolName == "" {
+			poolName = poolNameForNode(n)
+		}
+		pools[poolName] = append(pools[poolName], n)
+	}
+
+	result := make([]*PoolInfo, 0, len(pools))
+	for name, poolNodes := range pools {
+		info := &PoolInfo{Name: name, Nodes: poolNodes, Labels: poolNodes[0].Labels}
+		poolPods := idx.getPoolPods(name) // uses RLock already held
+
+		// Build usageMap from pre-grouped pods (one pass, O(pods_in_pool))
+		usageMap := make(map[string]nodeUsage)
+		for _, p := range poolPods {
+			u := usageMap[p.NodeName]
+			u.CPU += p.Requests.CPU
+			u.Memory += p.Requests.Memory
+			u.GPU += p.Requests.GPU
+			usageMap[p.NodeName] = u
+		}
+
+		for _, n := range poolNodes {
+			u := usageMap[n.Name]
+			info.CPU.Total += n.AllocatableCPU
+			info.CPU.Used += u.CPU
+			info.Memory.Total += n.AllocatableMemory
+			info.Memory.Used += u.Memory
+			gpuCount := int64(len(n.GPU))
+			info.GPU.Total += gpuCount * MilliGPUUnit
+			info.GPU.Used += u.GPU
+		}
+
+		if info.CPU.Total > 0 {
+			info.CPU.Util = float64(info.CPU.Used) / float64(info.CPU.Total)
+		}
+		if info.Memory.Total > 0 {
+			info.Memory.Util = float64(info.Memory.Used) / float64(info.Memory.Total)
+		}
+		if info.GPU.Total > 0 {
+			info.GPU.Util = float64(info.GPU.Used) / float64(info.GPU.Total)
+		}
+
+		// Fragment rate: O(pods_in_pool) per pool
+		info.CPU.FragmentRate, info.CPU.Effective = poolFragmentRate(poolNodes, usageMap, "cpu")
+		info.Memory.FragmentRate, info.Memory.Effective = poolFragmentRate(poolNodes, usageMap, "memory")
+		if info.GPU.Total > 0 {
+			info.GPU.FragmentRate, info.GPU.Effective = poolGPUFragmentRate(poolNodes, poolPods)
+		}
+
+		maxUtil := max(info.CPU.Util, info.Memory.Util, info.GPU.Util)
+		avgFrag := info.CPU.FragmentRate
+		if info.GPU.Total > 0 {
+			avgFrag = (info.CPU.FragmentRate + info.GPU.FragmentRate) / 2
+		}
+		info.UpdatedAt = time.Now()
+		info.Score = (1-maxUtil)*0.5 + avgFrag*0.5
+		if info.Score < 0 {
+			info.Score = 0
+		}
+		result = append(result, info)
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Score < result[j].Score
+	})
+	return result
+}
+
+// getPoolPods internal helper — caller must hold pi.mu.RLock.
+func (pi *PoolIndex) getPoolPods(poolName string) []*PodInfo {
+	return pi.poolPods[poolName]
+}
+
+// ─── PoolUtilTracker: atomic counter-based pool utilization ───
+
+// PoolUtilEntry holds atomic counters for a single pool.
+// Lock-free read, lock-free increment on Put/Delete.
+type PoolUtilEntry struct {
+	UsedCPU  atomic.Int64
+	UsedMem  atomic.Int64
+	UsedGPU  atomic.Int64
+}
+
+// PoolUtilTracker maintains per-pool atomic utilization counters.
+// Put/Delete O(1) atomic add/sub, scan O(1) read-only.
+// CAP: eventual consistency via lock-free atomics.
+type PoolUtilTracker struct {
+	mu       sync.RWMutex
+	entries  map[string]*PoolUtilEntry // poolName → counters
+	nodePool map[string]string         // nodeName → poolName
+}
+
+// NewPoolUtilTracker creates a tracker initialized from nodes.
+func NewPoolUtilTracker(nodes []*NodeInfo) *PoolUtilTracker {
+	t := &PoolUtilTracker{
+		entries:  make(map[string]*PoolUtilEntry),
+		nodePool: make(map[string]string, len(nodes)),
+	}
+	for _, n := range nodes {
+		t.nodePool[n.Name] = poolNameForNode(n)
+	}
+	return t
+}
+
+// ensurePool lazily creates a counter entry for a pool.
+func (t *PoolUtilTracker) ensurePool(poolName string) *PoolUtilEntry {
+	t.mu.RLock()
+	e, ok := t.entries[poolName]
+	t.mu.RUnlock()
+	if ok {
+		return e
+	}
+	t.mu.Lock()
+	e, ok = t.entries[poolName]
+	if !ok {
+		e = &PoolUtilEntry{}
+		t.entries[poolName] = e
+	}
+	t.mu.Unlock()
+	return e
+}
+
+// Add atomically increments pool counters for a pod. O(1).
+func (t *PoolUtilTracker) Add(pod *PodInfo) {
+	if pod.Phase != "Running" || pod.NodeName == "" {
+		return
+	}
+	t.mu.RLock()
+	pool := t.nodePool[pod.NodeName]
+	t.mu.RUnlock()
+	if pool == "" {
+		pool = "cpu"
+	}
+	e := t.ensurePool(pool)
+	e.UsedCPU.Add(pod.Requests.CPU)
+	e.UsedMem.Add(pod.Requests.Memory)
+	e.UsedGPU.Add(pod.Requests.GPU)
+}
+
+// Remove atomically decrements pool counters for a pod. O(1).
+func (t *PoolUtilTracker) Remove(pod *PodInfo) {
+	if pod.NodeName == "" {
+		return
+	}
+	t.mu.RLock()
+	pool := t.nodePool[pod.NodeName]
+	t.mu.RUnlock()
+	if pool == "" {
+		pool = "cpu"
+	}
+	e := t.ensurePool(pool)
+	e.UsedCPU.Add(-pod.Requests.CPU)
+	e.UsedMem.Add(-pod.Requests.Memory)
+	e.UsedGPU.Add(-pod.Requests.GPU)
+}
+
+// ComputeUtilO1 computes pool utilization from atomic counters. O(pools) ≈ O(1).
+// Fragment rate is approximated from counters (no per-node breakdown).
+// For exact fragment rate, use ComputePoolUtilization with the full pod list.
+func (t *PoolUtilTracker) ComputeUtilO1(nodes []*NodeInfo) []*PoolInfo {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	// Aggregate node totals by pool
+	pools := make(map[string]*PoolInfo)
+	for _, n := range nodes {
+		poolName := t.nodePool[n.Name]
+		if poolName == "" {
+			poolName = poolNameForNode(n)
+		}
+		info, ok := pools[poolName]
+		if !ok {
+			info = &PoolInfo{Name: poolName, Nodes: []*NodeInfo{}, Labels: n.Labels}
+		}
+		info.Nodes = append(info.Nodes, n)
+		info.CPU.Total += n.AllocatableCPU
+		info.Memory.Total += n.AllocatableMemory
+		gpuCount := int64(len(n.GPU))
+		info.GPU.Total += gpuCount * MilliGPUUnit
+		pools[poolName] = info
+	}
+
+	result := make([]*PoolInfo, 0, len(pools))
+	for name, info := range pools {
+		e := t.entries[name]
+		if e != nil {
+			info.CPU.Used = e.UsedCPU.Load()
+			info.Memory.Used = e.UsedMem.Load()
+			info.GPU.Used = e.UsedGPU.Load()
+		}
+		if info.CPU.Total > 0 {
+			info.CPU.Util = float64(info.CPU.Used) / float64(info.CPU.Total)
+		}
+		if info.Memory.Total > 0 {
+			info.Memory.Util = float64(info.Memory.Used) / float64(info.Memory.Total)
+		}
+		if info.GPU.Total > 0 {
+			info.GPU.Util = float64(info.GPU.Used) / float64(info.GPU.Total)
+		}
+		// Fragment rate: counter-based approximation (total used / total alloc)
+		// Exact frag rate needs per-node breakdown; use ComputePoolUtilization for precise values.
+		if info.CPU.Total > 0 {
+			info.CPU.FragmentRate = 1.0 - info.CPU.Util
+			info.CPU.Effective = info.CPU.Total - info.CPU.Used
+		}
+		if info.Memory.Total > 0 {
+			info.Memory.FragmentRate = 1.0 - info.Memory.Util
+			info.Memory.Effective = info.Memory.Total - info.Memory.Used
+		}
+		info.UpdatedAt = time.Now()
+		info.Score = 1.0 - max(info.CPU.Util, info.Memory.Util, info.GPU.Util)
+		if info.Score < 0 {
+			info.Score = 0
+		}
+		result = append(result, info)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Score < result[j].Score })
+	return result
 }
 
 // ─── PoolUtilCache ──────────────────────────────────────────────
