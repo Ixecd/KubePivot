@@ -1,0 +1,83 @@
+feat(controller-state): v3.2 Controller 升级 — KVCache 接线 + 代码审查清理
+
+Controller KVCache 接线：Scheduler/Rescheduler 从 kubectlAdapter 切换到
+InformerAdapter，Pod Informer + PodCacheBridge 启动，detector 复用。
+代码审查：6 个死参数/死常量/死函数清理，etcd 多端点修复，heal 补测。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Controller KVCache 接线 (global.go)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Scheduler/Rescheduler kubectlAdapter → InformerAdapter:
+    之前: kubectl get pods -A (100ms+/scan)
+    现在: podCache.ListAll() (1.6us/scan)
+    Webhook 同理——每次 Pod 创建走 KVCache 而非 kubectl
+
+  Pod Informer + PodCacheBridge:
+    informerPool.Start("pods", "v1") → PodCache 自动填充
+    PodCacheBridge 订阅 Watch 事件 → ResourceToPodEntry → RV 自动
+
+  Detector 复用:
+    InformerDetector + KubectlDetector 创建一次，handleTask 共享
+    不再每个 reconcile task 新建
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+代码审查清理
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  global.go:
+    - watchNamespaces 删 pool 参数 (未使用)
+    - handleTask 删 ctx + informerPool 参数 (未使用)
+
+  drift_sync.go:
+    - scanAndSync 删 ctx 参数 (内部创建自己的 context)
+    - detectDrift helm diff 错误日志 (之前静默吞错)
+
+  heal.go:
+    - 删死函数 getLatestRevision (RealHelmClient.History 已替代)
+
+  heal_test.go (NEW):
+    + isCRDKind 3 测试 + isSSAConflict 2 测试 (之前 0 覆盖)
+
+  leader.go:
+    - 删死常量 leaderRenew (etcd KeepAlive 自动续约)
+    - 修复: EtcdEndpoints → strings.Split (多端点逗号分隔)
+
+  workqueue.go:
+    - 删死常量 queueCap (队列无界扩容)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+State 包审查
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  store.go:
+    - etcdKey 合并到 EtcdKey (消除重复格式字符串)
+    - autoMigrateToEtcd 删 current 参数 (内部自行加载)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+文档
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  docs/design/controller-v3.2.md (NEW):
+    五节：架构全景 / 核心组件 10 个 + etcd Learner / 当前状态 / 已知局限 / 接线计划
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/controller/global.go            KVCache 接线 + 死参数 ×2
+  internal/controller/drift_sync.go        死 ctx + helm diff 日志
+  internal/controller/heal.go              删 getLatestRevision
+  internal/controller/heal_test.go (NEW)   isCRDKind + isSSAConflict
+  internal/controller/leader.go            strings.Split + 删 leaderRenew
+  internal/controller/workqueue.go         删 queueCap
+  internal/state/store.go                  etcdKey 合并 + autoMigrate 死参数
+  internal/state/state_test.go             autoMigrate 调用更新
+  docs/design/controller-v3.2.md (NEW)     架构设计文档
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Controller KVCache 接线: scan 100ms→1.6us, PodCache 自动填充。
+6 处死代码清理, etcd 多端点修复, heal 补测, state 包 DRY。

@@ -5,15 +5,15 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 const (
-	leaderTTL      = 15 // etcd lease TTL 秒
-	leaderRenew    = 5  // 续约间隔秒
-	leaderRetry    = 3  // 抢锁失败后重试间隔秒
+	leaderTTL   = 15 // etcd lease TTL 秒
+	leaderRetry = 3  // 抢锁失败后重试间隔秒
 )
 
 // leaderKey 分布式锁的 etcd key
@@ -39,7 +39,7 @@ func RunWithLeaderElection(ctx context.Context, etcdEndpoints, project, namespac
 	}
 
 	cli, err := clientv3.New(clientv3.Config{
-		Endpoints:   []string{etcdEndpoints},
+		Endpoints:   strings.Split(etcdEndpoints, ","),
 		DialTimeout: 5 * time.Second,
 	})
 	if err != nil {

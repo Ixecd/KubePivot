@@ -89,7 +89,7 @@ func New(store Store, project, namespace, version string) (*Machine, error) {
 	}
 
 	// 自动迁移：etcd 可用但没有状态，本地文件有状态 → 迁移到 etcd
-	if err := autoMigrateToEtcd(store, project, namespace, record); err != nil {
+	if err := autoMigrateToEtcd(store, project, namespace); err != nil {
 		slog.Warn("状态迁移到 etcd 失败，继续使用当前存储", "err", err)
 	}
 

@@ -6,9 +6,7 @@ import (
 	"sync"
 )
 
-const queueCap = 256
-
-// ReconcileQueue 三集合 WorkQueue
+// ReconcileQueue 三集合 WorkQueue（旧 v2.x standalone 模式）
 // 保证同一 key 不并发处理，处理期间的新事件不丢失
 type ReconcileQueue struct {
 	mu         sync.Mutex

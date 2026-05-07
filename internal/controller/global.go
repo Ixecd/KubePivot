@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Ixecd/kubepivot/internal/eventstream"
 	"github.com/Ixecd/kubepivot/internal/executor"
 	"github.com/Ixecd/kubepivot/internal/scheduler"
 	"github.com/Ixecd/kubepivot/internal/sharding"
@@ -53,8 +54,11 @@ func StartGlobal(ctx context.Context) {
 	//   - 既有 v2.5/v2.6 的 reconcile 行为完全保留
 	informerPool := NewInformerPool(nil, totalShards, kubeconfig)
 
+	// v3.2: detector 复用——创建一次，所有 handleTask 共享
+	detector := NewInformerDetector(informerPool, NewKubectlDetector(kubeconfig))
+
 	pool := NewWorkerPool(20, func(taskCtx context.Context, task ReconcileTask) error {
-		return handleTask(taskCtx, gs, kubeconfig, task, informerPool)
+		return handleTask(gs, kubeconfig, task, detector)
 	})
 
 	var shardMgr *sharding.MultiLeaseManager
@@ -133,7 +137,7 @@ func StartGlobal(ctx context.Context) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		watchNamespaces(ctx, kubeconfig, gs, pool, shardMgr, totalShards)
+		watchNamespaces(ctx, kubeconfig, gs, shardMgr, totalShards)
 	}()
 
 	// 4. ConfigMap Watcher
@@ -177,19 +181,32 @@ func StartGlobal(ctx context.Context) {
 		runVerifiedTrafficWriter(ctx, gs, shardMgr, totalShards, kubeconfig)
 	}()
 
-	// ── 初始化乾枢调度器（用于 Webhook 实时分配）──
-	kubeAdapter := scheduler.NewKubectlAdapter(kubeconfig)
-	sched := scheduler.NewScheduler(kubeAdapter, kubeAdapter, nil, nil, nil)
+	// ── v3.2 KVCache 接线：创建 PodCache/NodeCache + Pod Informer + PodCacheBridge ──
+	podCache := eventstream.NewPodCache()
+	nodeCache := eventstream.NewNodeCache()
+	kubeAdapter := scheduler.NewKubectlAdapter(kubeconfig) // 保留为 fallback
 
-	// ── 初始化乾枢重调度器（运行时）──
+	// Pod Informer → PodCacheBridge → PodCache 自动填充
+	informerPool.Start(ctx, "pods", "v1")
+	if podInformer := informerPool.Get("pods"); podInformer != nil {
+		eventstream.NewPodCacheBridge(podInformer, podCache)
+	}
+
+	// InformerAdapter：优先读 PodCache/NodeCache，cache 未就绪降级到 kubectlAdapter
+	adapter := scheduler.NewInformerAdapter(podCache, nodeCache, kubeAdapter)
+
+	// ── 初始化乾枢调度器（Webhook 实时分配，优先走 KVCache）──
+	sched := scheduler.NewScheduler(adapter, adapter, nil, nil, nil)
+
+	// ── 初始化乾枢重调度器（运行时，优先走 KVCache，5min scan → 1.6μs ListAll）──
 	reschedulerCfg := scheduler.ReschedulerConfig{
-		Interval:         5 * time.Minute, // 每5分钟扫描一次集群
-		MaxMigrations:    0,               // 0 表示使用默认值（总Pod数的5%）
+		Interval:         5 * time.Minute,
+		MaxMigrations:    0,
 		JitterWindow:     5 * time.Minute,
 		JitterThreshold:  0.95,
 		JitterSpikeCount: 3,
 	}
-	rescheduler := scheduler.NewRescheduler(sched, kubeAdapter, kubeAdapter, reschedulerCfg)
+	rescheduler := scheduler.NewRescheduler(sched, adapter, adapter, reschedulerCfg)
 
 	// ── 启动乾枢重调度器 ──
 	wg.Add(1)
@@ -276,7 +293,7 @@ func getControllerReplicas(ctx context.Context, kubeconfig string) int {
 // v2.5.0：watcher 仍 watch 全集群，但只对自己 shard 的 ns 做出反应
 func watchNamespaces(
 	ctx context.Context, kubeconfig string,
-	gs *GlobalState, pool *WorkerPool,
+	gs *GlobalState,
 	shardMgr *sharding.MultiLeaseManager, totalShards int,
 ) {
 	w := NewKubectlWatcher("namespace", "kubepivot.io/managed=true")
@@ -453,7 +470,7 @@ func enqueueProjectResources(
 //
 // v2.5.0：第二道 shard 过滤（防 task 入队后 shard 失主的 race）
 // v2.7 Step 2b-1：detector 用 InformerDetector（informer cache + kubectl fallback）
-func handleTask(ctx context.Context, gs *GlobalState, kubeconfig string, task ReconcileTask, informerPool *InformerPool) error {
+func handleTask(gs *GlobalState, kubeconfig string, task ReconcileTask, detector *InformerDetector) error {
 	if IsProtectedNamespace(task.Namespace) {
 		return fmt.Errorf("拒绝对 protected namespace 执行 reconcile: %s", task.Namespace)
 	}
@@ -497,15 +514,7 @@ func handleTask(ctx context.Context, gs *GlobalState, kubeconfig string, task Re
 		return fmt.Errorf("资源 %s/%s 已从 resources.yaml 移除", task.Kind, task.Name)
 	}
 
-	// v2.7 Step 2b-1: InformerDetector (informer cache hit) + KubectlDetector (fallback)
-	//
-	// 双保险:
-	//   - informer cache 命中 -> 直接 return true（避免 kubectl fork ~100ms）
-	//   - cache miss / informer 未启动 -> fallback 到 kubectl 二次验证
-	//   - 既有 v2.5/v2.6 行为完全保留（fallback 兜底）
-	kubectlDetector := NewKubectlDetector(kubeconfig)
-	detector := NewInformerDetector(informerPool, kubectlDetector)
-
+	// v3.2: detector 预建复用（InformerDetector + KubectlDetector fallback）
 	r := &Reconciler{
 		sm:         sm,
 		kubeconfig: kubeconfig,

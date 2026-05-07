@@ -737,12 +737,8 @@ func TestUnmarshalRecord_InvalidJSON(t *testing.T) {
 func TestAutoMigrateToEtcd_LocalStoreNoMigration(t *testing.T) {
 	// store 是 localStore，不应该触发迁移
 	store := newTestLocalStore(t)
-	record := &DeployRecord{
-		Project: "myapp", Namespace: "ns",
-		State: StateRunning,
-	}
-	// 不应该报错，直接跳过
-	err := autoMigrateToEtcd(store, "myapp", "ns", record)
+	// 不应该报错，直接跳过（localStore 不触发迁移）
+	err := autoMigrateToEtcd(store, "myapp", "ns")
 	assert.NoError(t, err)
 }
 

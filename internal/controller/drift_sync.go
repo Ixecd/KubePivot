@@ -30,13 +30,13 @@ func (r *Reconciler) StartDriftSyncLoop(ctx context.Context) {
 			slog.Info("Drift Sync Loop 已退出")
 			return
 		case <-ticker.C:
-			r.scanAndSync(ctx)
+			r.scanAndSync()
 		}
 	}
 }
 
 // scanAndSync 扫描所有 force-sync 资源，发现漂移则强制对齐
-func (r *Reconciler) scanAndSync(ctx context.Context) {
+func (r *Reconciler) scanAndSync() {
 	for _, res := range r.resources.Resources {
 		if !res.ForceSync {
 			continue
@@ -95,13 +95,17 @@ func detectDrift(kubeconfig, namespace string, res Resource) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	out, _ := executor.GetExecutor().Helm(ctx, kubeconfig,
+	out, err := executor.GetExecutor().Helm(ctx, kubeconfig,
 		"diff", "upgrade", release,
 		"--namespace", namespace,
 		"--no-hooks",
 		"--suppress-secrets",
 		"--three-way-merge",
 	)
+	if err != nil {
+		slog.Warn("helm diff 失败，跳过此资源", "release", release, "namespace", namespace, "err", err)
+		return nil, nil
+	}
 	output := strings.TrimSpace(string(out))
 	if output == "" {
 		return nil, nil

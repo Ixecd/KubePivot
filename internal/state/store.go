@@ -170,7 +170,7 @@ func NewAutoStore(etcdEndpoints string) Store {
 // ── 工具函数 ────────────────────────────────────────────────────────────────
 
 func etcdKey(project, namespace string) string {
-	return fmt.Sprintf("kubepivot/%s/%s/state", project, namespace)
+	return EtcdKey(project, namespace)
 }
 
 func localPath(project, namespace string) (string, error) {
@@ -182,7 +182,7 @@ func localPath(project, namespace string) (string, error) {
 }
 
 // autoMigrateToEtcd 检测到 etcd 可用且本地有状态时，自动迁移
-func autoMigrateToEtcd(store Store, project, namespace string, current *DeployRecord) error {
+func autoMigrateToEtcd(store Store, project, namespace string) error {
 	// 只有当前 store 是 etcd 时才需要迁移
 	etcdSt, ok := store.(*etcdStore)
 	if !ok {

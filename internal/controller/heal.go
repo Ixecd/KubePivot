@@ -576,20 +576,6 @@ func clearManagedFieldsByKind(namespace, kind string) error {
 	return nil
 }
 
-func getLatestRevision(releaseName, namespace string) (int, error) {
-	out, err := runHelmOutput("history", releaseName, "--namespace", namespace, "--output", "json")
-	if err != nil || len(out) == 0 {
-		return 0, fmt.Errorf("helm history 失败: %w", err)
-	}
-	var history []struct {
-		Revision int `json:"revision"`
-	}
-	if err := json.Unmarshal(out, &history); err != nil || len(history) == 0 {
-		return 0, fmt.Errorf("解析 helm history 失败: %w", err)
-	}
-	return history[len(history)-1].Revision, nil
-}
-
 func runHelmOutput(args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
