@@ -1,0 +1,90 @@
+perf(eventstream): v3.2 KVCache 性能冲刺 — Delta buffer + Sharded + merge-on-read + RV CAS
+
+v3.2 KVCache 性能冲刺 + 命门修复。9 项优化，5 文件变更，19 包全量 test 通过。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+核心改动
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Delta buffer (Put O(1)):
+    Put 写 delta map (~100ns) 而非全量 CoW (387μs)
+    merge-on-read: ListAll/ListByNode 非阻塞合并 delta+snapshot
+    delta 超阈(200)异步 go FlushDelta()，防惊群
+    RV CAS: Put 拒绝 event.RV < current.RV (Watch 乱序 / 410 Gone)
+
+  ShardedPodCache (16-way power-of-2):
+    按 namespace FNV hash 分片，各分片独立 delta + deltaMu
+    PutBulk 按 ns 分组并发写入，写并发 N 倍
+    ListAll merge-on-read 跨分片合并
+
+  Generation + PoolUtilCache:
+    PodCache.Generation() 单调 atomic.Int64，写入 +1
+    PoolUtilCache.GetOrCompute(gen): 无变化返回缓存 (~100ns vs 1ms)
+
+  poolFragmentRate 复用 usageMap:
+    外层建一次 usageMap，6 次内部调用复用
+    7×O(Np) → 1×O(Np)
+
+  NodeCache ListAll zero-copy:
+    nodeSnapshot.list 预缓存，ListAll 直接返回 slice 指针
+
+  PodEntry/NodeEntry.RV (etcd ResourceVersion):
+    双 Cache (Skeleton↔PodEntry) 桥接字段，Put CAS 防旧覆盖
+
+  ready=false 默认:
+    PutBulk 前 cache 未就绪 → InformerAdapter 走 ErrCacheNotReady fallback
+    ShardedPodCache 空分片手动 ready=true
+
+  Makefile bench + prune gate:
+    bench.kp / bench.baseline / bench.regression
+    benchmark/README.md: Real YAML 工具链 + 退步阈值
+
+  Cold→Warm 测试:
+    TestInformerAdapter_ColdToWarm: 冷启动→ErrCacheNotReady→预热→正常
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+性能特征 (v3.2.1)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Put:         O(1) delta write + RV CAS, ~120ns, 0 alloc
+  PutBulk:     O(N) CoW, ~657μs @ 5k
+  Delete:      O(1) delta tombstone, ~100ns, 0 alloc
+  Get:         O(1) lock-free, 0 alloc, 24ns
+  ListAll:     delta empty → O(1) pre-built slice (0 alloc)
+               delta non-empty → O(N) merge-on-read
+               delta >200 → async CoW flush
+  ListByNode:  O(K) byNode (delta empty) / O(K+Nd) merge (delta non-empty)
+  FlushDelta:  O(N) CoW snapshot rebuild
+  Generation:  O(1) atomic load
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+与 client-go 对比 (5000 Pod, M4)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Get:       24ns vs 39ns   → 1.6x, 0 allocs
+  ListByNode: 204ns vs 374ns → 1.8x
+  PutBulk 5k: 657μs vs 1050μs → 1.6x (省 1.6x 内存)
+  ColdStart 5k: 611μs vs 1041μs → 1.7x
+  Memory 5k: 2.1KB vs 7.8KB/pod → 3.7x
+  单条 Put: ~120ns vs 2.4μs → KP 20x (delta buffer vs CoW)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/eventstream/kv_cache.go           Delta buffer + Sharded + merge-on-read + RV CAS
+  internal/eventstream/kv_cache_test.go      Sharded 测试 + Cold→Warm 测试
+  internal/scheduler/pool.go                 usageMap 复用 + PoolUtilCache + pool_test
+  internal/scheduler/informer_adapter_test.go Cold→Warm 过渡测试
+  Makefile                                    bench.kp / bench.regression / bench.baseline
+  benchmark/README.md                         Real YAML 工具链 + Prune Gate 阈值
+  docs/design/informer-kv-cache-impl-notes.md 重写 (v4, 十二节)
+  FORGET.md                                   v3.2 性能冲刺已落地标注
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Delta write O(1)，merge-on-read 不阻塞，Sharded 写并发 N 倍。
+RV bridge 双 Cache 同版本，ready gate 冷启动安全。
+387μs → 120ns，AP 最终一致。

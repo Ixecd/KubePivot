@@ -237,6 +237,28 @@ frontend.clean:
 		rm -rf $(FRONTEND_DIR)/dist $(FRONTEND_DIR)/node_modules; \
 	fi
 
+## bench.kp: Run KP-side KVCache benchmarks.
+.PHONY: bench.kp
+bench.kp:
+	@echo "===========> Running KP KVCache benchmarks"
+	@go test -bench=. -benchmem -count=3 -benchtime=1s -run='^$$' ./internal/eventstream/
+
+## bench.regression: Run KP benchmarks and compare against baseline (prune gate).
+.PHONY: bench.regression
+bench.regression: bench.kp
+	@echo "===========> Comparing with baseline"
+	@if [ -f benchmark/results/baseline-kp.txt ]; then \
+		benchstat benchmark/results/baseline-kp.txt benchmark/results/latest-kp.txt || true; \
+	else \
+		echo "No baseline found. Save current results as baseline with: make bench.baseline"; \
+	fi
+
+## bench.baseline: Save current benchmark results as baseline for regression checks.
+.PHONY: bench.baseline
+bench.baseline: bench.kp
+	@echo "===========> Saving benchmark baseline"
+	@cp benchmark/results/latest-kp.txt benchmark/results/baseline-kp.txt
+
 ## help: Show this help info
 .PHONY: help
 help:

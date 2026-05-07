@@ -145,6 +145,26 @@
 
 50. **Chaos 测试** — ⏳ v3.3。litmus/chaos-monkey: node failure mid-evict / GPU OOM / NVLink 断连 / 1k Pod 10% 迁移负载。
 
+### v3.2 性能冲刺已落地
+
+51. **Delta CoW 写优化** — ✅ v3.2.1。Delta buffer: Put O(1) delta write (~100ns) + merge-on-read ListAll/ListByNode（非阻塞）。delta 超阈(200)异步 `go FlushDelta()`。RV CAS 防旧事件覆盖。单写从 387μs 降到 ~120ns。
+
+52. **Node ListAll zero-copy** — ✅ v3.2.1。`nodeSnapshot.list` 预缓存，ListAll 直接返回 slice 指针，零分配。
+
+53. **双 Cache 架构（Skeleton + PodEntry）** — ✅ v3.2.1 确认共存。Controller→SkeletonCache(Resource)，Scheduler→PodCache(PodEntry)。PodEntry.RV 桥接 Resource.ResourceVersion，Put CAS 防乱序覆盖。
+
+54. **Real YAML benchmark** — ⏳ v3.3。`benchmark/README.md` 已写工具链规划。当前 fake data（10 容器模板），待 `kp bench dump` 命令实现。
+
+55. **ShardedPodCache** — ✅ v3.2.1。16 路 power-of-2 namespace hash 分片，各分片独立 delta + deltaMu。PutBulk 按 ns 分组并发写入。ListAll merge-on-read 跨分片合并。
+
+56. **池碎片率复用 usageMap** — ✅ v3.2.1。`poolFragmentRate` 接受 caller 预建的 usageMap，7 次 O(Np) → 1 次。byReq 索引 + max_free_gap 近似留 v3.3。
+
+57. **池利用率预聚合** — ✅ v3.2.1。`PodCache.Generation()` + `PoolUtilCache`。稳定集群无变化时 scan 直接返回缓存结果（~100ns vs 1ms）。
+
+58. **Cold→Warm 过渡测试** — ✅ v3.2.1。`TestInformerAdapter_ColdToWarm`：ready=false 冷启动 → ErrCacheNotReady fallback → PutBulk 预热 → 正常返回。Real Watch sync 模拟留 v3.3。
+
+59. **Prune Gate** — ✅ v3.2.1。`Makefile`: `bench.kp` / `bench.baseline` / `bench.regression`。`benchmark/README.md`: 阈值文档（Get>20% / ColdStart>30% / Memory>20% → block）。
+
 ---
 
 ## 四、已完成但未在真实环境验证

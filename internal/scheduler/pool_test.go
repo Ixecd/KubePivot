@@ -136,3 +136,27 @@ func TestPoolNameForNode_CPUOnly(t *testing.T) {
 
 // GB helper for pool_test
 const GB = 1024 * 1024 * 1024
+
+func TestPoolUtilCache_Hit(t *testing.T) {
+	cache := &PoolUtilCache{}
+	nodes := []*NodeInfo{{Name: "n1", AllocatableCPU: 4000, AllocatableMemory: 8 * GB}}
+	pods := []*PodInfo{{Name: "p1", Namespace: "ns", NodeName: "n1", Phase: "Running", Requests: ResourceRequest{CPU: 1000, Memory: 2 * GB}}}
+
+	// First call: compute
+	r1 := cache.GetOrCompute(1, pods, nodes)
+	if len(r1) != 1 || r1[0].CPU.Util == 0 {
+		t.Fatal("first call should compute")
+	}
+
+	// Same gen: cached
+	r2 := cache.GetOrCompute(1, pods, nodes)
+	if &r1[0] != &r2[0] {
+		t.Error("same gen should return cached pointer")
+	}
+
+	// New gen: recompute
+	r3 := cache.GetOrCompute(2, pods, nodes)
+	if &r1[0] == &r3[0] {
+		t.Error("new gen should recompute")
+	}
+}

@@ -85,3 +85,32 @@ func TestInformerAdapter_GPUNodeConversion(t *testing.T) {
 		t.Error("GPU conversion failed")
 	}
 }
+
+// TestInformerAdapter_ColdToWarm 验证缓存从冷启动→填充的过渡期行为。
+// 场景：Controller 重启后 Informer 未完成初始 List，Rescheduler tick 到达。
+// Phase 1 (cold): ready=false → ErrCacheNotReady（无法区分空集群 vs 未填充）
+// Phase 2 (warm): PutBulk 后 ready=true → 返回完整列表
+// v3.3：补齐真实 Watch sync 模拟 + p99 fallback hit 指标。
+func TestInformerAdapter_ColdToWarm(t *testing.T) {
+	podCache := eventstream.NewPodCache()
+	adapter := NewInformerAdapter(podCache, nil, nil)
+
+	// Phase 1: cold — cache not ready (initial List not completed)
+	_, err := adapter.ListAllPods(context.Background())
+	if err != ErrCacheNotReady {
+		t.Fatalf("cold cache without fallback should return ErrCacheNotReady, got %v", err)
+	}
+
+	// Phase 2: warm — Informer PutBulk fills cache, ready=true
+	podCache.PutBulk([]*eventstream.PodEntry{
+		{Namespace: "ns", Name: "p1", NodeName: "n1", Phase: "Running"},
+		{Namespace: "ns", Name: "p2", NodeName: "n2", Phase: "Running"},
+	})
+	pods, err := adapter.ListAllPods(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pods) != 2 {
+		t.Errorf("warm cache should return all pods, got %d", len(pods))
+	}
+}

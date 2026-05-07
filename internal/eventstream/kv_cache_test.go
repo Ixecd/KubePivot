@@ -1,6 +1,8 @@
 package eventstream
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -177,8 +179,9 @@ func TestPodCache_Heartbeat_Manual(t *testing.T) {
 
 func TestPodCache_IsReady_Atomic(t *testing.T) {
 	c := NewPodCache()
+	// ready=false 直到 PutBulk 完成初始填充（区分"空集群"和"未填充"）
 	if c.IsReady() {
-		t.Error("new cache should not be ready")
+		t.Error("empty cache should NOT be ready before initial fill")
 	}
 	c.PutBulk([]*PodEntry{{Namespace: "ns", Name: "p", NodeName: "n1"}})
 	if !c.IsReady() {
@@ -299,5 +302,56 @@ func TestPodCache_Subscribe_Delete(t *testing.T) {
 
 	if len(sub.events) != 1 || sub.events[0].Type != ChangePodDeleted {
 		t.Errorf("delete should fire PodDeleted, got %+v", sub.events)
+	}
+}
+
+func TestShardedPodCache_ShardIsolation(t *testing.T) {
+	sc := NewShardedPodCache(4)
+	pods := []*PodEntry{
+		{Namespace: "ns-a", Name: "p1", NodeName: "n1"},
+		{Namespace: "ns-b", Name: "p2", NodeName: "n2"},
+		{Namespace: "ns-c", Name: "p3", NodeName: "n3"},
+	}
+	sc.PutBulk(pods)
+	if !sc.IsReady() {
+		t.Fatal("all shards should be ready")
+	}
+	if p, _ := sc.Get("ns-a", "p1"); p == nil {
+		t.Error("should find p1 in shard")
+	}
+	if p, _ := sc.Get("ns-nonexistent", "p1"); p != nil {
+		t.Error("wrong shard lookup should not find p1")
+	}
+}
+
+func TestShardedPodCache_ConcurrentPut(t *testing.T) {
+	sc := NewShardedPodCache(4)
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			ns := fmt.Sprintf("ns-%d", idx%20)
+			sc.Put(&PodEntry{Namespace: ns, Name: fmt.Sprintf("p-%d", idx), NodeName: "n1"}, "")
+		}(i)
+	}
+	wg.Wait()
+	all := sc.ListAll()
+	if len(all) == 0 {
+		t.Error("concurrent puts should produce results")
+	}
+	t.Logf("concurrent 100 puts → %d pods listed", len(all))
+}
+
+func TestShardedPodCache_Generation(t *testing.T) {
+	sc := NewShardedPodCache(2)
+	g1 := sc.Generation()
+	if g1 != 0 {
+		t.Errorf("empty cache gen = %d, want 0", g1)
+	}
+	sc.Put(&PodEntry{Namespace: "ns-a", Name: "p1", NodeName: "n1"}, "")
+	g2 := sc.Generation()
+	if g2 == g1 {
+		t.Error("gen should change after Put")
 	}
 }

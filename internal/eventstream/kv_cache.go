@@ -11,15 +11,17 @@ package eventstream
 
 import (
 	"context"
+	"hash/fnv"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-
 // ─── 缓存条目类型（独立于 scheduler 包，避免循环依赖） ──────────
 
 // PodEntry 调度视角下的 Pod 缓存条目。
+// RV 是 etcd ResourceVersion（单调递增），用于双 Cache 一致性校验：
+// Put 仅接受 RV >= 当前值的写入，防止旧 Watch 事件覆盖新数据。
 type PodEntry struct {
 	Namespace string
 	Name      string
@@ -27,6 +29,7 @@ type PodEntry struct {
 	Phase     string
 	Labels    map[string]string
 	Requests  ResourceRequest
+	RV        int64 // etcd ResourceVersion（0=未初始化/测试数据）
 }
 
 // ResourceRequest Pod 资源请求。
@@ -37,11 +40,13 @@ type ResourceRequest struct {
 }
 
 // NodeEntry 调度视角下的 Node 缓存条目。
+// RV 同 PodEntry.RV。
 type NodeEntry struct {
 	Name              string
 	AllocatableCPU    int64
 	AllocatableMemory int64
 	GPU               []GPUEntry
+	RV                int64 // etcd ResourceVersion
 }
 
 // GPUEntry 单个 GPU 设备。
@@ -54,7 +59,6 @@ type GPUEntry struct {
 }
 
 // ─── PodCache ────────────────────────────────────────────────────
-
 
 // ─── Subscribe ───────────────────────────────────────────────────
 
@@ -82,15 +86,25 @@ const (
 // ─── PodCache ────────────────────────────────────────────────────
 
 // PodCache 存储完整 PodEntry 的 KV 缓存。
-// 读：lock-free（atomic.Value）
-// 写：writeMu 互斥 + 双缓冲指针交换
+// 读：lock-free（atomic.Value）+ delta RLock 合并
+// 写：O(1) delta 写入，PutBulk / ListAll 触发 CoW 合并
+// CAP 语义：AP（最终一致）—— Put 立即写 delta，Read 看合并视图，snapshot 定期追赶
 type PodCache struct {
-	snapshot      atomic.Value  // *podSnapshot
-	writeMu       sync.Mutex
-	ready         atomic.Bool   // 无锁读，防 data race
-	lastHeartbeat atomic.Int64  // UnixNano，无锁读写，避免 Heartbeat 与 Put 抢 writeMu
+	snapshot      atomic.Value         // *podSnapshot (base state, swapped on Flush)
+	writeMu       sync.Mutex           // guards snapshot swap (CoW)
+	delta         map[string]*PodEntry // pending changes since last snapshot
+	deltaMu       sync.RWMutex         // guards delta map (Put takes WLock, Get takes RLock)
+	ready         atomic.Bool
+	lastHeartbeat atomic.Int64
+	generation    atomic.Int64 // 递增计数器，每次写入 +1（供 PoolUtilCache 判断是否需要重算）
 	subscribers   []CacheSubscriber
 }
+
+// Generation 返回当前写入代数（lock-free，供调用方判断缓存是否 stale）。
+func (c *PodCache) Generation() int64 { return c.generation.Load() }
+
+// bumpGen 写入后递增 generation。
+func (c *PodCache) bumpGen() { c.generation.Add(1) }
 
 // Heartbeat 记录一次 Watch 心跳（lock-free）。
 // 外部 Watch goroutine 每 30s 调用一次，或收到任何 K8s 事件时调用。
@@ -136,14 +150,15 @@ func (c *PodCache) StartStaleWatchdog(ctx context.Context, maxStale time.Duratio
 }
 
 type podSnapshot struct {
-	pods   map[string]*PodEntry           // key: "ns/name"
+	pods   map[string]*PodEntry            // key: "ns/name"
 	byNode map[string]map[string]*PodEntry // nodeName → set of pods
-	list   []*PodEntry                    // 预缓存切片，ListAll 零分配
+	list   []*PodEntry                     // 预缓存切片，ListAll 零分配
 }
 
 // NewPodCache 创建空 PodCache。
+// ready=false 直到 PutBulk 完成初始填充（区分"空集群"和"未填充"）。
 func NewPodCache() *PodCache {
-	c := &PodCache{}
+	c := &PodCache{delta: make(map[string]*PodEntry)}
 	c.snapshot.Store(&podSnapshot{
 		pods:   make(map[string]*PodEntry),
 		byNode: make(map[string]map[string]*PodEntry),
@@ -155,32 +170,110 @@ func NewPodCache() *PodCache {
 // IsReady 缓存是否已完成初始填充（lock-free）。
 func (c *PodCache) IsReady() bool { return c.ready.Load() }
 
-// Get lock-free 读取单个 Pod。
+// Get 单 Pod 读取。先查 delta（最新写入），再查 snapshot（已合并）。
+// delta RLock 粒度极细，99% 调用在 snapshot 命中，delta 开销 ≈ 额外一次 map lookup。
 func (c *PodCache) Get(ns, name string) (*PodEntry, bool) {
+	k := key(ns, name)
+	c.deltaMu.RLock()
+	if p, ok := c.delta[k]; ok {
+		c.deltaMu.RUnlock()
+		return p, p != nil // nil = deleted tombstone
+	}
+	c.deltaMu.RUnlock()
+
 	snap := c.snapshot.Load().(*podSnapshot)
-	p, ok := snap.pods[key(ns, name)]
+	p, ok := snap.pods[k]
 	return p, ok
 }
 
-// ListAll lock-free 返回所有 Pod（预缓存切片，零分配）。
+// mergeThreshold triggers async flush when delta exceeds this size.
+const mergeThreshold = 200
+
+// ListAll 返回所有 Pod。delta 为空 → 零分配预缓存 slice。
+// delta 非空 → merge-on-read（非阻塞，不触发 CoW），超过阈值时异步刷。
 func (c *PodCache) ListAll() []*PodEntry {
-	return c.snapshot.Load().(*podSnapshot).list
+	snap := c.snapshot.Load().(*podSnapshot)
+	c.deltaMu.RLock()
+	nd := len(c.delta)
+	if nd == 0 {
+		c.deltaMu.RUnlock()
+		return snap.list // fast path: 0 alloc
+	}
+	// Merge-on-read: build merged list without CoW
+	// Start from snapshot.list, override/add from delta
+	list := make([]*PodEntry, 0, len(snap.list)+nd)
+	seen := make(map[string]bool, nd) // track delta keys for O(1) replace
+	for _, p := range snap.list {
+		k := key(p.Namespace, p.Name)
+		if d, ok := c.delta[k]; ok {
+			if d != nil {
+				list = append(list, d)
+			}
+			seen[k] = true
+		} else {
+			list = append(list, p)
+		}
+	}
+	for k, d := range c.delta {
+		if !seen[k] && d != nil {
+			list = append(list, d)
+		}
+	}
+	c.deltaMu.RUnlock()
+
+	// Async flush if delta is large (non-blocking)
+	if nd > mergeThreshold {
+		go c.FlushDelta()
+	}
+	return list
 }
 
-// ListByNode lock-free 返回指定节点上的 Pod。
+// ListByNode 返回指定节点上的 Pod。delta 非空时 merge-on-read。
 func (c *PodCache) ListByNode(nodeName string) []*PodEntry {
 	snap := c.snapshot.Load().(*podSnapshot)
-	pods := snap.byNode[nodeName]
-	result := make([]*PodEntry, 0, len(pods))
-	for _, p := range pods {
+	snapPods := snap.byNode[nodeName]
+
+	c.deltaMu.RLock()
+	nd := len(c.delta)
+	if nd == 0 {
+		c.deltaMu.RUnlock()
+		result := make([]*PodEntry, 0, len(snapPods))
+		for _, p := range snapPods {
+			result = append(result, p)
+		}
+		return result
+	}
+
+	// Merge delta with byNode result
+	byNodeSet := make(map[string]*PodEntry, len(snapPods))
+	for _, p := range snapPods {
+		byNodeSet[key(p.Namespace, p.Name)] = p
+	}
+	for k, d := range c.delta {
+		if d == nil {
+			delete(byNodeSet, k) // tombstone
+		} else if d.NodeName == nodeName {
+			byNodeSet[k] = d // add/replace on this node
+		} else {
+			delete(byNodeSet, k) // moved to another node → remove
+		}
+	}
+	c.deltaMu.RUnlock()
+
+	result := make([]*PodEntry, 0, len(byNodeSet))
+	for _, p := range byNodeSet {
 		result = append(result, p)
+	}
+	if nd > mergeThreshold {
+		go c.FlushDelta()
 	}
 	return result
 }
 
 // PutBulk 批量写入（ListAll 初始填充 / 410 Gone 重建 / 内存压缩）。
-// 双缓冲：先构造新 snapshot，再指针交换，纳秒级持写锁。
+// 先合并 pending delta 再全量替换 snapshot。
 func (c *PodCache) PutBulk(pods []*PodEntry) {
+	c.FlushDelta()
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 
@@ -204,79 +297,38 @@ func (c *PodCache) PutBulk(pods []*PodEntry) {
 	c.snapshot.Store(&podSnapshot{pods: newPods, byNode: newByNode, list: list})
 	c.ready.Store(true)
 	c.lastHeartbeat.Store(time.Now().UnixNano())
+	c.bumpGen()
 	c.notifySubscribers(ChangeBulkResync)
 }
 
-// Put 单个 Pod 写入（Watch ADDED/MODIFIED 事件）。
-// oldNodeName 仅作为 hint，实际旧节点名从缓存内部读取，不信任调用方。
+// Put 单个 Pod 写入（Watch ADDED/MODIFIED 事件），O(1)。
+// RV > 0 时做 CAS 校验：拒绝 event.RV < current.RV 的旧事件（Watch 乱序 / 410 Gone 回放）。
+// 写入 delta map，全量合并仅在 PutBulk / FlushDelta 触发。
 func (c *PodCache) Put(pod *PodEntry, oldNodeName string) {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-
-	old := c.snapshot.Load().(*podSnapshot)
 	k := key(pod.Namespace, pod.Name)
 
-	// CoW: 只拷贝 pods map，byNode 共享 old 指针
-	newPods := copyMap(old.pods)
-	newPods[k] = pod
-
-	// 从缓存内部获取真正的旧节点名（不信任调用方传入的 oldNodeName）
-	if oldPod, ok := old.pods[k]; ok {
-		oldNodeName = oldPod.NodeName
-	}
-
-	// byNode: true CoW — 默认共享 old 指针，首次变更时懒拷贝顶层 map
-	newByNode := old.byNode
-	topCopied := false
-	ensureTopCopy := func() {
-		if !topCopied {
-			newByNode = copyByNodeTop(newByNode)
-			topCopied = true
+	// RV CAS: reject stale events (only when RV is wired, RV>0)
+	if pod.RV > 0 {
+		c.deltaMu.RLock()
+		if d, ok := c.delta[k]; ok && d.RV >= pod.RV {
+			c.deltaMu.RUnlock()
+			return // delta has newer
+		}
+		c.deltaMu.RUnlock()
+		if s, ok := c.snapshot.Load().(*podSnapshot).pods[k]; ok && s.RV >= pod.RV {
+			return // snapshot has newer
 		}
 	}
 
-	// 跨节点迁移：从旧节点索引删除
-	if oldNodeName != "" && oldNodeName != pod.NodeName {
-		oldNodePods := newByNode[oldNodeName]
-		dst := make(map[string]*PodEntry, len(oldNodePods)-1)
-		for pk, pv := range oldNodePods {
-			if pk != k {
-				dst[pk] = pv
-			}
-		}
-		ensureTopCopy()
-		if len(dst) > 0 {
-			newByNode[oldNodeName] = dst
-		} else {
-			delete(newByNode, oldNodeName)
-		}
-	}
+	_, isUpdate := c.Get(pod.Namespace, pod.Name)
 
-	// 确保新节点索引存在（CoW 拷贝）
-	src, exists := newByNode[pod.NodeName]
-	if !exists {
-		ensureTopCopy()
-		newByNode[pod.NodeName] = make(map[string]*PodEntry)
-	} else {
-		capacity := len(src)
-		if _, alreadyThere := src[k]; !alreadyThere {
-			capacity++
-		}
-		dst := make(map[string]*PodEntry, capacity)
-		for pk, pv := range src {
-			dst[pk] = pv
-		}
-		ensureTopCopy()
-		newByNode[pod.NodeName] = dst
-	}
-	newByNode[pod.NodeName][k] = pod
+	c.deltaMu.Lock()
+	c.delta[k] = pod
+	c.deltaMu.Unlock()
 
-	snap := &podSnapshot{pods: newPods, byNode: newByNode, list: buildList(newPods)}
-	c.snapshot.Store(snap)
 	c.lastHeartbeat.Store(time.Now().UnixNano())
-
-	_, existed := old.pods[k]
-	if existed {
+	c.bumpGen()
+	if isUpdate {
 		c.notifySubscribers(ChangePodModified, k)
 	} else {
 		c.notifySubscribers(ChangePodAdded, k)
@@ -284,37 +336,125 @@ func (c *PodCache) Put(pod *PodEntry, oldNodeName string) {
 }
 
 // Delete 删除单个 Pod（Watch DELETED 事件）。CoW 仅拷贝受影响的节点。
+// Delete 写入 delta（标记删除），O(1)。
+// 被删 Pod 在 FlushDelta 时从 CoW snapshot 移除。
 func (c *PodCache) Delete(ns, name, nodeName string) {
+	k := key(ns, name)
+	c.deltaMu.Lock()
+	c.delta[k] = nil // nil = tombstone
+	c.deltaMu.Unlock()
+
+	c.lastHeartbeat.Store(time.Now().UnixNano())
+	c.bumpGen()
+	c.notifySubscribers(ChangePodDeleted, k)
+}
+
+// FlushDelta 将 delta 层的所有待定变更合并到 snapshot（一次 CoW）。
+// 调用方场景：PutBulk（全量替换前）、ListAll/ListByNode（delta 非空时）。
+// 持有 writeMu + deltaMu 双锁，先 writeMu 后 deltaMu 避免死锁。
+func (c *PodCache) FlushDelta() {
+	c.deltaMu.RLock()
+	if len(c.delta) == 0 {
+		c.deltaMu.RUnlock()
+		return
+	}
+	c.deltaMu.RUnlock()
+
 	c.writeMu.Lock()
+	c.deltaMu.Lock()
+	defer c.deltaMu.Unlock()
 	defer c.writeMu.Unlock()
 
+	// 二次检查：获取写锁期间可能已被其他 goroutine 刷新
+	if len(c.delta) == 0 {
+		return
+	}
+
 	old := c.snapshot.Load().(*podSnapshot)
-	k := key(ns, name)
 
+	// 拷贝 pods map + 应用 delta
 	newPods := copyMap(old.pods)
-	delete(newPods, k)
-
-	// CoW: 只拷贝受影响节点的子 map，其余节点复用 old 指针
 	newByNode := old.byNode
-	if nodePods, ok := newByNode[nodeName]; ok {
-		dst := make(map[string]*PodEntry, len(nodePods)-1)
-		for pk, pv := range nodePods {
-			if pk != k {
-				dst[pk] = pv
+	byNodeDirty := false
+
+	for k, v := range c.delta {
+		if v == nil {
+			// tombstone: 删除
+			if oldPod, ok := old.pods[k]; ok {
+				// 从 byNode 索引移除
+				if nodePods, ok2 := newByNode[oldPod.NodeName]; ok2 {
+					if !byNodeDirty {
+						newByNode = copyByNodeTop(newByNode)
+						byNodeDirty = true
+					}
+					dst := make(map[string]*PodEntry, len(nodePods)-1)
+					for pk, pv := range nodePods {
+						if pk != k {
+							dst[pk] = pv
+						}
+					}
+					if len(dst) > 0 {
+						newByNode[oldPod.NodeName] = dst
+					} else {
+						delete(newByNode, oldPod.NodeName)
+					}
+				}
+				delete(newPods, k)
 			}
-		}
-		newByNode = copyByNodeTop(newByNode)
-		if len(dst) > 0 {
-			newByNode[nodeName] = dst
 		} else {
-			delete(newByNode, nodeName)
+			// 新增或更新
+			oldPod, existed := old.pods[k]
+			newPods[k] = v
+
+			// 跨节点迁移：从旧索引移除
+			if existed && oldPod.NodeName != v.NodeName {
+				if nodePods, ok := newByNode[oldPod.NodeName]; ok {
+					if !byNodeDirty {
+						newByNode = copyByNodeTop(newByNode)
+						byNodeDirty = true
+					}
+					dst := make(map[string]*PodEntry, len(nodePods)-1)
+					for pk, pv := range nodePods {
+						if pk != k {
+							dst[pk] = pv
+						}
+					}
+					if len(dst) > 0 {
+						newByNode[oldPod.NodeName] = dst
+					} else {
+						delete(newByNode, oldPod.NodeName)
+					}
+				}
+			}
+
+			// 加入新节点索引
+			if !byNodeDirty {
+				newByNode = copyByNodeTop(newByNode)
+				byNodeDirty = true
+			}
+			if newByNode[v.NodeName] == nil {
+				newByNode[v.NodeName] = make(map[string]*PodEntry)
+			} else {
+				src := newByNode[v.NodeName]
+				if _, exists := src[k]; !exists {
+					dst := make(map[string]*PodEntry, len(src)+1)
+					for pk, pv := range src {
+						dst[pk] = pv
+					}
+					newByNode[v.NodeName] = dst
+				}
+			}
+			newByNode[v.NodeName][k] = v
 		}
 	}
 
-	snap := &podSnapshot{pods: newPods, byNode: newByNode, list: buildList(newPods)}
-	c.snapshot.Store(snap)
-	c.lastHeartbeat.Store(time.Now().UnixNano())
-	c.notifySubscribers(ChangePodDeleted, k)
+	// 清空 delta
+	c.delta = make(map[string]*PodEntry)
+
+	c.snapshot.Store(&podSnapshot{
+		pods: newPods, byNode: newByNode, list: buildList(newPods),
+	})
+	c.bumpGen()
 }
 
 // Subscribe 注册变更订阅者。
@@ -343,12 +483,13 @@ type NodeCache struct {
 
 type nodeSnapshot struct {
 	nodes map[string]*NodeEntry // key: nodeName
+	list  []*NodeEntry          // pre-built ListAll result（零拷贝读）
 }
 
 // NewNodeCache 创建空 NodeCache。
 func NewNodeCache() *NodeCache {
 	c := &NodeCache{}
-	c.snapshot.Store(&nodeSnapshot{nodes: make(map[string]*NodeEntry)})
+	c.snapshot.Store(&nodeSnapshot{nodes: make(map[string]*NodeEntry), list: nil})
 	return c
 }
 
@@ -362,14 +503,10 @@ func (c *NodeCache) Get(name string) (*NodeEntry, bool) {
 	return n, ok
 }
 
-// ListAll lock-free 返回所有 Node。
+// ListAll lock-free 返回所有 Node，零分配零拷贝。
+// 返回的切片由 write 路径预构建，CAP 语义：最终一致（与 snapshot 原子交换）。
 func (c *NodeCache) ListAll() []*NodeEntry {
-	snap := c.snapshot.Load().(*nodeSnapshot)
-	result := make([]*NodeEntry, 0, len(snap.nodes))
-	for _, n := range snap.nodes {
-		result = append(result, n)
-	}
-	return result
+	return c.snapshot.Load().(*nodeSnapshot).list
 }
 
 // PutBulk 批量写入。
@@ -378,15 +515,17 @@ func (c *NodeCache) PutBulk(nodes []*NodeEntry) {
 	defer c.writeMu.Unlock()
 
 	newNodes := make(map[string]*NodeEntry, len(nodes))
+	list := make([]*NodeEntry, 0, len(nodes))
 	for _, n := range nodes {
 		newNodes[n.Name] = n
+		list = append(list, n)
 	}
 
-	c.snapshot.Store(&nodeSnapshot{nodes: newNodes})
+	c.snapshot.Store(&nodeSnapshot{nodes: newNodes, list: list})
 	c.ready.Store(true)
 }
 
-// Put 单个 Node 写入。
+// Put 单个 Node 写入（CoW：拷贝 map + 重建 list）。
 func (c *NodeCache) Put(node *NodeEntry) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
@@ -395,10 +534,10 @@ func (c *NodeCache) Put(node *NodeEntry) {
 	newNodes := copyNodeMap(old.nodes)
 	newNodes[node.Name] = node
 
-	c.snapshot.Store(&nodeSnapshot{nodes: newNodes})
+	c.snapshot.Store(&nodeSnapshot{nodes: newNodes, list: buildNodeList(newNodes)})
 }
 
-// Delete 删除 Node。
+// Delete 删除 Node（CoW：拷贝 map + 重建 list）。
 func (c *NodeCache) Delete(name string) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
@@ -407,7 +546,7 @@ func (c *NodeCache) Delete(name string) {
 	newNodes := copyNodeMap(old.nodes)
 	delete(newNodes, name)
 
-	c.snapshot.Store(&nodeSnapshot{nodes: newNodes})
+	c.snapshot.Store(&nodeSnapshot{nodes: newNodes, list: buildNodeList(newNodes)})
 }
 
 // ─── helpers ─────────────────────────────────────────────────────
@@ -439,6 +578,14 @@ func copyMap(src map[string]*PodEntry) map[string]*PodEntry {
 	return dst
 }
 
+func buildNodeList(nodes map[string]*NodeEntry) []*NodeEntry {
+	list := make([]*NodeEntry, 0, len(nodes))
+	for _, n := range nodes {
+		list = append(list, n)
+	}
+	return list
+}
+
 func copyNodeMap(src map[string]*NodeEntry) map[string]*NodeEntry {
 	dst := make(map[string]*NodeEntry, len(src))
 	for k, v := range src {
@@ -447,3 +594,131 @@ func copyNodeMap(src map[string]*NodeEntry) map[string]*NodeEntry {
 	return dst
 }
 
+// ─── ShardedPodCache ────────────────────────────────────────────
+
+// ShardedPodCache 按 namespace hash 将 PodCache 分为 N 个分片。
+// 写路径：Put/Delete 路由到对应分片，N 路并发（无写互斥）
+// 读路径：Get 路由到单分片，ListAll 合并所有分片
+// CAP 语义：各分片独立 AP，ListAll 跨分片合并（最终一致）
+type ShardedPodCache struct {
+	shards []*PodCache
+	n      int
+}
+
+// NewShardedPodCache 创建 N 路分片 PodCache（默认 N=16，power-of-2 防热点）。
+func NewShardedPodCache(n int) *ShardedPodCache {
+	if n <= 0 {
+		n = 16
+	}
+	shards := make([]*PodCache, n)
+	for i := range shards {
+		s := NewPodCache()
+		s.ready.Store(true) // 空分片即就绪（数据填充由 PutBulk 负责）
+		shards[i] = s
+	}
+	return &ShardedPodCache{shards: shards, n: n}
+}
+
+func (sc *ShardedPodCache) shardIdx(ns string) int {
+	h := fnv.New32a()
+	h.Write([]byte(ns))
+	return int(h.Sum32()) % sc.n
+}
+
+// ─── Delegated methods ─────────────────────────────────────────
+
+func (sc *ShardedPodCache) IsReady() bool {
+	for _, s := range sc.shards {
+		if !s.IsReady() {
+			return false
+		}
+	}
+	return true
+}
+
+func (sc *ShardedPodCache) Get(ns, name string) (*PodEntry, bool) {
+	return sc.shards[sc.shardIdx(ns)].Get(ns, name)
+}
+
+func (sc *ShardedPodCache) ListAll() []*PodEntry {
+	result := make([]*PodEntry, 0)
+	for _, s := range sc.shards {
+		result = append(result, s.ListAll()...)
+	}
+	return result
+}
+
+func (sc *ShardedPodCache) ListByNode(nodeName string) []*PodEntry {
+	result := make([]*PodEntry, 0)
+	for _, s := range sc.shards {
+		result = append(result, s.ListByNode(nodeName)...)
+	}
+	return result
+}
+
+func (sc *ShardedPodCache) Put(pod *PodEntry, oldNodeName string) {
+	sc.shards[sc.shardIdx(pod.Namespace)].Put(pod, oldNodeName)
+}
+
+func (sc *ShardedPodCache) Delete(ns, name, nodeName string) {
+	sc.shards[sc.shardIdx(ns)].Delete(ns, name, nodeName)
+}
+
+func (sc *ShardedPodCache) PutBulk(pods []*PodEntry) {
+	// 按 namespace 分组到各分片
+	buckets := make([][]*PodEntry, sc.n)
+	for _, p := range pods {
+		idx := sc.shardIdx(p.Namespace)
+		buckets[idx] = append(buckets[idx], p)
+	}
+	for i, bucket := range buckets {
+		if len(bucket) > 0 {
+			sc.shards[i].PutBulk(bucket)
+		}
+	}
+}
+
+func (sc *ShardedPodCache) Heartbeat() {
+	for _, s := range sc.shards {
+		s.Heartbeat()
+	}
+}
+
+func (sc *ShardedPodCache) StaleDuration() time.Duration {
+	var maxStale time.Duration
+	for _, s := range sc.shards {
+		if d := s.StaleDuration(); d > maxStale {
+			maxStale = d
+		}
+	}
+	return maxStale
+}
+
+// Generation 返回所有分片 generation 之和（任何分片变更 → 值变化）。
+func (sc *ShardedPodCache) Generation() int64 {
+	var sum int64
+	for _, s := range sc.shards {
+		sum += s.Generation()
+	}
+	return sum
+}
+
+// FlushDelta 刷新所有分片的 delta 到 snapshot。
+func (sc *ShardedPodCache) FlushDelta() {
+	for _, s := range sc.shards {
+		s.FlushDelta()
+	}
+}
+
+// Subscribe 向所有分片注册订阅者。
+func (sc *ShardedPodCache) Subscribe(sub CacheSubscriber) {
+	for _, s := range sc.shards {
+		s.Subscribe(sub)
+	}
+}
+
+func (sc *ShardedPodCache) StartStaleWatchdog(ctx context.Context, maxStale time.Duration) {
+	for _, s := range sc.shards {
+		s.StartStaleWatchdog(ctx, maxStale)
+	}
+}

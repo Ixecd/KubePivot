@@ -7,6 +7,7 @@ package scheduler
 
 import (
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -17,11 +18,11 @@ type PoolInfo struct {
 	Name      string            // 池名
 	Labels    map[string]string // 匹配该池的 node labels
 	UpdatedAt time.Time         // 最后计算时间（从 node label 或 GPU product 推导）
-	Nodes     []*NodeInfo   // 池内节点列表
-	CPU       PoolResource  // CPU 聚合
-	Memory    PoolResource  // Memory 聚合
-	GPU       PoolResource  // GPU 聚合（整卡计数）
-	Score     float64       // 池健康度 (0-1)，调度权重基准
+	Nodes     []*NodeInfo       // 池内节点列表
+	CPU       PoolResource      // CPU 聚合
+	Memory    PoolResource      // Memory 聚合
+	GPU       PoolResource      // GPU 聚合（整卡计数）
+	Score     float64           // 池健康度 (0-1)，调度权重基准
 }
 
 // PoolResource 池级资源聚合。
@@ -90,9 +91,9 @@ func ComputePoolUtilization(pods []*PodInfo, nodes []*NodeInfo) []*PoolInfo {
 			pi.GPU.Util = float64(pi.GPU.Used) / float64(pi.GPU.Total)
 		}
 
-		// 碎片率 & 有效容量
-		pi.CPU.FragmentRate, pi.CPU.Effective = poolFragmentRate(poolNodes, pods, "cpu")
-		pi.Memory.FragmentRate, pi.Memory.Effective = poolFragmentRate(poolNodes, pods, "memory")
+		// 碎片率 & 有效容量（复用 usageMap，不重复遍历 Pod）
+		pi.CPU.FragmentRate, pi.CPU.Effective = poolFragmentRate(poolNodes, usageMap, "cpu")
+		pi.Memory.FragmentRate, pi.Memory.Effective = poolFragmentRate(poolNodes, usageMap, "memory")
 		if pi.GPU.Total > 0 {
 			pi.GPU.FragmentRate, pi.GPU.Effective = poolGPUFragmentRate(poolNodes, pods)
 		}
@@ -203,20 +204,11 @@ func DetectPoolImbalance(pools []*PoolInfo) []*PoolImbalancePair {
 // ─── 碎片率计算 ──────────────────────────────────────────────────
 
 // poolFragmentRate 计算池内 CPU/Memory 的碎片率。
-// 碎片率 = 最大节点剩余资源 / 池总剩余资源（越低越碎）。
-func poolFragmentRate(nodes []*NodeInfo, pods []*PodInfo, resource string) (float64, int64) {
-	usageMap := make(map[string]nodeUsage)
-	for _, p := range pods {
-		if p.Phase == "Running" && p.NodeName != "" {
-			u := usageMap[p.NodeName]
-			u.CPU += p.Requests.CPU
-			u.Memory += p.Requests.Memory
-			usageMap[p.NodeName] = u
-		}
-	}
-
-	var totalRemain int64
-	var maxRemain int64
+// usageMap 由调用方预建（一次 O(Np)），本函数只走 O(Nn) 节点循环。
+// 碎片率 = 1 - (最大节点剩余/池总剩余)，1=无碎片, 0=全碎。
+// CAP 语义：最终一致——usageMap 是上次 scan 的快照，不实时。
+func poolFragmentRate(nodes []*NodeInfo, usageMap map[string]nodeUsage, resource string) (float64, int64) {
+	var totalRemain, maxRemain int64
 	for _, n := range nodes {
 		u := usageMap[n.Name]
 		var remain int64
@@ -238,9 +230,8 @@ func poolFragmentRate(nodes []*NodeInfo, pods []*PodInfo, resource string) (floa
 		return 1.0, 0 // 全满 → 无碎片
 	}
 
-	// 碎片率 = 1 - (最大剩余/总剩余)。ratio 越高碎片越严重。
 	ratio := 1.0 - float64(maxRemain)/float64(totalRemain)
-	return 1.0 - ratio, maxRemain // 1=无碎片, 0=全碎
+	return 1.0 - ratio, maxRemain
 }
 
 // poolGPUFragmentRate 计算池内 GPU 碎片率（整卡粒度）。
@@ -289,4 +280,34 @@ func max(vals ...float64) float64 {
 		}
 	}
 	return m
+}
+
+// ─── PoolUtilCache ──────────────────────────────────────────────
+
+// PoolUtilCache 基于 PodCache.Generation 的池利用率缓存。
+// Generation 不变 → 直接返回上次计算结果（稳定集群 95%+ scan 跳过重算）。
+// CAP 语义：最终一致——缓存可能稍旧于最新 delta，但 5min ticker 会追上。
+type PoolUtilCache struct {
+	mu  sync.RWMutex
+	gen int64
+	res []*PoolInfo
+}
+
+// GetOrCompute 如果 generation 未变，返回缓存结果；否则重新计算。
+func (c *PoolUtilCache) GetOrCompute(gen int64, pods []*PodInfo, nodes []*NodeInfo) []*PoolInfo {
+	c.mu.RLock()
+	if gen == c.gen && c.res != nil {
+		r := c.res
+		c.mu.RUnlock()
+		return r
+	}
+	c.mu.RUnlock()
+
+	r := ComputePoolUtilization(pods, nodes)
+
+	c.mu.Lock()
+	c.gen = gen
+	c.res = r
+	c.mu.Unlock()
+	return r
 }
