@@ -1,0 +1,57 @@
+docs: v3.2 文档归档与重写 — HANDOFF/TODO/SNAPSHOT/FORGET + 永久档案
+
+v3.2 文档收尾：旧版三文档归档到 archived/ 加 -v3.2 后缀，
+根目录四文档全量重写，snapshots/ 创建永久档案，FORGET 清除已实现条目 + 补遗。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+归档
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  archived/handoff/HANDOFF-v3.2.md     旧版接手指南
+  archived/todo/TODO-v3.2.md           旧版路线图
+  archived/snapshot/SNAPSHOT-v3.2.md   旧版快照
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+重写
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  TODO.md:
+    v3.2 已完成清单 (KVCache 性能冲刺 + 迁移引擎 + CBA + 池化)
+    v3.3 P0-P3 四优先级 (Fencer/Watch → Real YAML → GPU → buf_pool)
+    远期 v3.3+/v4.0 六项
+
+  HANDOFF.md:
+    项目定位: v3.2 KVCache 性能冲刺 + CAP 选型 AP
+    现在能做什么: 用户视角 CLI + 开发者视角 API + 性能数据
+    开发约束: client-go / commits/ / 设计先行 / 函数变量 mock
+    文档地图
+
+  SNAPSHOT.md:
+    523 commits, HEAD c4f176c
+    v3.2 核心 commit 链 6 个
+    代码结构 / 测试状态 / 性能数据 vs client-go
+
+  FORGET.md:
+    清除已实现 §51-59 (Delta/Sharded/Generation 等已完成项)
+    补 §60-66:
+      Watch 接线 (Phase 2/4)
+      mergeThreshold 生产调优
+      ListAll merge slice pool
+      client-go 并发写对比基准
+      EKS p99 pilot
+      buf_pool slab allocator
+      Labels 压缩
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+新增永久档案
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  snapshots/SNAPSHOT-kubepivot-2026-05-07-v3.2.md
+    v3.2 全景: 三件大事 (KVCache/迁移/CBA) + 两轮审查 + 测试状态
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+v3.2 文档闭环：归档旧→重写新→补遗忘。
+523 commits, KVCache 1.13x, Put 1160x, Memory 3.7x。
