@@ -1,22 +1,59 @@
-# KubePivot (kp) 🚀
+# KubePivot (kp) — 乾枢
 
-> GitOps 视角下的 K8s 部署调度系统。声明式 + 状态机 + 自愈 + GPU 调度。
-> 单二进制 30MB，6 直接依赖。部署迁移蓝绿资源优化，一个命令。
+> AI 时代的云抽象。确定性的 K8s 操作引擎，AI 的可编程接口。
 
 [![Go Version](https://img.shields.io/badge/go-1.25+-blue.svg)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v3.0.0-blue.svg)](https://github.com/Ixecd/KubePivot/releases)
-[![Tests](https://img.shields.io/badge/tests-780-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-959-brightgreen.svg)]()
 
 ---
 
-## 为什么是 KubePivot？
+## 哲学
 
-K8s 生态不缺工具——缺的是把**部署 → 迁移 → 蓝绿 → 资源优化 → 调度 → 自愈**串成一条线的工具。
+KubePivot 回答一个问题：**如何让 AI 可靠地操作云？**
 
-`kp init` 一条命令，12 种语言的项目骨架生成完毕。`kp deploy` 一条命令：供应链验证 → AI 规划 → Sizing 优化 → 拓扑排序 → 蓝绿切换 → 状态追踪，全自动。
+今天的主流答案是 AIOps——让 AI 直接调 K8s API，边猜边学。结果是不确定的：同样的 prompt，两次执行结果不同。
 
-**不在集群内装任何东西**。KubePivot 通过 kubectl 调用 K8s API，不依赖 client-go，不当 sidecar，不当 operator。
+KubePivot 的答案不同：**把云抽象成一个命令行**。`kp` 是一个确定性系统——状态机、调度器、迁移引擎、Controller 分片自愈——每个操作都有确定的结果。AI 只需要像人一样敲 `kp deploy`、`kp scheduler reschedule`、`kp bench`——KubePivot 保证执行。
+
+```
+AI 决定           ← 不确定（概率空间）→  LLM / Agent
+KubePivot 执行    ← 确定（状态机）    →  kp CLI
+K8s 生效          ← 物理（API Server）→  kubectl
+```
+
+CI 归 Git，CD 归 KubePivot。AI 通过操作 `kp` 来控制服务——这是真正的 AIOps。
+
+---
+
+## 全链路
+
+```
+kp init → configs/ + Makefile + Dockerfile + Helm chart + deployments/
+kp deploy → supply-chain → AI plan → sizing → topology sort → sandbox → state machine → K8s
+```
+
+一条命令。项目骨架、多服务编排、蓝绿切换、状态追踪、自愈——全在 `kp deploy` 里。
+
+---
+
+## 确定性引擎
+
+### 状态机
+
+项目从 `Idle → Initializing → Deploying → Validating → Running` 五阶段。蓝绿走 `LOCKED → SNAPSHOTTING → SIMULATING → COMMITTING → RUNNING`。每一步都有确定的下一状态。
+
+### Controller（分片 + 自愈）
+
+多副本 Controller，每 Pod 持有部分 namespace shard。故障 Pod 的 shard ~10s 被其他 Pod 抢占。孤儿 namespace 周期清理。
+
+### KVCache（自研 Informer）
+
+0 client-go。Delta buffer（Put O(1)）、ShardedPodCache（16 路并发写）、merge-on-read（非阻塞读）。内存 3.7x 省于 client-go，放大率 1.13x。
+
+### 调度器
+
+池化视角（PoolInfo + FragmentRate），迁移引擎（Dual-Path stateful/stateless），HashRing 一致性哈希，O(1) 原子计数器（100k Pods 碎片率 75ms, 23.9x）。
 
 ---
 
@@ -24,134 +61,101 @@ K8s 生态不缺工具——缺的是把**部署 → 迁移 → 蓝绿 → 资�
 
 ```bash
 go install github.com/Ixecd/kubepivot/cmd/kp@latest
-
-kp init --name myapp --module github.com/me/myapp
-cd myapp
-kp deploy
+kp init --name myapp && cd myapp && kp deploy
 ```
 
 ---
 
-## 核心能力
-
-### 34 命令 CLI
+## CLI
 
 ```
 kp init         项目脚手架（12 语言）
-kp deploy       全链路部署（AI 规划 → Sizing → 蓝绿 → 状态机）
-kp sandbox      安全部署（五阶段：LOCKED→SNAPSHOTTING→SIMULATING→COMMITTING→RUNNING）
+kp deploy       全链路部署
+kp sandbox      安全部署（五阶段状态机）
+kp scheduler    调度器（status / reschedule）
+kp bench        性能基准（kvcache / pool / memory / storm / all）
 kp status       部署状态
 kp rollback     回滚
 kp promote      蓝绿切换
-kp migrate      DB 迁移管理
-kp secret       Secret 轮转/密封/同步
-kp sizing       资源优化建议（2D/3D DP）
-kp controller   全局控制器管理（分片 + 自愈）
-kp supply-chain 镜像签名验证 + SBOM 生成
-kp team         RBAC 多团队管理
-kp login        SSO 登录（Google/GitHub/Dex）
-kp chaos        混沌工程实验
-... (共 34 个)
+kp migrate      DB 迁移
+kp secret       Secret 轮转/密封
+kp sizing       资源优化
+kp controller   全局控制器
+kp chaos        混沌工程
+kp supply-chain 供应链安全
+kp team         RBAC 多团队
+kp login        SSO（Google/GitHub/Dex）
+...
 ```
 
-### 自研 Event Stream（Informer + Cache）
+## AI 可编程
 
-不依赖 client-go，0 外部依赖。5 项 benchmark vs client-go cache.Indexer：
+所有命令都有确定的行为——AI 不需要理解 K8s，只需要理解 `kp`。
 
-- Cache Get: 14.5ns vs 45ns（**3.1x**）
-- Cache List(ns): 147ns vs 6800ns（**46x**）
-- 内存放大率: 1.65x vs 4.69x（**2.84x**）
-- Watch 10k: 382ms vs 632ms（**1.65x**, 5.4x allocs 降低）
+```bash
+# AI 调度一个服务
+kp deploy --env prod --sizing-mode auto
 
-### 乾枢调度系统（v3.0）
+# AI 查询集群健康
+kp scheduler status
 
+# AI 触发重调度
+kp scheduler reschedule
+
+# AI 跑基准
+kp bench all
+
+# AI 回滚
+kp rollback --env prod
 ```
-维度 A: BinPack（FFD + 背包 DP）→ 节点装箱
-维度 B: Sizing（2D DP）→ Pod 资源优化
-Coordinator: 双 DP 协同收敛
-Rescheduler: 周期性运行时重调度（5min/15min）
-Webhook: Mutating Admission → 自动写 nodeSelector
-```
 
-### v3.1 GPU 调度（设计中）
-
-- 3D DP：Pod × (CPU, Memory, GPU)
-- NVLink 拓扑感知（同 NVSwitch domain 3x 权重）
-- DCGM 指标采集 + Staleness 保守回退
-- GPU Pod 粘滞策略 + 硬件故障强制驱逐
-
-### v3.2 时空闭环（设计中）
-
-- 空间：GPU 共享（MPS/MIG/TimeSlicing）
-- 时间：碳感知调度（Cost × CarbonIntensity(t)）
-- 测试：KinK 大规模压测（10000+ fake GPU 节点）
-
-### IAM（Identity + Access + Management）
-
-- Auth：OAuth2 + PKCE，Google/GitHub/Dex 三 Provider
-- RBAC：teams.yaml + 17 Permissions + 黑名单绝对优先
-- Audit：三档降级 Actor 解析 + Deny 日志 + `kp audit`
-
-### 12 语言脚手架
-
-`kp init --lang <go|python|java|rust|cpp|cs|zig|kotlin|ts|php|swift|lua>`
-
-| 语言 | Web 框架 | Docker 镜像 |
-|---|---|---|
-| Go | stdlib + net/http | scratch（静态编译） |
-| Python | FastAPI | python:3.12-slim |
-| Java | Spring Boot | eclipse-temurin:21-jre |
-| Rust | Axum | scratch（静态编译） |
-| C++ | Drogon | ubuntu:24.04 |
-| 其余 7 种 | 各有完整 Dockerfile + 骨架 | — |
-
-`--no-app` 零侵入模式：已有项目原地 K8s 化。
+KubePivot 是 AI 和 K8s 之间的确定性翻译层。AI 不需要学 kubectl、不需要理解 YAML、不需要担心 side effect——KubePivot 保证执行结果的可预测性。
 
 ---
+
+## 与 client-go 对比
+
+自研 Informer KVCache vs client-go v0.34 Indexer（5000 Pod, M4）：
+
+| 指标 | KP | client-go | 优势 |
+|------|-----|----------|------|
+| Get | 25 ns, 0 allocs | 39 ns, 1 alloc | 1.6x |
+| Put 单条 | 333 ns | 2.4 μs | 7.2x |
+| PutBulk 5k | 546 μs | 1050 μs | 1.9x |
+| 并发 64g Put | 160 ns | — | 16-way shard |
+| 内存 5k | 2.1 KB/pod | 7.8 KB/pod | 3.7x |
+| 放大率 | 1.13x | 4.69x | 4.1x |
 
 ## 设计原则
 
-**只保护，不越权**：kp 只对自己声明所有权的字段执行 force-sync，不干预 Istio/HPA/云厂商注入的字段。
+**只保护，不越权**：只对自己声明所有权的字段 force-sync，不干预 Istio/HPA/云厂商注入。
 
-**0 外部依赖**：仅 6 个直接依赖。不引入 client-go、cobra、viper、gin。CLI 路由用标准库 switch + flag。
+**0 外部依赖**：仅 6 个直接依赖。不引入 client-go、cobra、viper、gin。自研 Informer 替代 client-go。
 
-**降级不阻断**：Trivy/OPA/Prometheus/CSI 任意缺失，核心流程继续运行。
+**降级不阻断**：Trivy/OPA/Prometheus/CSI 缺失，核心流程继续。
 
+**CAP AP 优先**：最终一致 + 高可用 + 分区容错。Delta buffer + atomic.Value snapshot。
 
----
-
-## 统计数据
+## 统计
 
 | 指标 | 数值 |
-|---|---|
-| Go 代码行 | 41,181 |
-| 测试函数 | 780 |
-| 测试代码行 | 17,079 |
+|------|------|
+| 单测 | 959 |
+| Benchmark | 39 (KVCache 30 + Scheduler 9) |
 | 直接依赖 | 6 |
-| 二进制大小 | ~30MB |
-| CLI 命令 | 34 |
-| 内部包 | 22 |
+| CLI 命令 | 40+ |
 
----
-
-## 设计文档
-
-`docs/design/` 下 10 份完整设计草案：
+## 文档
 
 | 文档 | 内容 |
-|---|---|
-| `iam-draft.md` | Auth + RBAC + Audit 三包联动 |
-| `init-multi-lang-draft.md` | 12 语言脚手架（壳+核架构） |
-| `controller-update-sizing-draft.md` | Controller 分片/副本自适应推导 |
-| `etcd-learner-bootstrap-draft.md` | Learner 自举集群 + etcd IAM |
-| `gpu-scheduling-draft.md` | v3.1 GPU 整卡调度 + 三维 DP |
-| `gpu-sharing-carbon-kink.md` | v3.1 碳感知 + v3.2 GPU 共享 + KinK |
-| `ai-plan-2.0-draft.md` | LLM 框架 + Sizing 填充 + GPU 感知 |
-| `eventstream-draft.md` | 自研 Informer + Cache 设计 |
-| `traffic-layer.md` | 声明式蓝绿 + 流量层抽象 |
-| `sharding.md` / `architecture.md` | 分片机制 + 整体架构 |
-
----
+|------|------|
+| [kvcache-perf-analysis.md](docs/design/kvcache-perf-analysis.md) | KVCache 性能分析（十一节） |
+| [informer-kv-cache-impl-notes.md](docs/design/informer-kv-cache-impl-notes.md) | KVCache 实施日志（v5） |
+| [bench-kp-vs-client-go.md](docs/design/bench-kp-vs-client-go.md) | client-go A/B 基准报告 |
+| [pooling-migration.md](docs/design/pooling-migration.md) | 池化调度 + 迁移引擎设计 |
+| [eventstream-draft.md](docs/design/eventstream-draft.md) | 自研 Informer 设计 |
+| [gpu-scheduling-draft.md](docs/design/gpu-scheduling-draft.md) | GPU 调度设计 |
+| [iam-draft.md](docs/design/iam-draft.md) | IAM 系统设计 |
 
 ## License
 
