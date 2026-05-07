@@ -161,6 +161,7 @@ func TestNodeCache_Delete(t *testing.T) {
 func TestPodCache_Heartbeat_NotZero(t *testing.T) {
 	c := NewPodCache()
 	c.PutBulk([]*PodEntry{{Namespace: "ns", Name: "p", NodeName: "n1"}})
+	time.Sleep(time.Microsecond) // ensure time.Since captures the stored heartbeat
 	if c.StaleDuration() == 0 {
 		t.Error("after PutBulk, stale duration should be > 0")
 	}

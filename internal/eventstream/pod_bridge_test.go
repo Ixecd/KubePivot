@@ -1,6 +1,7 @@
 package eventstream
 
 import (
+	"context"
 	"testing"
 )
 
@@ -77,6 +78,116 @@ func TestParseQuantityToMilli(t *testing.T) {
 		if got := parseQuantityToMilli(tt.in); got != tt.out {
 			t.Errorf("parseQuantityToMilli(%q) = %d, want %d", tt.in, got, tt.out)
 		}
+	}
+}
+
+func TestResourceToPodEntry_NoContainers(t *testing.T) {
+	podJSON := []byte(`{"spec":{},"status":{}}`)
+	r := &Resource{Kind: "Pod", RawJSON: podJSON}
+	entry, err := ResourceToPodEntry(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.Requests.CPU != 0 || entry.Requests.Memory != 0 {
+		t.Error("empty containers should give zero requests")
+	}
+}
+
+func TestResourceToPodEntry_EmptyJSON(t *testing.T) {
+	_, err := ResourceToPodEntry(&Resource{Kind: "Pod", RawJSON: []byte(`{}`)})
+	if err != nil {
+		t.Fatal("empty JSON should not error (zero values)")
+	}
+}
+
+// ─── PodCacheBridge ─────────────────────────────────────────────
+
+type fakeInformer struct {
+	handler EventHandler
+	resources []*Resource
+}
+
+func (f *fakeInformer) Start(ctx context.Context) <-chan error { return nil }
+func (f *fakeInformer) Stop() {}
+func (f *fakeInformer) Get(ns, name string) (*Resource, bool) { return nil, false }
+func (f *fakeInformer) List(ns string) []*Resource { return nil }
+func (f *fakeInformer) ListAll() []*Resource { return f.resources }
+func (f *fakeInformer) Subscribe(h EventHandler) Subscription {
+	f.handler = h
+	return &fakeSubscription{}
+}
+func (f *fakeInformer) Stats() InformerStats { return InformerStats{} }
+
+type fakeSubscription struct{}
+func (s *fakeSubscription) Unsubscribe() {}
+func (s *fakeSubscription) Stats() SubscriberStats { return SubscriberStats{} }
+
+func TestPodCacheBridge_EventAdd(t *testing.T) {
+	inf := &fakeInformer{}
+	cache := NewPodCache()
+	_ = NewPodCacheBridge(inf, cache)
+
+	podJSON := []byte(`{"spec":{"nodeName":"n1","containers":[{"name":"app","resources":{"requests":{"cpu":"100m","memory":"128Mi"}}}]},"status":{"phase":"Running"}}`)
+	inf.handler(Event{
+		Type: EventAdd,
+		New: &Resource{Kind: "Pod", Namespace: "ns", Name: "p1", ResourceVersion: "1", Labels: map[string]string{"app": "test"}, RawJSON: podJSON, Phase: "Running"},
+	})
+
+	p, _ := cache.Get("ns", "p1")
+	if p == nil {
+		t.Fatal("EventAdd should populate PodCache")
+	}
+	if p.NodeName != "n1" {
+		t.Errorf("NodeName = %s, want n1", p.NodeName)
+	}
+}
+
+func TestPodCacheBridge_EventDelete(t *testing.T) {
+	inf := &fakeInformer{}
+	cache := NewPodCache()
+	cache.PutBulk([]*PodEntry{{Namespace: "ns", Name: "p1", NodeName: "n1", Phase: "Running", RV: 1}})
+	_ = NewPodCacheBridge(inf, cache)
+
+	inf.handler(Event{
+		Type: EventDelete,
+		Old: &Resource{Kind: "Pod", Namespace: "ns", Name: "p1"},
+	})
+
+	p, _ := cache.Get("ns", "p1")
+	if p != nil {
+		t.Error("EventDelete should remove from PodCache")
+	}
+}
+
+func TestPodCacheBridge_IgnoresNonPod(t *testing.T) {
+	inf := &fakeInformer{}
+	cache := NewPodCache()
+	_ = NewPodCacheBridge(inf, cache)
+
+	inf.handler(Event{
+		Type: EventAdd,
+		New: &Resource{Kind: "Deployment", Namespace: "ns", Name: "d1", ResourceVersion: "1", Labels: map[string]string{"app": "test"}},
+	})
+
+	p, _ := cache.Get("ns", "d1")
+	if p != nil {
+		t.Error("non-Pod event should be ignored")
+	}
+}
+
+func TestPodCacheBridge_EventResync(t *testing.T) {
+	inf := &fakeInformer{
+		resources: []*Resource{
+			{Kind: "Pod", Namespace: "ns", Name: "p1", ResourceVersion: "1", Labels: map[string]string{"app": "test"}, Phase: "Running", RawJSON: []byte(`{"spec":{"nodeName":"n1","containers":[{"name":"app","resources":{"requests":{"cpu":"100m","memory":"128Mi"}}}]},"status":{"phase":"Running"}}`)},
+		},
+	}
+	cache := NewPodCache()
+	_ = NewPodCacheBridge(inf, cache)
+	// EventResync triggers PutBulk from informer.ListAll
+	inf.handler(Event{Type: EventResync})
+
+	if cache.ListAll() == nil {
+		t.Fatal("EventResync should populate cache")
 	}
 }
 

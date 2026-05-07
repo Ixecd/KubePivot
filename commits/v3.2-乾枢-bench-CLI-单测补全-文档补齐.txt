@@ -1,0 +1,85 @@
+feat(cmd-test-docs): kp bench CLI + 单测补全26个 + 文档补齐11个命令
+
+kp bench 全量基准 CLI 上线，26 个新单测（executor/pod_bridge/cache_layer/buf_pool），
+11 个命令文档补全，KVCache bench 30 项覆盖重写。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+kp bench CLI (cmd/kp/bench.go)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  kp bench kvcache     13 组 (Get/ListAll/Put/ColdStart/Memory/Subscribe)
+  kp bench pool         5 组 (FragmentRate/O1/Sampled/PoolIndex/Error)
+  kp bench memory       6 组 (Alloc/Labels/MemoryAmp/Breakdown)
+  kp bench concurrent   1 组 (ShardedPodCache 64g Put)
+  kp bench storm        2 组 (DeltaStorm ListAll + ListByNode)
+  kp bench all          全量（五组一口气）
+  kp bench scale        规模化 (FragmentRate 1k/10k/100k + O1)
+  kp bench gen          生成测试数据 (70/20/10% web/batch/GPU)
+  kp bench chaos        混沌测试 (kind + jitter + gone)
+  kp bench sim          生产模拟器
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+单测补全 (+26, 总计 959)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  executor (NEW, 12):
+    单例/路径/semaphore/kubeconfig注入/并发/Generic fallback/Sh/CmdKubectl
+
+  pod_bridge (+6):
+    EventAdd/Delete/IgnoresNonPod/EventResync + 2 个 ResourceToPodEntry 边界
+
+  cache_layer (NEW, 3):
+    AccessTracker Record/DemoteCold + PodEntryCompact RoundTrip
+
+  buf_pool (NEW, 5):
+    Alloc/FreeReuse/LargeAlloc/Exhaust/Stats
+
+  kv_cache_test (fix 1):
+    TestPodCache_Heartbeat_NotZero flake 修复 (time.Sleep 等待)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+KVCache bench 重写
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  kv_cache_bench_test.go: 30 项 benchmark (老 14 + 新 7 + 并发/Storm/MemoryAmp)
+  数据生成器内联（不依赖 testdata 包），Labels 压缩兼容
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+文档补齐 (11 个命令)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  docs/cmd/bench/bench.md          全量子命令文档 (8 组 + 表)
+  docs/cmd/explain/explain.md      调度决策溯源
+  docs/cmd/scheduler/scheduler.md  集群利用+重调度+基准
+  docs/cmd/preview/preview.md      Header 流量预览
+  docs/cmd/bluegreen/bluegreen.md  命令式蓝绿
+  docs/cmd/hpa/hpa.md              HPA 管理
+  docs/cmd/ssa/ssa.md              Server-Side Apply
+  docs/cmd/drift/drift.md          漂移检测
+  docs/cmd/progress/progress.md    部署进度
+  docs/cmd/multi-deploy/multi-deploy.md  多项目部署
+  docs/cmd/preflight/preflight.md  飞行检查
+  docs/cmd/env/env.md              多环境管理
+  benchmark/README.md              全量重写 (CLI + Makefile + Prune Gate)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  cmd/kp/bench.go (NEW)                       bench CLI
+  cmd/kp/main.go                              注册 bench 命令
+  docs/cmd/ (12 NEW dirs)                      补齐 11 命令 + bench
+  internal/executor/executor_test.go (NEW)     12 测试
+  internal/eventstream/pod_bridge_test.go      +6 测试
+  internal/eventstream/cache_layer_test.go(NEW) 3 测试
+  internal/eventstream/buf_pool_test.go (NEW)  5 测试
+  internal/eventstream/kv_cache_bench_test.go  30 项重写
+  internal/eventstream/kv_cache_test.go        Heartbeat flake 修复
+  benchmark/README.md                          全量重写
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+kp bench 全量基准 CLI，单测从 933 到 959，11 命令文档补齐，
+KVCache 30 项 bench 覆盖。20 包全绿，make dev 一链通。
