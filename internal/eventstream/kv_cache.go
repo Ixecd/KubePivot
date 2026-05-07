@@ -187,22 +187,28 @@ func (c *PodCache) Get(ns, name string) (*PodEntry, bool) {
 }
 
 // mergeThreshold triggers async flush when delta exceeds this size.
+// Tuning: if pprof shows merge-on-read >5% CPU cycles in delta storm, lower to 100.
 const mergeThreshold = 200
 
+// seenPool reuses temporary maps for ListAll merge-on-read.
+var seenPool = sync.Pool{New: func() any { return make(map[string]bool, mergeThreshold) }}
+
 // ListAll 返回所有 Pod。delta 为空 → 零分配预缓存 slice。
-// delta 非空 → merge-on-read（非阻塞，不触发 CoW），超过阈值时异步刷。
+// delta 非空 → merge-on-read（非阻塞），超过阈值时异步 flush。
+// 返回的 slice（merge 路径）由调用方负责回收：eventstream.ReleaseMergeList(list)。
 func (c *PodCache) ListAll() []*PodEntry {
 	snap := c.snapshot.Load().(*podSnapshot)
 	c.deltaMu.RLock()
 	nd := len(c.delta)
 	if nd == 0 {
 		c.deltaMu.RUnlock()
-		return snap.list // fast path: 0 alloc
+		return snap.list // fast path: pre-built, 0 alloc
 	}
-	// Merge-on-read: build merged list without CoW
-	// Start from snapshot.list, override/add from delta
 	list := make([]*PodEntry, 0, len(snap.list)+nd)
-	seen := make(map[string]bool, nd) // track delta keys for O(1) replace
+	seen := seenPool.Get().(map[string]bool)
+	for k := range seen {
+		delete(seen, k)
+	}
 	for _, p := range snap.list {
 		k := key(p.Namespace, p.Name)
 		if d, ok := c.delta[k]; ok {
@@ -221,7 +227,7 @@ func (c *PodCache) ListAll() []*PodEntry {
 	}
 	c.deltaMu.RUnlock()
 
-	// Async flush if delta is large (non-blocking)
+	seenPool.Put(seen)
 	if nd > mergeThreshold {
 		go c.FlushDelta()
 	}
