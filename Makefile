@@ -111,10 +111,15 @@ image.multiarch:
 push:
 	@$(MAKE) image.push
 
-## push.multiarch: Push docker images for multiple platforms to registry.
+## push.multiarch: Push + merge manifest for multiple platforms.
 .PHONY: push.multiarch
 push.multiarch:
 	@$(MAKE) image.push.multiarch
+
+## push.manifest: Retry push (buildx + multi-arch manifest, no rebuild).
+.PHONY: push.manifest
+push.manifest:
+	@$(MAKE) image.manifest.push
 
 ## deploy: Deploy updated components to deployment env.
 .PHONY: deploy

@@ -168,3 +168,77 @@ func parseQuantityToBytes(s string) int64 {
 	v, _ := strconv.ParseFloat(s, 64)
 	return int64(v * float64(multiplier))
 }
+
+// ─── NodeCacheBridge ──────────────────────────────────────────────
+
+// NodeCacheBridge subscribes to an Informer for Node resources and populates a NodeCache.
+type NodeCacheBridge struct {
+	cache    *NodeCache
+	informer Informer
+	sub      Subscription
+}
+
+// NewNodeCacheBridge creates a bridge and subscribes to the Node Informer.
+func NewNodeCacheBridge(informer Informer, cache *NodeCache) *NodeCacheBridge {
+	b := &NodeCacheBridge{cache: cache, informer: informer}
+	b.sub = informer.Subscribe(func(event Event) {
+		b.handleEvent(event)
+	})
+	slog.Info("NodeCacheBridge: subscribed to Node informer")
+	return b
+}
+
+func (b *NodeCacheBridge) handleEvent(event Event) {
+	switch event.Type {
+	case EventAdd, EventUpdate:
+		if event.New == nil || event.New.Kind != "Node" {
+			return
+		}
+		entry, err := ResourceToNodeEntry(event.New)
+		if err != nil {
+			return
+		}
+		b.cache.Put(entry)
+	case EventDelete:
+		if event.Old == nil {
+			return
+		}
+		b.cache.Delete(event.Old.Name)
+	case EventResync:
+		for _, r := range b.informer.ListAll() {
+			if r.Kind != "Node" {
+				continue
+			}
+			entry, err := ResourceToNodeEntry(r)
+			if err != nil {
+				continue
+			}
+			b.cache.Put(entry)
+		}
+	}
+}
+
+// nodeJSON is a minimal subset of v1.Node for NodeEntry conversion.
+type nodeJSON struct {
+	Status struct {
+		Allocatable struct {
+			CPU    string `json:"cpu"`
+			Memory string `json:"memory"`
+		} `json:"allocatable"`
+	} `json:"status"`
+}
+
+// ResourceToNodeEntry converts an Informer Resource (Kind=Node) to a NodeEntry.
+func ResourceToNodeEntry(r *Resource) (*NodeEntry, error) {
+	var n nodeJSON
+	if err := json.Unmarshal(r.RawJSON, &n); err != nil {
+		return nil, err
+	}
+	rv, _ := strconv.ParseInt(r.ResourceVersion, 10, 64)
+	return &NodeEntry{
+		Name:              r.Name,
+		AllocatableCPU:    parseQuantityToMilli(n.Status.Allocatable.CPU),
+		AllocatableMemory: parseQuantityToBytes(n.Status.Allocatable.Memory),
+		RV:                rv,
+	}, nil
+}

@@ -13,8 +13,8 @@ DOCKER_SUPPORTED_API_VERSION ?= 1.51
 REGISTRY_PREFIX ?= $(PROJECT_NAME)
 BASE_IMAGE = alpine:3.18
 
-# 按需传入，例如：make image EXTRA_ARGS="--no-cache" 强制重新构建避免缓存污染
-EXTRA_ARGS ?=
+# --no-cache 默认启用，防止 Docker layer 缓存导致旧二进制/过期 CA 证书残留
+EXTRA_ARGS ?= --no-cache
 _DOCKER_BUILD_EXTRA_ARGS :=
 
 ifdef HTTP_PROXY
@@ -56,7 +56,15 @@ image.daemon.verify:
 image.build: image.verify go.build.verify $(addprefix image.build., $(addprefix $(IMAGE_PLAT)., $(IMAGES)))
 
 .PHONY: image.build.multiarch
-image.build.multiarch: image.verify go.build.verify $(foreach p, $(PLATFORMS),$(addprefix image.build., $(addprefix $(p)., $(IMAGES))))
+image.build.multiarch: image.verify
+	@$(foreach img,$(IMAGES), \
+		echo "===========> buildx $(img) $(VERSION) for $(PLATFORMS)"; \
+		$(DOCKER) buildx build \
+			--platform $(shell echo $(PLATFORMS) | tr ' ' ',') \
+			-f $(ROOT_DIR)/build/docker/$(img)/Dockerfile \
+			-t $(REGISTRY_PREFIX)/$(img):$(VERSION) \
+			$(_DOCKER_BUILD_EXTRA_ARGS) $(ROOT_DIR); \
+	)
 
 .PHONY: image.build.%
 image.build.%: go.build.%
@@ -66,9 +74,7 @@ image.build.%: go.build.%
 	@mkdir -p $(TMP_DIR)/$(IMAGE)
 	@cat $(ROOT_DIR)/build/docker/$(IMAGE)/Dockerfile\
 		| sed "s#BASE_IMAGE#$(BASE_IMAGE)#g" >$(TMP_DIR)/$(IMAGE)/Dockerfile
-	@cp $(OUTPUT_DIR)/platforms/$(IMAGE_PLAT)/$(IMAGE) $(TMP_DIR)/$(IMAGE)/
-	@DST_DIR=$(TMP_DIR)/$(IMAGE) $(ROOT_DIR)/build/docker/$(IMAGE)/build.sh 2>/dev/null || true
-	$(eval BUILD_SUFFIX := $(_DOCKER_BUILD_EXTRA_ARGS) $(if $(filter true,$(DOCKER_PULL)),--pull) -t $(REGISTRY_PREFIX)/$(IMAGE)-$(ARCH):$(VERSION) $(TMP_DIR)/$(IMAGE))
+	$(eval BUILD_SUFFIX := $(_DOCKER_BUILD_EXTRA_ARGS) $(if $(filter true,$(DOCKER_PULL)),--pull) -t $(REGISTRY_PREFIX)/$(IMAGE)-$(ARCH):$(VERSION) -f $(TMP_DIR)/$(IMAGE)/Dockerfile $(ROOT_DIR))
 	@if [ $(shell $(GO) env GOARCH) != $(ARCH) ] ; then \
 		$(MAKE) image.daemon.verify ;\
 		$(DOCKER) build --platform $(IMAGE_PLAT) $(BUILD_SUFFIX) ; \
@@ -78,19 +84,23 @@ image.build.%: go.build.%
 	@rm -rf $(TMP_DIR)/$(IMAGE)
 
 .PHONY: image.manifest.push
+.PHONY: image.manifest.push
 image.manifest.push:
-	@$(foreach img,$(IMAGES), \
-		if [ "$(words $(PLATFORMS))" -gt "1" ]; then \
-			docker buildx imagetools create -t $(REGISTRY_PREFIX)/$(img):$(VERSION) \
-			$(foreach plat,$(PLATFORMS),$(REGISTRY_PREFIX)/$(img)-$(subst /,-,$(subst _,/,$(plat))):$(VERSION)); \
-		fi; \
-	)
+	@echo "image.manifest.push: use 'make push.multiarch' (buildx --push handles manifest automatically)"
 
 .PHONY: image.push
 image.push: image.verify go.build.verify $(addprefix image.push., $(addprefix $(IMAGE_PLAT)., $(IMAGES)))
 
 .PHONY: image.push.multiarch
-image.push.multiarch: image.verify go.build.verify $(foreach p, $(PLATFORMS),$(addprefix image.push., $(addprefix $(p)., $(IMAGES)))) image.manifest.push
+image.push.multiarch: image.verify
+	@$(foreach img,$(IMAGES), \
+		echo "===========> buildx + push $(img) $(VERSION) for $(PLATFORMS)"; \
+		$(DOCKER) buildx build \
+			--platform $(shell echo $(PLATFORMS) | tr ' ' ',') \
+			-f $(ROOT_DIR)/build/docker/$(img)/Dockerfile \
+			-t $(REGISTRY_PREFIX)/$(img):$(VERSION) \
+			--push $(_DOCKER_BUILD_EXTRA_ARGS) $(ROOT_DIR); \
+	)
 
 .PHONY: image.push.%
 image.push.%: image.build.%

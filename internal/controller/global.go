@@ -197,6 +197,11 @@ func StartGlobal(ctx context.Context) {
 	if podInformer := informerPool.Get("pods"); podInformer != nil {
 		eventstream.NewPodCacheBridge(podInformer, podCache)
 	}
+	// Node Informer → NodeCacheBridge → NodeCache 自动填充
+	informerPool.Start(ctx, "nodes", "v1")
+	if nodeInformer := informerPool.Get("nodes"); nodeInformer != nil {
+		eventstream.NewNodeCacheBridge(nodeInformer, nodeCache)
+	}
 
 	// InformerAdapter：优先读 PodCache/NodeCache，cache 未就绪降级到 kubectlAdapter
 	adapter := scheduler.NewInformerAdapter(podCache, nodeCache, kubeAdapter)

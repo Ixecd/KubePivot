@@ -1,0 +1,69 @@
+fix(controller-build): Node Informer 接线 + buildx 构建重构 + controller 配置回写
+
+Node Informer → NodeCacheBridge → NodeCache 自动填充，修复 Rescheduler
+"informer cache not ready" 每5min报错。镜像构建从5步流程简化为 buildx --push
+一条命令。kp controller update --apply 自动回写 configs/system.yaml。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Node Informer 接线
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  pod_bridge.go:
+    ResourceToNodeEntry — 从 Node RawJSON 解析 allocatable CPU/Memory
+    NodeCacheBridge — 订阅 Node Informer Watch → NodeCache.Put/Delete
+
+  global.go:
+    informerPool.Start("nodes", "v1") + NodeCacheBridge 接线
+    NodeCache 自动填充，Rescheduler no longer 降级到 kubectl
+
+  Controller Informer 全景:
+    deployments ✅  pods ✅  nodes ✅ (新)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+镜像构建 buildx 重构
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  旧: go.build → docker build (per arch) → docker push (per arch)
+       → docker manifest create → annotate → push (5步, 常断)
+  新: docker buildx build --platform linux/amd64,linux/arm64 --push
+       (1步, 自动manifest)
+
+  image.mk:
+    image.build.multiarch: buildx build (不走 go.build 预编译)
+    image.push.multiarch: buildx build --push
+    image.manifest.push: 废弃 → 指引用户用 push.multiarch
+    --no-cache 默认启用 (防 Docker layer 缓存污染)
+    构建上下文改为 ROOT_DIR (修复 COPY go.mod 失败)
+
+  golang.mk:
+    controller → kp 映射 (go.build 能编译 controller 镜像)
+
+  Makefile:
+    push.manifest: 独立 manifest 重试 (网络闪断恢复)
+    push.manifest 文档化为 "Retry push"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Controller 配置回写
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  controller.go:
+    kp controller update --apply 后自动回写 configs/system.yaml
+    shards/replicas 值同步到本地文件
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/eventstream/pod_bridge.go        NodeCacheBridge + ResourceToNodeEntry
+  internal/controller/global.go             Node Informer 接线
+  cmd/kp/controller.go                      system.yaml 回写
+  scripts/make-rules/image.mk               buildx 重构 + --no-cache + 上下文修复
+  scripts/make-rules/golang.mk              controller→kp 映射
+  Makefile                                   push.manifest 目标
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Node Informer 接线消除 Rescheduler 报错，buildx 一条命令出双架构镜像，
+controller update 配置回写 git 同步。

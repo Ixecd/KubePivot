@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/Ixecd/kubepivot/internal/audit"
@@ -287,7 +288,34 @@ func runControllerUpdate(args []string) {
 		P.Fail(fmt.Sprintf("应用失败: %v", err))
 		os.Exit(1)
 	}
+
+	// 回写本地 configs/system.yaml（保持 git 仓库与集群同步）
+	if err := writebackSystemYAML(shards, replicas); err != nil {
+		P.Info("⚠️", fmt.Sprintf("回写 configs/system.yaml 失败: %v", err))
+	} else {
+		P.Info("📝", "已更新 configs/system.yaml")
+	}
 	P.Done("Controller 规模调整完成")
+}
+
+// writebackSystemYAML 将 shards/replicas 回写本地 configs/system.yaml
+func writebackSystemYAML(shards, replicas int) error {
+	data, err := os.ReadFile("configs/system.yaml")
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(data), "\n")
+	var result []string
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "shards:") {
+			result = append(result, fmt.Sprintf("  shards: %d", shards))
+		} else if strings.HasPrefix(strings.TrimSpace(line), "replicas:") {
+			result = append(result, fmt.Sprintf("  replicas: %d", replicas))
+		} else {
+			result = append(result, line)
+		}
+	}
+	return os.WriteFile("configs/system.yaml", []byte(strings.Join(result, "\n")), 0644)
 }
 
 func printSizingDiff(info *controller_installer.SizingInfo, shards, replicas int, reason string, warnings []string) {
