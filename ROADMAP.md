@@ -547,24 +547,49 @@ Org 级多租户（v4.0 候选）:
 ```
 
 
+## v3.2 — 实际交付回顾
+
+v3.2 的实际交付与原始计划有显著偏差。原始计划包括 ai-plan 2.0、GPU 共享、MIG Auto-Config 等，
+实际交付聚焦于 KVCache 性能冲刺 + Controller 全接线 + Config 系统化 + 文档补全。
+
+### 实际交付内容（2026-05-08）
+
+- **KVCache 性能冲刺**：Delta buffer / ShardedPodCache 16 路分片 / merge-on-read / RV CAS / 内存放大率 1.13x
+- **迁移引擎 + CBA**：MigrationManager 五阶段状态机 / HashRing / FencingConfig / MigrationTargetHint
+- **池化调度**：PoolUtilTracker O(1) 原子计数器 / PoolUtilCache / PoolImbalancePair
+- **Controller 接线**：Pod Informer + Node Informer → Bridge → KVCache / OOM 自动调优 / CrashLoop 自动 rollback
+- **Config 系统**：system.yaml 6组31字段 / kp controller update --apply / kp sync
+- **构建系统**：buildx --push 一条命令 / Makefile push.multiarch / Dockerfile controller + kp 双镜像
+- **文档**：docs/cmd/ 48 个子命令补齐 / docs/reference/ 三篇参考文档 / FORGET.md 更新
+
+### 未按原计划交付
+
+- **ai-plan 2.0**：Phase 1-5 已实施（`internal/ai/` 10 文件），已知局限为 GPU 关键词粗粒度 / 显存推断静态
+- **GPU 共享（MPS/TimeSlicing）**：MIG 分区量化已实施（`gpu_policy.go`），MPS/TimeSlicing 未做
+- **GPU 3D DP**：保守模式占位，等 DCGM 数据流
+- **碳感知基础设施**：✅ 已交付。`metrics/carbon.go` CarbonIntensityProvider + CarbonSDKClient（15min TTL）+ `kp scheduler status --carbon-region`
+
+---
+
 ## 时间线与依赖（更新）
 
 ```
 v2.6.0 → v2.7.0 → v2.8 → v2.9 → v3.0（全部已完成，2026-04-26 ~ 04-30）
   ↓
-v3.1 GPU 整卡 + 三维 DP + 碳感知基础设施（当前，预计 2026-05/06）
-  ↓ 打完 v3.1 tag 后进入
-v3.2 ai-plan 2.0 → KV Cache → GPU 共享 → 池化 → CBA（预计 2026-06/07）
+v3.1 部分交付（GPU 整卡基础 + sizing GPU profile + 碳感知 flag 预留）
+  ↓
+v3.2 交付（KVCache 性能冲刺 + 迁移引擎 + Controller 接线 + Config 系统，2026-05-08）
+  ↓
+v3.3 Watch 接线 + Fencer + GPU 3D DP + 背压机制（当前）
   ↓
 v4.0 平台化探索（触发条件满足后启动，预计 2027+）
 ```
 
 **关键依赖**：
-- v3.1 依赖真实 GPU 集群或 KinK 模拟环境用于验证；碳排放数据源依赖 CarbonSDK/WattTime
-- v3.2 ai-plan 2.0 独立推进；KV Cache 依赖 Informer Watch 流（v2.7.0 已稳定）；
-  GPU 共享依赖池化提供全局碎片视图；CBA 依赖 MigrationManager 的 Fencing 协议
-  
+- v3.3 Watch 接线依赖 Informer Resource → PodEntry 转换链路（已部分完成）
+- Fencer 依赖 etcd Learner sidecar gRPC 接口
+- GPU 3D DP 依赖 DCGM 数据流就绪
+
 **务实声明**：
-- 所有”预计”时间线均为单人开发的估算，实际交付日期取决于真实 GPU 集群的
-  可及性、个人精力分配
+- v3.1 / v3.2 的实际交付均偏离原始 ROADMAP 计划，反映了”根据真实需求动态调整优先级”的工程哲学
 - v4.0 的启动时机不是时间驱动的，是条件驱动的

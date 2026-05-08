@@ -1,0 +1,12 @@
+docs: 8 ref docs + FORGET 94-to-19 debt sweep + state files refresh
+
+- docs/cmd/: controller/scheduler/sizing reference rewrite
+- docs/reference/: deployment/eventstream/route 3 new reference docs
+- GITOPS-MANIFESTO.md: v2.5 to v3.2 refresh
+- DEEPSEEK.md: new, DeepSeek intuition handoff
+- FORGET.md: full scan 94 items, pruned to 19 P0+P1
+- TODO/SNAPSHOT/HANDOFF/ROADMAP: v3.2 final state
+- archived/: TODO/SNAPSHOT/HANDOFF v3.2 archive
+- snapshots/: 2026-05-08 v3.2 cleanup snapshot
+
+Co-Authored-By: DeepSeek <noreply@anthropic.com>

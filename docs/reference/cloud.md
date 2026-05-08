@@ -1,4 +1,4 @@
-## 上云步骤
+## 上云步骤（传统）
 
 1. 去 阿里云 或者 腾讯云 或者 华为云 启动一个 Kubernetes 集群
 2. 配置 `scripts/install/environment.sh` 脚本文件
