@@ -33,8 +33,6 @@ func TestEvent_Struct(t *testing.T) {
 	r := &Resource{Namespace: "default", Name: "app"}
 	e := Event{
 		Type:      EventUpdate,
-		Namespace: "default",
-		Name:      "app",
 		Old:       r,
 		New:       r,
 	}
@@ -154,7 +152,6 @@ func TestNewInformer_DefaultsApplied(t *testing.T) {
 
 func TestInformerStats_EventsByTypeMap(t *testing.T) {
 	stats := InformerStats{
-		Resource:     "deployments",
 		EventsByType: map[EventType]uint64{},
 	}
 

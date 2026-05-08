@@ -702,6 +702,11 @@ func (im *informerImpl) handleWatchLine(raw []byte) error {
 
 	// 转换事件类型 + 更新 cache
 	switch ev.Type {
+	case "BOOKMARK":
+		// Bookmark 仅携带 resourceVersion，无实际对象。
+		// RV 已在上面 extractJSONString 中提取并更新。
+		// 作用：防止 kube-apiserver 重启后 client RV 低于 sliding window → 触发全量 relist。
+		return nil
 	case "ADDED":
 		im.cache.Put(r)
 		im.dispatchToSubscribers(Event{
@@ -725,7 +730,8 @@ func (im *informerImpl) handleWatchLine(raw []byte) error {
 			Type: EventDelete, Namespace: r.Namespace, Name: r.Name, Old: old,
 		})
 	default:
-		slog.Warn("eventstream: unknown watch event type",
+		// BOOKMARK handled above, ERROR also handled above.
+		slog.Debug("eventstream: skipped non-data watch event",
 			"type", ev.Type, "resource", im.opts.Resource)
 	}
 	return nil

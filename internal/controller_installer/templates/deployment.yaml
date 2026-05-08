@@ -124,6 +124,14 @@ spec:
             - --auto-compaction-retention=1h
             - --max-request-bytes=10485760
             - --quota-backend-bytes=8589934592
+            - --experimental-initial-corrupt-check=true
+            - --experimental-corrupt-check-time=10m
+            - --heartbeat-interval=200
+            - --election-timeout=2000
+            # 以上参数与 configs/system.yaml etcd.* 对齐
+            # corrupt-check: 每10min巡检各节点boltdb hash一致性
+            # heartbeat=200ms (默认100, 大规模集群调高省CPU)
+            # election=2000ms (heartbeat×10, 避免网络抖动误触发选举)
           env:
             - name: POD_NAME
               valueFrom:

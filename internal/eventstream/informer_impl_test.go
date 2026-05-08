@@ -28,7 +28,7 @@ import (
 // 不支持（v2.7 段 B 范围外）：
 //   - 真实的 resourceVersion 校验
 //   - 分页 continue token（list 单页内一次返回全部）
-//   - bookmark 事件
+// v3.2 已支持：bookmark 事件（allowWatchBookmarks=true, BOOKMARK 事件更新 RV 后跳过）
 type fakeK8sServer struct {
 	server *httptest.Server
 
@@ -80,13 +80,13 @@ func (f *fakeK8sServer) Close() {
 
 func (f *fakeK8sServer) handle(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("watch") == "1" {
-		f.handleWatch(w, r)
+		f.handleWatch(w)
 		return
 	}
-	f.handleList(w, r)
+	f.handleList(w)
 }
 
-func (f *fakeK8sServer) handleList(w http.ResponseWriter, r *http.Request) {
+func (f *fakeK8sServer) handleList(w http.ResponseWriter) {
 	f.listCalled.Add(1)
 
 	f.mu.Lock()
@@ -109,7 +109,7 @@ func (f *fakeK8sServer) handleList(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(body)
 }
 
-func (f *fakeK8sServer) handleWatch(w http.ResponseWriter, r *http.Request) {
+func (f *fakeK8sServer) handleWatch(w http.ResponseWriter) {
 	f.watchStarted.Add(1)
 
 	f.mu.Lock()

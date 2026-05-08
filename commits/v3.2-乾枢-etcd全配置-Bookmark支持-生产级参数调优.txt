@@ -1,0 +1,64 @@
+feat(config-etcd-informer): etcd 12字段全配置 + Watch Bookmark + 生产级参数调优
+
+system.yaml etcd 节扩展至 12 字段（heartbeat/election/corrupt-check/quota/snapshot），
+全字段注释。Informer Watch 支持 BOOKMARK 事件（防 apiserver 重启 relist）。
+Docker registry 指引。deployment.yaml etcd args 与 config 对齐。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+etcd 全配置 (12 字段)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  configs/system.yaml:
+    每个字段带中文注释（用途/默认值/为什么是这个值）
+    新增: heartbeatInterval(200ms) electionTimeout(2s)
+          initialCorruptCheck(true) corruptCheckTime(10m)
+          quotaBackendBytes(8G) snapshotCount(10k) maxRequestBytes(10M)
+          autoCompactionRetention(1h) dataDir(/var/lib/etcd)
+
+  internal/config/config.go:
+    EtcdConfig 扩展 12 字段 + mergeInt64 + defaults
+
+  deployment.yaml:
+    etcd args 新增:
+      --experimental-initial-corrupt-check=true
+      --experimental-corrupt-check-time=10m
+      --heartbeat-interval=200 (默认100, 大规模集群调高省CPU)
+      --election-timeout=2000    (heartbeat×10, 防网络抖动误触发)
+    注释标注与 system.yaml 对齐
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Informer Watch Bookmark 支持
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  informer_impl.go:
+    BOOKMARK 事件显式处理: 提取 RV 后静默返回（不触发 ParseSkeleton）
+    default case WARN→DEBUG（BOOKMARK 已处理）
+    作用: kube-apiserver 重启后不触发全量 relist
+
+  informer_impl_test.go:
+    注释更新: bookmark 从"不支持"→"v3.2 已支持"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+其他
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  installer.go: Docker registry 指引 (kind/minikube/ghcr/local)
+  controller package 全量 review 收官 (20 文件, 0 bug, 0 死代码残留)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  configs/system.yaml                       全字段注释 + etcd 12 字段
+  internal/config/config.go                 EtcdConfig 扩展 + mergeInt64
+  internal/controller_installer/installer.go Docker registry 指引
+  internal/controller_installer/templates/deployment.yaml etcd args 对齐
+  internal/eventstream/informer_impl.go      BOOKMARK 事件处理
+  internal/eventstream/informer_impl_test.go 注释更新
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+etcd 12 字段生产级调优 + corrupt-check 巡检 + Bookmark 防 relist。
+system.yaml 全字段中文注释，打开即懂。

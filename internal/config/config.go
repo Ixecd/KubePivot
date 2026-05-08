@@ -61,10 +61,19 @@ type KVCacheConfig struct {
 	StaleWatchdogMaxStale time.Duration `json:"staleWatchdogMaxStale" yaml:"staleWatchdogMaxStale"`
 }
 type EtcdConfig struct {
-	CompactInterval time.Duration `json:"compactInterval" yaml:"compactInterval"`
-	DefragInterval  time.Duration `json:"defragInterval" yaml:"defragInterval"`
-	Endpoints       string        `json:"endpoints" yaml:"endpoints"`
-	DialTimeout     time.Duration `json:"dialTimeout" yaml:"dialTimeout"`
+	CompactInterval         time.Duration `json:"compactInterval" yaml:"compactInterval"`
+	DefragInterval          time.Duration `json:"defragInterval" yaml:"defragInterval"`
+	QuotaBackendBytes       int64         `json:"quotaBackendBytes" yaml:"quotaBackendBytes"`
+	SnapshotCount           int64         `json:"snapshotCount" yaml:"snapshotCount"`
+	MaxRequestBytes         int64         `json:"maxRequestBytes" yaml:"maxRequestBytes"`
+	AutoCompactionRetention time.Duration `json:"autoCompactionRetention" yaml:"autoCompactionRetention"`
+	HeartbeatInterval       time.Duration `json:"heartbeatInterval" yaml:"heartbeatInterval"`
+	ElectionTimeout         time.Duration `json:"electionTimeout" yaml:"electionTimeout"`
+	InitialCorruptCheck     bool          `json:"initialCorruptCheck" yaml:"initialCorruptCheck"`
+	CorruptCheckTime        time.Duration `json:"corruptCheckTime" yaml:"corruptCheckTime"`
+	Endpoints               string        `json:"endpoints" yaml:"endpoints"`
+	DialTimeout             time.Duration `json:"dialTimeout" yaml:"dialTimeout"`
+	DataDir                 string        `json:"dataDir" yaml:"dataDir"`
 }
 
 // defaults returns a SystemConfig with built-in defaults.
@@ -94,7 +103,11 @@ func defaults() SystemConfig {
 		},
 		Etcd: EtcdConfig{
 			CompactInterval: 1 * time.Hour, DefragInterval: 24 * time.Hour,
-			Endpoints: "", DialTimeout: 5 * time.Second,
+			QuotaBackendBytes: 8 * 1024 * 1024 * 1024, SnapshotCount: 10000,
+			MaxRequestBytes: 10 * 1024 * 1024, AutoCompactionRetention: 1 * time.Hour,
+			HeartbeatInterval: 200 * time.Millisecond, ElectionTimeout: 2000 * time.Millisecond,
+			InitialCorruptCheck: true, CorruptCheckTime: 10 * time.Minute,
+			Endpoints: "", DialTimeout: 5 * time.Second, DataDir: "/var/lib/etcd",
 		},
 	}
 }
@@ -141,6 +154,7 @@ func resolveConfigPath() string {
 // mergeDefaults overlays non-zero file values onto defaults.
 func mergeDefaults(def, file SystemConfig) SystemConfig {
 	mergeInt := func(d *int, f int) { if f != 0 { *d = f } }
+	mergeInt64 := func(d *int64, f int64) { if f != 0 { *d = f } }
 	mergeDur := func(d *time.Duration, f time.Duration) { if f != 0 { *d = f } }
 	mergeFloat := func(d *float64, f float64) { if f != 0 { *d = f } }
 	mergeStrSlice := func(d *[]string, f []string) { if len(f) > 0 { *d = f } }
@@ -191,8 +205,21 @@ func mergeDefaults(def, file SystemConfig) SystemConfig {
 	mergeDur(&e.CompactInterval, fe.CompactInterval)
 	mergeDur(&e.DefragInterval, fe.DefragInterval)
 	mergeDur(&e.DialTimeout, fe.DialTimeout)
+	mergeDur(&e.AutoCompactionRetention, fe.AutoCompactionRetention)
+	mergeDur(&e.HeartbeatInterval, fe.HeartbeatInterval)
+	mergeDur(&e.ElectionTimeout, fe.ElectionTimeout)
+	mergeDur(&e.CorruptCheckTime, fe.CorruptCheckTime)
+	mergeInt64(&e.QuotaBackendBytes, fe.QuotaBackendBytes)
+	mergeInt64(&e.SnapshotCount, fe.SnapshotCount)
+	mergeInt64(&e.MaxRequestBytes, fe.MaxRequestBytes)
+	if fe.InitialCorruptCheck {
+		e.InitialCorruptCheck = true
+	}
 	if fe.Endpoints != "" {
 		e.Endpoints = fe.Endpoints
+	}
+	if fe.DataDir != "" {
+		e.DataDir = fe.DataDir
 	}
 
 	return def

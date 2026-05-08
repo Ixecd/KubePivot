@@ -25,10 +25,16 @@ var templates embed.FS
 // Config 安装配置
 type Config struct {
 	Namespace  string // 部署 namespace，默认 kubepivot-system
-	Image      string // 镜像 tag，默认 qingchun22/kubepivot-controller:<kpVersion>
+	Image      string // 镜像，默认 qingchun22/kubepivot-controller:latest
 	Kubeconfig string // 可选 kubeconfig 路径
 	Context    string // 可选 kube context
 }
+// 无 Docker 账户时：
+//   1. 自建镜像: make image.build IMAGES=controller
+//   2. kind:    kind load docker-image qingchun22/kubepivot-controller:latest
+//   3. minikube: minikube image load qingchun22/kubepivot-controller:latest
+//   4. ghcr.io: docker tag <img> ghcr.io/<user>/kubepivot-controller:latest && docker push
+//      kp controller install --image ghcr.io/<user>/kubepivot-controller:latest
 
 // Installer 安装器
 type Installer struct {
