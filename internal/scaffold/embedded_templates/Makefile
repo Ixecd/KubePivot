@@ -32,11 +32,12 @@ include scripts/make-rules/common.mk
 include scripts/make-rules/golang.mk
 include scripts/make-rules/image.mk
 include scripts/make-rules/deploy.mk
+include scripts/make-rules/copyright.mk
+include scripts/make-rules/gen.mk
 include scripts/make-rules/ca.mk
 include scripts/make-rules/release.mk
 include scripts/make-rules/swagger.mk
 include scripts/make-rules/dependencies.mk
-include scripts/make-rules/gen.mk
 include scripts/make-rules/tools.mk
 
 # ================================================================
@@ -235,6 +236,36 @@ frontend.clean:
 		echo "===========> Cleaning frontend"; \
 		rm -rf $(FRONTEND_DIR)/dist $(FRONTEND_DIR)/node_modules; \
 	fi
+
+## bench.kp: Run KP-side KVCache benchmarks.
+.PHONY: bench.kp
+bench.kp:
+	@echo "===========> Running KP KVCache benchmarks"
+	@go test -bench=. -benchmem -count=3 -benchtime=1s -run='^$$' ./internal/eventstream/
+
+## bench.scale: Run scalability benchmarks (1k/10k/100k pods, fragment + sampling).
+.PHONY: bench.scale
+bench.scale:
+	@echo "===========> Scalability benchmark (1k/10k/100k pods)"
+	@go test -bench='BenchmarkFragmentRate' -benchmem -benchtime=5s -run='^$$' ./internal/scheduler/
+	@echo "===========> Sampling accuracy test"
+	@go test -run='TestFragSamplingError' -v ./internal/scheduler/
+
+## bench.regression: Run KP benchmarks and compare against baseline (prune gate).
+.PHONY: bench.regression
+bench.regression: bench.kp
+	@echo "===========> Comparing with baseline"
+	@if [ -f benchmark/results/baseline-kp.txt ]; then \
+		benchstat benchmark/results/baseline-kp.txt benchmark/results/latest-kp.txt || true; \
+	else \
+		echo "No baseline found. Save current results as baseline with: make bench.baseline"; \
+	fi
+
+## bench.baseline: Save current benchmark results as baseline for regression checks.
+.PHONY: bench.baseline
+bench.baseline: bench.kp
+	@echo "===========> Saving benchmark baseline"
+	@cp benchmark/results/latest-kp.txt benchmark/results/baseline-kp.txt
 
 ## help: Show this help info
 .PHONY: help

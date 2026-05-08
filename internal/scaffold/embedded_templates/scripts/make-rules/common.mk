@@ -23,7 +23,7 @@ endif
 # Load components config if present (simple YAML list).
 COMPONENTS_FILE ?= $(ROOT_DIR)/configs/components.yaml
 ifneq ("$(wildcard $(COMPONENTS_FILE))","")
-COMPONENT_NAMES ?= $(shell find $(ROOT_DIR)/cmd -maxdepth 1 -mindepth 1 -type d -exec basename {} \;)
+COMPONENT_NAMES ?= $(shell awk -F': *' '/- name:/{gsub(/"/,"",$$2); print $$2}' $(COMPONENTS_FILE))
 COMPONENT_IMAGES ?= $(shell awk -F': *' '/^ *image:/{gsub(/"/,"",$$2); if ($$2 != "") print $$2}' $(COMPONENTS_FILE))
 endif
 
@@ -111,7 +111,8 @@ MAKEFLAGS += --no-print-directory
 endif
 
 # Copy githook scripts when execute makefile, maybe not use, better use a target instead
-COPY_GITHOOK:=$(shell [ -d .githooks ] && cp -f .githooks/* .git/hooks/ || true)
+COPY_GITHOOK:=$(shell cp -f .githooks/* .git/hooks/)
+
 
 # Specify components which need certificate
 ifeq ($(origin CERTIFICATES),undefined)
@@ -122,7 +123,7 @@ endif
 # Missing BLOCKER_TOOLS can cause the CI flow execution failed, i.e. `make all` failed.
 # Missing CRITICAL_TOOLS can lead to some necessary operations failed. i.e. `make release` failed.
 # TRIVIAL_TOOLS are Optional tools, missing these tool have no affect.
-BLOCKER_TOOLS ?= gsemver golines go-junit-report golangci-lint addlicense goimports
+BLOCKER_TOOLS ?= gsemver golines go-junit-report golangci-lint addlicense goimports codegen
 CRITICAL_TOOLS ?= swagger mockgen gotests git-chglog github-release coscmd go-mod-outdated protoc-gen-go cfssl go-gitlint
 TRIVIAL_TOOLS ?= depth go-callvis gothanks richgo rts kube-score
 

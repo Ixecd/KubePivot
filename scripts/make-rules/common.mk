@@ -111,7 +111,7 @@ MAKEFLAGS += --no-print-directory
 endif
 
 # Copy githook scripts when execute makefile, maybe not use, better use a target instead
-COPY_GITHOOK:=$(shell cp -f githooks/* .git/hooks/)
+COPY_GITHOOK:=$(shell cp -f .githooks/* .git/hooks/)
 
 
 # Specify components which need certificate

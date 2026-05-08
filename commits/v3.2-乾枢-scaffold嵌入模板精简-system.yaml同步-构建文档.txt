@@ -1,0 +1,56 @@
+feat(scaffold): 嵌入模板精简 + system.yaml同步 + build文档 + AI指南更新
+
+kp init 生成的核层骨架精简为 18 个文件，清理所有 KubePivot 内部文件。
+kp sync 纳入 configs/system.yaml。AI 编码指南更新（system.yaml/kp bench/kp controller）。
+build/README.md 新增多服务目录说明。修复部署 copyright.mk 缺失。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+嵌入模板精简
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  之前: 含 boilerplate.txt/boilerplate2.txt/bench/docker/gencerts.sh/gendoc.sh
+        等 KubePivot 内部文件，部署缺少 copyright.mk 导致 make deploy 失败
+  现在: 18 个文件，仅用户项目需要:
+    .githooks/ .gitignore Makefile build/README.md
+    configs/system.yaml scripts/make-rules/*.mk (含 copyright.mk)
+
+  system.yaml: 直接从仓库 configs/system.yaml 拷贝到项目（含全字段注释）
+  writeSystemConfig: 优先读模板根目录（embed/--template），降级读仓库
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+kp sync
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  cmd/kp/sync.go: configs/system.yaml 加入强制覆盖策略（syncForce）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+文档更新
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ai_coding_guide.go:
+    项目树加 configs/system.yaml + build/docker/
+    "不要动"节加 system.yaml
+    部署节加 kp sync / kp bench all
+
+  build/README.md (NEW):
+    多服务目录结构说明 + 使用方式 + 三阶段 Dockerfile 结构
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  cmd/kp/sync.go                              system.yaml 同步规则
+  internal/scaffold/scaffold.go               writeSystemConfig + build copyEntries
+  internal/scaffold/ai_coding_guide.go        更新（system.yaml/kp bench/kp sync）
+  internal/scaffold/embedded_templates/       精简为 18 文件 + copyright.mk
+    build/README.md (NEW)
+    configs/system.yaml (NEW)
+    scripts/make-rules/copyright.mk (NEW)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+嵌入模板 18 文件精简，kp init 产出完整核层。
+kp sync 含 system.yaml，部署不再缺 copyright.mk。
+build 文档 + AI 指南更新。

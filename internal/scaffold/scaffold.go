@@ -51,6 +51,7 @@ var (
 		".gitignore",
 		"scripts",
 		"Makefile",
+		"build",
 	}
 )
 
@@ -138,6 +139,9 @@ func InitProject(opts InitOptions) (err error) {
 		return err
 	}
 	if err := writeResourcesConfig(outputDir, kebabName); err != nil {
+		return err
+	}
+	if err := writeSystemConfig(outputDir, templateRoot); err != nil {
 		return err
 	}
 	if err := writeTestScript(filepath.Join(outputDir, "scripts", "test_api.sh"), kebabName); err != nil {
@@ -711,6 +715,24 @@ func writeResourcesConfig(outputDir, name string) error {
 	path := filepath.Join(outputDir, "configs", "resources.yaml")
 	if err := os.WriteFile(path, []byte(b.String()), 0644); err != nil {
 		return fmt.Errorf("写入 resources.yaml 失败: %w", err)
+	}
+	return nil
+}
+
+// writeSystemConfig 拷贝 configs/system.yaml 到项目
+// 优先从模板根目录读取（embed 和本地 --template 都能用），
+// 找不到则从仓库 configs/system.yaml 降级读取
+func writeSystemConfig(outputDir, templateRoot string) error {
+	data, err := os.ReadFile(filepath.Join(templateRoot, "configs", "system.yaml"))
+	if err != nil {
+		data, err = os.ReadFile(filepath.Join("configs", "system.yaml"))
+		if err != nil {
+			return fmt.Errorf("读取 system.yaml 模板失败: %w", err)
+		}
+	}
+	dst := filepath.Join(outputDir, "configs", "system.yaml")
+	if err := os.WriteFile(dst, data, 0644); err != nil {
+		return fmt.Errorf("写入 system.yaml 失败: %w", err)
 	}
 	return nil
 }

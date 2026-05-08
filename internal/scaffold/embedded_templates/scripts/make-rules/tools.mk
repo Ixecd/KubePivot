@@ -118,7 +118,7 @@ install.rts:
 
 .PHONY: install.codegen
 install.codegen:
-	@$(GO) install github.com/Ixecd/kubepivot/tools/codegen@latest
+	@$(GO) install ${ROOT_DIR}/tools/codegen/codegen.go
 
 .PHONY: install.kube-score
 install.kube-score:

@@ -1,0 +1,97 @@
+# KubePivot 系统配置
+# 加载顺序: 此文件默认值 → 环境变量 KUBEPIVOT_* override → ConfigMap mount /etc/kp/config.yaml
+# 所有字段均有 fallback 默认值，缺失不阻塞启动
+# 修改后: kp controller install 重新部署 → 或 kubectl rollout restart statefulset/kubepivot-controller
+
+controller:
+  # 分片总数（每个 Pod 持有部分 shard）
+  shards: 10
+  # StatefulSet 副本数 = etcd 集群节点数（必须奇数 ≥3）
+  replicas: 3
+  # Worker Pool 并发 reconcile goroutine 数
+  workerPoolSize: 20
+  # 单个 reconcile task 最大执行时间
+  taskTimeout: 90s
+  # 周期性 reconcile 扫描间隔
+  reconcileInterval: 8s
+  # 孤儿项目清理兜底扫描间隔
+  orphanSweeperInterval: 30s
+  # 资源漂移检测扫描间隔
+  driftSyncInterval: 30s
+  # 分片切换时的 grace period（让正在跑的 reconcile 完成）
+  gracePeriod: 5s
+  # 受保护 namespace 黑名单（controller 拒绝 reconcile）
+  protectedNamespaces:
+    - kube-system
+    - kube-public
+    - kubepivot-system
+
+leader:
+  # etcd Leader 选举 Lease TTL
+  etcdTTL: 15s
+  # 抢锁失败后重试间隔
+  retryInterval: 3s
+  # K8s Lease API 选举的 Lease 持续时间
+  leaseDuration: 15s
+  # K8s Lease 续约间隔（= leaseDuration / 3）
+  leaseRenewInterval: 2s
+
+scheduler:
+  # 重调度器扫描集群利用率间隔
+  rescheduleInterval: 5m
+  # 单次重调度最多迁移 Pod 数（0=使用默认值 Pod总数×5%）
+  maxMigrations: 0
+  # CPU 利用率抖动阈值（超过此值触发降级）
+  jitterThreshold: 0.95
+  # 抖动检测窗口
+  jitterWindow: 5m
+  # 窗口内允许的最大 spike 次数（超过则提升降级层级）
+  jitterSpikeCount: 3
+  # Admission Webhook 监听端口
+  webhookPort: 443
+
+migration:
+  # 驱逐阶段超时（超时判定为僵尸迁移）
+  evictTimeout: 10m
+  # 等待新 Pod Ready 超时
+  waitReadyTimeout: 5m
+  # Stateful 迁移暂停后重试等待间隔
+  pausedBackoff: 30s
+  # Stateful 迁移最大重试次数
+  maxRetries: 3
+
+kvcache:
+  # delta map 大小阈值（超过此值触发异步 CoW flush）
+  mergeThreshold: 200
+  # ShardedPodCache 分片数（power-of-2, 16=4 goroutine/shard @64并发）
+  shardCount: 16
+  # Watchdog 最大允许陈旧时间（超时 ready=false 触发 kubectl fallback）
+  staleWatchdogMaxStale: 5m
+
+etcd:
+  # 自动 compact 间隔（清理 MVCC 历史版本，防止 db 无限增长）
+  compactInterval: 1h
+  # 安全 defrag 间隔（Follower 轮询制：Leader 跳过→Follower 执行→转移 Leader→下轮覆盖）
+  defragInterval: 24h
+  # boltdb 配额硬上限（超过只读。KubePivot 场景仅存 DeployRecord ~2KB/project，实际远低于此值）
+  quotaBackendBytes: 8589934592
+  # Raft log 快照压缩阈值（每 N 次写入触发 snapshot + 压缩 Raft log）
+  snapshotCount: 10000
+  # 单次请求最大字节数（防大 key 撑爆 Raft log）
+  maxRequestBytes: 10485760
+  # MVCC 历史版本保留时间（超过此时间的版本被 compact 清理）
+  autoCompactionRetention: 1h
+  # Leader 心跳间隔（默认 100ms，大规模集群调高省 CPU）
+  heartbeatInterval: 200ms
+  # 选举超时（= heartbeat × 10，避免网络抖动误触发选举）
+  electionTimeout: 2000ms
+  # 启动时校验各节点 boltdb hash 一致性（不一致拒绝启动）
+  initialCorruptCheck: true
+  # 运行时损坏检测间隔（Leader 获取各节点 boltdb hash 对比）
+  corruptCheckTime: 10m
+  # etcd 集群端点（K8s 内为空，走 localhost sidecar）
+  endpoints: ""
+  # etcd client 连接超时
+  dialTimeout: 5s
+  # etcd 数据目录
+  dataDir: /var/lib/etcd

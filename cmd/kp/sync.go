@@ -39,6 +39,7 @@ var syncRules = []syncRule{
 
 	// 提示用户：可能有结构变化
 	{"deployments/", syncNotify, "helm charts（请人工确认）"},
+	{"configs/system.yaml", syncForce, "系统配置"},
 	{"configs/components.yaml", syncNotify, "服务配置（请人工确认）"},
 	{"configs/resources.yaml", syncNotify, "资源配置（请人工确认）"},
 
