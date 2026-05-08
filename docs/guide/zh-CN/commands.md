@@ -1,6 +1,6 @@
 # KubePivot 命令参考
 
-> 版本：v2.3.0
+> 版本：v3.2
 > CLI 二进制：`kp`
 > 模块：`github.com/Ixecd/kubepivot`
 
@@ -718,9 +718,9 @@ kp controller [flags]
 
 ---
 
-## kp controller — 全局 Controller 管理（v2.3.0+）
+## kp controller — 全局 Controller 管理（v3.2+）
 
-v2.3.0 引入全局单一 Controller，为所有项目提供集中式自愈。一次性集群级安装，
+v3.2 引入全局单一 Controller，为所有项目提供集中式自愈。一次性集群级安装，
 项目通过 `kubepivot.io/managed=true` label 接入。
 
 详细使用指南：[controller.md](controller.md)
@@ -852,4 +852,10 @@ kp controller uninstall [--force]
 | `kp controller status` | Controller 状态 |
 | `kp controller projects` | 列出管理的项目 |
 | `kp controller uninstall` | 卸载 Controller |
+| `kp scheduler status` | 集群利用率 + 碎片率 |
+| `kp scheduler reschedule` | 手动触发重调度 |
+| `kp bench all` | 全量性能基准 |
+| `kp bench kvcache` | KVCache 基准 |
+| `kp bench scale` | 规模化基准 |
+| `kp sync` | 同步框架文件 |
 | `kp plugin install` | 安装插件 |

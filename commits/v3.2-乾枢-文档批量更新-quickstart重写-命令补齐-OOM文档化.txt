@@ -1,0 +1,51 @@
+docs(guide): v3.2 文档批量更新 — quickstart重写 + 命令补齐 + OOM文档化 + githooks修复
+
+quickstart.md 重写（v3.2 视角 + kp bench/scheduler/sync），commands.md 补齐 bench/scheduler/sync，
+controller.md 新增 OOM/CrashLoop 自动处理章节，版本号 v0.9~v2.3 → v3.2。
+common.mk githooks 路径修复。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+文档更新
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  quickstart.md (重写):
+    项目树加 system.yaml + build/
+    无 Docker 账户方案（kind/ghcr）
+    命令速查加 kp bench / kp scheduler / kp sync
+    FAQ 加 copyright.mk 缺失修复指引
+
+  commands.md:
+    v2.3.0 → v3.2
+    命令索引加 bench/scheduler/sync 四行
+
+  controller.md:
+    v2.3.0 → v3.2
+    OOM 自动调优章节（触发条件/25% bump/CrashLoop 5次 rollback/日志）
+    "v3.2 计划" → 已实现
+
+  ai-guide.md: v0.9.0 → v3.2
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+修复
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  common.mk: COPY_GITHOOK cp .githooks/* (修复 No such file 部署错误)
+  .githooks/ 重命名: githooks/ → .githooks/ (隐藏目录)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  docs/guide/zh-CN/quickstart.md      重写
+  docs/guide/zh-CN/commands.md        命令索引 + 版本号
+  docs/guide/zh-CN/controller.md      OOM/CrashLoop 章节 + 版本号
+  docs/guide/zh-CN/ai-guide.md        版本号
+  scripts/make-rules/common.mk        githooks 路径修复
+  .githooks/                          重命名 (githooks/)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+quickstart 重写 v3.2 视角，三命令补齐，OOM 自动调优文档化，
+.githooks 路径修复。

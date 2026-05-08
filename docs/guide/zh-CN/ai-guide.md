@@ -1,6 +1,6 @@
 # kp AI 使用手册
 
-> 适用：KubePivot v0.9.0+
+> 适用：KubePivot v3.2+
 
 ---
 

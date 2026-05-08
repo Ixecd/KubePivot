@@ -1,6 +1,6 @@
 # KubePivot Controller 使用指南
 
-> 版本：v2.3.0+
+> 版本：v3.2+
 > 目标读者：已经用 kp 部署过项目，想让服务获得自动自愈能力的用户
 
 ---
@@ -12,10 +12,11 @@ Controller 是 KubePivot 的"运维大脑"：部署在你的集群里，持续�
 典型场景：
 
 - 有人误删了 Deployment → 10 秒内自动 `helm rollback` 恢复
-- Pod 因为 OOM 被反复重启 → 自动加内存上限（v2.5.0 计划）
-- ConfigMap/Secret 被 drift 改写 → 强制回到 git 声明的状态（kp diff --drift）
+- Pod 因为 OOM 被反复重启 → 自动上调 memory limit 25%
+- Pod CrashLoopBackOff ≥5 次 → 自动 rollback 到上一版本
+- ConfigMap/Secret 被 drift 改写 → 强制回到 git 声明的状态
 
-v2.3.0 的 Controller 是**集群全局单实例**：一个集群装一次，所有项目共享。
+v3.2 的 Controller 是**集群全局单实例**：一个集群装一次，所有项目共享。
 
 ---
 
@@ -42,7 +43,7 @@ v2.3.0 的 Controller 是**集群全局单实例**：一个集群装一次，所
 ### 前置
 
 ```bash
-kp version          # 确认 v2.3.0+
+kp version          # 确认 v3.2+
 kubectl cluster-info # 确认集群连通
 ```
 
@@ -61,7 +62,7 @@ kp controller install
 默认用 `qingchun22/kubepivot-controller:<kp 版本>` 镜像。国内环境可以用 `--image` 换成你自己的 registry：
 
 ```bash
-kp controller install --image your-registry.cn/kubepivot-controller:v2.3.0
+kp controller install --image your-registry.cn/kubepivot-controller:v3.2
 ```
 
 等 ~15 秒看到这样的输出就成了：
@@ -177,7 +178,7 @@ resources:
     on-missing: alert
 ```
 
-### 高级字段：helm-release（v2.4.0+，蓝绿场景）
+### 高级字段：helm-release（v3.2+，蓝绿场景）
 
 默认情况下 Controller 通过 `<PROJECT_NAME>-<resource.name>` 推断 helm release 名。
 蓝绿 / 金丝雀部署场景下 release 名带后缀（如 `web3-blitz-blue` / `web3-blitz-green`），
@@ -318,11 +319,11 @@ kubectl logs -n kubepivot-system -l app=kubepivot-controller --tail=50
 
 ```bash
 # 方法 1：重新 install（幂等，会覆盖）
-kp controller install --image qingchun22/kubepivot-controller:v2.4.0
+kp controller install --image qingchun22/kubepivot-controller:v3.2
 
 # 方法 2：直接改 image
 kubectl set image -n kubepivot-system deployment/kubepivot-controller \
-  controller=qingchun22/kubepivot-controller:v2.4.0
+  controller=qingchun22/kubepivot-controller:v3.2
 ```
 
 **注意**：如果用同一个 tag 推新镜像（比如 `:latest`），`imagePullPolicy: IfNotPresent` 会让 K8s 用本地缓存：
@@ -358,9 +359,9 @@ kp controller uninstall
 
 ---
 
-## 从 v2.2.0 迁移
+## 从 v3.2 迁移
 
-v2.2.0 时每个项目都部署了自己的 controller（per-project 模式）。v2.3.0 要改成全局 controller，步骤：
+v3.2 时每个项目都部署了自己的 controller（per-project 模式）。v3.2 要改成全局 controller，步骤：
 
 ```bash
 # 1. 卸载每个项目的老 controller
@@ -387,7 +388,7 @@ rm -rf ~/project-b/deployments/project-b/kubepivot-controller
 
 ### Q: 为什么 `kp controller status` 显示 3 个 Leader？
 
-A: 没配 etcd 时，3 副本各自跑单机模式。冗余但不致命（多做两次 reconcile）。想消除冗余，配 `ETCD_ENDPOINTS` 环境变量到 deployment。v2.4.0 计划改用 K8s Lease API 做原生选举。
+A: 没配 etcd 时，3 副本各自跑单机模式。冗余但不致命（多做两次 reconcile）。想消除冗余，配 `ETCD_ENDPOINTS` 环境变量到 deployment。v3.2 计划改用 K8s Lease API 做原生选举。
 
 ### Q: Controller 把我的 kube-system 里的 Pod 自愈了怎么办？
 
@@ -413,13 +414,45 @@ A: 不会。架构设计上 Leader 只做**分发**（非阻塞 enqueue），Wor
 KUBEPIVOT_WORKER_POOL_SIZE=40
 ```
 
-### Q: 单项目的 Controller（v2.2.0）和全局 Controller（v2.3.0）能共存吗？
+### Q: 单项目的 Controller（v3.2）和全局 Controller（v3.2）能共存吗？
 
 A: 技术上可以（Leader Election key 不冲突），但强烈不建议。两者都会尝试处理同一个项目，产生竞争。迁移时先卸载老的 per-project controller，再装全局。
 
 ### Q: Controller 挂了我的项目还能用吗？
 
 A: 能。Controller 是**增强能力**，不是依赖。你的业务 Pod、`kp deploy`、`kp rollback` 都不依赖 Controller。Controller 只做"自动自愈"一件事，没有它你依然可以手工 `kp rollback`。
+
+---
+
+## OOM 自动调优
+
+Controller 检测到 Pod 因 OOMKilled 重启后，自动上调 Deployment memory limit 25%。
+
+### 触发条件
+
+- Pod 的 `containerStatuses[].lastState.terminated.reason` == `OOMKilled`
+- 资源类型为 Deployment
+
+### 自动操作
+
+```go
+bumpMemory("512Mi", 25) → "640Mi"
+bumpMemory("2Gi", 25)  → "2Gi" (2×1.25=2.5→3)
+```
+
+通过 `kubectl patch deployment` 直接修改 `resources.limits.memory`，Pod 自动重建生效。
+
+### CrashLoopBackOff
+
+Runtime 崩溃（panic/nil pointer/segfault）且重启 ≥5 次，自动触发 `helm rollback` 到上一版本。启动错误（connection refused/config error）只告警，不自动处理。
+
+### 日志
+
+```bash
+kubectl logs -n kubepivot-system -l app=kubepivot-controller | grep OOM
+# ⚠️  检测到 OOMKilled  pod=myapp-xxx  current_memory=512Mi
+# ✅ memory limit 已自动调整  resource=myapp  from=512Mi  to=640Mi
+```
 
 ---
 
