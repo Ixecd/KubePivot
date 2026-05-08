@@ -1,24 +1,53 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: kubepivot-controller-config
+  name: kp-system-config
   namespace: kubepivot-system
   labels:
     app.kubernetes.io/name: kubepivot-controller
     app.kubernetes.io/managed-by: kp
 data:
-  # 分片数量
+  config.yaml: |
+    controller:
+      shards: 10
+      replicas: 3
+      workerPoolSize: 20
+      taskTimeout: 90s
+      reconcileInterval: 8s
+      orphanSweeperInterval: 30s
+      driftSyncInterval: 30s
+      gracePeriod: 5s
+      protectedNamespaces:
+        - kube-system
+        - kube-public
+        - kubepivot-system
+    leader:
+      etcdTTL: 15s
+      retryInterval: 3s
+      leaseDuration: 15s
+      leaseRenewInterval: 2s
+    scheduler:
+      rescheduleInterval: 5m
+      maxMigrations: 0
+      jitterThreshold: 0.95
+      jitterWindow: 5m
+      jitterSpikeCount: 3
+    migration:
+      evictTimeout: 10m
+      waitReadyTimeout: 5m
+      pausedBackoff: 30s
+      maxRetries: 3
+    kvcache:
+      mergeThreshold: 200
+      shardCount: 16
+      staleWatchdogMaxStale: 5m
+    etcd:
+      compactInterval: 1h
+      defragInterval: 24h
+  # 兼容旧 sizing.go/apply.go 的 flat key（渐进废弃）
   shards: "10"
-  # Controller副本数量
   replicas: "3"
-  # Worker Pool 大小（可被 KUBEPIVOT_WORKER_POOL_SIZE env 覆盖）
   worker_pool_size: "20"
-  # Leader Election 参数
-  leader_ttl_seconds: "15"
-  # Reconcile 周期
-  reconcile_interval_seconds: "8"
-  # ConfigMap watcher resync 周期（silent failure 保护）
-  watcher_resync_seconds: "30"
 ---
 apiVersion: v1
 kind: Service
@@ -141,18 +170,6 @@ spec:
               value: "/usr/local/bin"
             - name: KUBEPIVOT_MODE
               value: "global"
-            - name: KUBEPIVOT_WORKER_POOL_SIZE
-              valueFrom:
-                configMapKeyRef:
-                  name: kubepivot-controller-config
-                  key: worker_pool_size
-            - name: KUBEPIVOT_SHARDS
-              valueFrom:
-                configMapKeyRef:
-                  name: kubepivot-controller-config
-                  key: shards
-            - name: LEADER_KEY
-              value: "/kubepivot/global/leader"
             - name: ETCD_ENDPOINTS
               value: "http://localhost:2379"
           resources:
@@ -163,9 +180,15 @@ spec:
               cpu: 500m
               memory: 512Mi
           volumeMounts:
+            - name: config
+              mountPath: /etc/kp
+              readOnly: true
             - name: tmp
               mountPath: /tmp
       volumes:
+        - name: config
+          configMap:
+            name: kp-system-config
         - name: tmp
           emptyDir:
             medium: Memory

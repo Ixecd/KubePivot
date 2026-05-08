@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Ixecd/kubepivot/internal/config"
 	"github.com/Ixecd/kubepivot/internal/eventstream"
 	"github.com/Ixecd/kubepivot/internal/executor"
 	"github.com/Ixecd/kubepivot/internal/scheduler"
@@ -26,9 +27,14 @@ import (
 //
 // 目标：把 v2.4.0 实测的 leader 16.93% CPU 通过分片均摊到 ~6%/pod
 func StartGlobal(ctx context.Context) {
-	kubeconfig := getenv("KUBE_CONFIG", "")
+	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		slog.Error("config validation failed", "err", err)
+		os.Exit(1)
+	}
 
-	totalShards := getenvInt("KUBEPIVOT_SHARDS", 10)
+	kubeconfig := getenv("KUBE_CONFIG", "")
+	totalShards := cfg.Controller.Shards
 	replicas := getControllerReplicas(ctx, kubeconfig)
 
 	slog.Info("🌐 global controller 启动中（v2.5.0 分片模式）",
@@ -57,7 +63,7 @@ func StartGlobal(ctx context.Context) {
 	// v3.2: detector 复用——创建一次，所有 handleTask 共享
 	detector := NewInformerDetector(informerPool, NewKubectlDetector(kubeconfig))
 
-	pool := NewWorkerPool(20, func(taskCtx context.Context, task ReconcileTask) error {
+	pool := NewWorkerPool(cfg.Controller.WorkerPoolSize, func(taskCtx context.Context, task ReconcileTask) error {
 		return handleTask(gs, kubeconfig, task, detector)
 	})
 
@@ -151,14 +157,14 @@ func StartGlobal(ctx context.Context) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		reconcileLoop(ctx, gs, pool, shardMgr, totalShards)
+		reconcileLoop(ctx, gs, pool, shardMgr, totalShards, cfg.Controller.ReconcileInterval)
 	}()
 
 	// 6. v2.5.0 Step 3：周期性兜底自扫孤儿（防 OnShardChanged 漏触发）
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		orphanSweeper(ctx, gs, shardMgr, totalShards)
+		orphanSweeper(ctx, gs, shardMgr, totalShards, cfg.Controller.OrphanSweeperInterval)
 	}()
 
 	// 7. v2.7 Step 2a-2 / 2b-1: informer pool 启动 + 接入 reconcile
@@ -251,20 +257,7 @@ func StartGlobal(ctx context.Context) {
 	slog.Info("🌐 global controller 所有 goroutine 已退出")
 }
 
-// ── Helper：env / replicas 读取 ──────────────────────────────────────────────
-
-func getenvInt(key string, defaultVal int) int {
-	v := os.Getenv(key)
-	if v == "" {
-		return defaultVal
-	}
-	n, err := strconv.Atoi(strings.TrimSpace(v))
-	if err != nil || n < 1 {
-		slog.Warn("env 不是合法正整数，回退默认", "key", key, "value", v, "default", defaultVal)
-		return defaultVal
-	}
-	return n
-}
+// ── Helper：replicas 读取 ─────────────────────────────────────────────────
 
 // getControllerReplicas 启动时读 deployment.spec.replicas
 //
@@ -405,8 +398,8 @@ func reconcileLoop(
 	ctx context.Context,
 	gs *GlobalState, pool *WorkerPool,
 	shardMgr *sharding.MultiLeaseManager, totalShards int,
+	interval time.Duration,
 ) {
-	interval := 8 * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -562,8 +555,8 @@ func orphanSweeper(
 	gs *GlobalState,
 	shardMgr *sharding.MultiLeaseManager,
 	totalShards int,
+	interval time.Duration,
 ) {
-	interval := 30 * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 

@@ -45,7 +45,7 @@ func (i *Installer) ApplySizing(ctx context.Context, info *SizingInfo, shards, r
 	patch := fmt.Sprintf(`{"data":{"shards":"%d"}}`, shards)
 	exec := executor.GetExecutor()
 	_, err := exec.Kubectl(ctx, i.cfg.Kubeconfig,
-		"patch", "configmap", "kubepivot-controller-config",
+		"patch", "configmap", "kp-system-config",
 		"-n", i.cfg.Namespace, "--type=merge", "-p", patch)
 	if err != nil {
 		return fmt.Errorf("update ConfigMap: %w", err)
@@ -102,7 +102,7 @@ func rollbackSizing(ctx context.Context, i *Installer, oldShards, oldReplicas in
 	// 回滚 ConfigMap
 	patch := fmt.Sprintf(`{"data":{"shards":"%d"}}`, oldShards)
 	_, err1 := exec.Kubectl(ctx, i.cfg.Kubeconfig,
-		"patch", "configmap", "kubepivot-controller-config",
+		"patch", "configmap", "kp-system-config",
 		"-n", i.cfg.Namespace, "--type=merge", "-p", patch)
 
 	// 回滚 replicas
@@ -113,7 +113,7 @@ func rollbackSizing(ctx context.Context, i *Installer, oldShards, oldReplicas in
 	if err1 != nil || err2 != nil {
 		return fmt.Errorf(
 			"回滚失败！请手动恢复:\n"+
-				"  kubectl patch configmap kubepivot-controller-config -n %s --type=merge -p '{\"data\":{\"shards\":\"%d\"}}'\n"+
+				"  kubectl patch configmap kp-system-config -n %s --type=merge -p '{\"data\":{\"shards\":\"%d\"}}'\n"+
 				"  kubectl scale statefulset kubepivot-controller -n %s --replicas=%d\n"+
 				"原始错误: %v\n回滚错误: ConfigMap=%v, Scale=%v",
 			i.cfg.Namespace, oldShards, i.cfg.Namespace, oldReplicas, originalErr, err1, err2)

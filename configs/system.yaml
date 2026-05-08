@@ -1,0 +1,48 @@
+# KubePivot 系统配置
+# 加载顺序: 此文件默认值 → 环境变量 KUBEPIVOT_* override → ConfigMap mount /etc/kp/config.yaml
+# 所有字段均有 fallback 默认值，缺失不阻塞启动
+
+controller:
+  shards: 10
+  replicas: 3
+  workerPoolSize: 20
+  taskTimeout: 90s
+  reconcileInterval: 8s
+  orphanSweeperInterval: 30s
+  driftSyncInterval: 30s
+  gracePeriod: 5s
+  protectedNamespaces:
+    - kube-system
+    - kube-public
+    - kubepivot-system
+
+leader:
+  etcdTTL: 15s
+  retryInterval: 3s
+  leaseDuration: 15s
+  leaseRenewInterval: 2s
+
+scheduler:
+  rescheduleInterval: 5m
+  maxMigrations: 0
+  jitterThreshold: 0.95
+  jitterWindow: 5m
+  jitterSpikeCount: 3
+  webhookPort: 443
+
+migration:
+  evictTimeout: 10m
+  waitReadyTimeout: 5m
+  pausedBackoff: 30s
+  maxRetries: 3
+
+kvcache:
+  mergeThreshold: 200
+  shardCount: 16
+  staleWatchdogMaxStale: 5m
+
+etcd:
+  compactInterval: 1h
+  defragInterval: 24h
+  endpoints: ""
+  dialTimeout: 5s

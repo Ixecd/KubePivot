@@ -10,8 +10,8 @@ func TestRecommend_P3(t *testing.T) {
 	if s != 3 {
 		t.Errorf("S = %d, want 3", s)
 	}
-	if c != 2 {
-		t.Errorf("C = %d, want 2", c)
+	if c != 3 {
+		t.Errorf("C = %d, want 3 (etcd quorum 要求奇数≥3)", c)
 	}
 	if !strings.Contains(reason, "") && reason != "" {
 		// P=3 正常范围，不应有不降配理由
@@ -25,9 +25,9 @@ func TestRecommend_P20(t *testing.T) {
 	if s != 5 {
 		t.Errorf("S = %d, want 5", s)
 	}
-	// C = ceil(5/3) = 2
-	if c != 2 {
-		t.Errorf("C = %d, want 2", c)
+	// C = ceil(5/3)=2 → clamp→3 (etcd quorum floor)
+	if c != 3 {
+		t.Errorf("C = %d, want 3", c)
 	}
 }
 
@@ -49,9 +49,9 @@ func TestRecommend_P200(t *testing.T) {
 	if s != 50 {
 		t.Errorf("S = %d, want 50 (上限)", s)
 	}
-	// C = ceil(50/3) = 17, clamp to 10
-	if c != 10 {
-		t.Errorf("C = %d, want 10 (上限)", c)
+	// C = ceil(50/3)=17, clamp to 9 (etcd quorum 奇数上限)
+	if c != 9 {
+		t.Errorf("C = %d, want 9 (奇数上限)", c)
 	}
 	found := false
 	for _, w := range warns {
@@ -70,8 +70,8 @@ func TestRecommend_Empty(t *testing.T) {
 	if s != 3 {
 		t.Errorf("S = %d, want 3 (安全下限)", s)
 	}
-	if c != 2 {
-		t.Errorf("C = %d, want 2", c)
+	if c != 3 {
+		t.Errorf("C = %d, want 3 (etcd quorum floor)", c)
 	}
 }
 
@@ -80,13 +80,13 @@ func TestRecommend_Boundary(t *testing.T) {
 	if s != 3 {
 		t.Errorf("S = %d, want 3", s)
 	}
-	if c != 2 {
-		t.Errorf("C = %d, want 2", c)
+	if c != 3 {
+		t.Errorf("C = %d, want 3 (etcd quorum floor)", c)
 	}
 }
 
 func TestRecommend_NoDownscale(t *testing.T) {
-	// P=10, 当前 C=10 → 推荐 C=2, 但不降配 → 保持 C=10
+	// P=10, 当前 C=10 → 推荐 C=3, 但不降配 → 保持 C=10
 	s, c, reason, _ := Recommend(10, 10, 10, false)
 	if s != 3 {
 		t.Errorf("S = %d, want 3", s)
@@ -104,9 +104,9 @@ func TestRecommend_ForceDownscale(t *testing.T) {
 	if s != 3 {
 		t.Errorf("S = %d, want 3", s)
 	}
-	// --force-downscale → 允许降到推荐值
-	if c != 2 {
-		t.Errorf("C = %d, want 2 (force-downscale)", c)
+	// --force-downscale → 允许降到推荐值 (etcd quorum floor=3)
+	if c != 3 {
+		t.Errorf("C = %d, want 3 (force-downscale, etcd floor)", c)
 	}
 }
 
@@ -116,7 +116,7 @@ func TestRecommend_MaxLimit(t *testing.T) {
 		t.Errorf("S = %d, want 50 (硬上限)", s)
 	}
 	if c != 10 {
-		t.Errorf("C = %d, want 10 (硬上限)", c)
+		t.Errorf("C = %d, want 10 (不降配策略保留当前值)", c)
 	}
 	// P≥500 应该有超载警告
 	found := false
@@ -195,7 +195,7 @@ func TestRecommend_NoCurrentShards(t *testing.T) {
 		t.Errorf("S = %d, want 25", s)
 	}
 	if c != 9 {
-		t.Errorf("C = %d, want 9", c)
+		t.Errorf("C = %d, want 9 (etcd quorum)", c)
 	}
 	for _, w := range warns {
 		if strings.Contains(w, "分片数变化") {

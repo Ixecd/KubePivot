@@ -31,13 +31,17 @@ func Recommend(projectCount int, currentShards int, currentReplicas int, forceDo
 		shards = 50
 	}
 
-	// C = clamp(ceil(S/3), 2, 10)
+	// C = clamp(ceil(S/3), 3, 9) — etcd 要求奇数节点保证多数派仲裁
 	replicas = (shards + 2) / 3
-	if replicas < 2 {
-		replicas = 2
+	if replicas < 3 {
+		replicas = 3
 	}
-	if replicas > 10 {
-		replicas = 10
+	if replicas > 9 {
+		replicas = 9
+	}
+	// 强制奇数：偶数节点多花资源却不增加容错
+	if replicas%2 == 0 {
+		replicas++
 	}
 
 	// 不降配策略：仅 replicas 受保护，shards 不受限制（降低分片是纯优化）
@@ -114,7 +118,7 @@ func (i *Installer) GetSizingInfo(ctx context.Context) (*SizingInfo, error) {
 
 	// 2. 读取当前 shards：ConfigMap 优先，其次 StatefulSet env
 	out, err = exec.Kubectl(ctx, i.cfg.Kubeconfig,
-		"get", "configmap", "kubepivot-controller-config",
+		"get", "configmap", "kp-system-config",
 		"-n", i.cfg.Namespace,
 		"-o", "jsonpath={.data.shards}", "--ignore-not-found")
 	if err != nil {

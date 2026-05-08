@@ -1,0 +1,84 @@
+feat(config-controller): v3.2 系统配置化 + Controller KVCache 接线 + etcd quorum 保护
+
+configs/system.yaml 统一管理系统配置（6组31字段），config.Load() YAML+env+defaults 三级加载。
+Controller KVCache 接线（scan 100ms→1.6us）+ 代码审查清理。
+controller_installer etcd quorum 保护（replicas 强制奇数≥3）。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+系统配置化
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  configs/system.yaml (NEW):
+    controller / leader / scheduler / migration / kvcache / etcd 6组
+    31 个字段，所有硬编码值提炼到此文件
+
+  internal/config/config.go (NEW):
+    Load(): /etc/kp/config.yaml → configs/system.yaml → defaults()
+    mergeDefaults(): YAML overlay，零值不覆盖默认
+    applyEnvOverrides(): KUBEPIVOT_* 环境变量最高优先级
+    Validate(): replicas 奇数校验 + shards≥1 + jitterThreshold 0-1
+
+  Controller 接入:
+    StartGlobal: config.Load() → totalShards / workerPoolSize / reconcileInterval 等
+    reconcileLoop / orphanSweeper: 接受 interval 参数（不再硬编码）
+    删死函数 getenvInt（已被 config.Load 替代）
+
+  K8s 部署:
+    deployment.yaml: kp-system-config ConfigMap 含 config.yaml + flat keys
+    挂载 /etc/kp/config.yaml → config.Load() 自动读取
+    改名 kubepivot-controller-config → kp-system-config
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Controller KVCache 接线
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Scheduler/Rescheduler kubectlAdapter → InformerAdapter
+  Pod Informer + PodCacheBridge 启动
+  Detector 复用（创建一次，handleTask 共享）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+代码审查清理
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  global.go:       watchNamespaces 删 pool / handleTask 删 ctx+informerPool
+  drift_sync.go:   scanAndSync 删 ctx / helm diff 错误日志
+  heal.go:         删 getLatestRevision / isCRDKind+isSSAConflict 补测
+  leader.go:       删 leaderRenew / strings.Split 多端点修复
+  workqueue.go:    删 queueCap
+  state/store.go:  etcdKey 合并到 EtcdKey / autoMigrateToEtcd 删 current 参数
+  controller_installer/sizing.go: replicas 强制奇数≥3 / clamp(3,9)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+etcd Quorum 保护
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Recommend(): C = clamp(ceil(S/3), 3, 9) + 奇数强制（偶数+1）
+  config.Validate(): replicas < 3 或偶数 → 拒绝启动
+  StatefulSet replicas=3 初始最低值（etcd 自举要求）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  configs/system.yaml (NEW)                   系统配置文件
+  internal/config/config.go (NEW)             三级加载器 + 校验
+  internal/controller/global.go               KVCache 接线 + 配置接入 + 死代码清理
+  internal/controller/drift_sync.go           死 ctx + helm diff 日志
+  internal/controller/heal.go                 删 getLatestRevision
+  internal/controller/heal_test.go (NEW)      isCRDKind+isSSAConflict
+  internal/controller/leader.go               strings.Split + 删 leaderRenew
+  internal/controller/workqueue.go            删 queueCap
+  internal/state/store.go                     etcdKey DRY + autoMigrate 死参数
+  internal/state/state_test.go                autoMigrate 调用更新
+  internal/controller_installer/sizing.go     etcd quorum 奇数保护
+  internal/controller_installer/sizing_test.go 18 测试更新
+  internal/controller_installer/apply.go      ConfigMap 改名
+  internal/controller_installer/templates/deployment.yaml yaml 格式+volume mount
+  docs/design/controller-v3.2.md (NEW)        架构设计文档
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+系统配置化 31 字段三级加载，Controller 接线 scan 100ms→1.6us，
+代码审查 8 处死代码清理，etcd quorum 奇数保护永不断裂。
