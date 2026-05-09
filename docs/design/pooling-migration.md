@@ -368,7 +368,7 @@ controller 进程内：
 - **MigrationManager 提前**：原计划 v3.2，实际在 v3.2 完成 Stateless 路径 + Dual-Path（stateful Paused+Retry）。Decided：KV Cache 就绪后紧接 MigrationManager 更顺畅。
 - **Fencing 留 v3.2**：SignalProtocol + FallbackChain + HardTimeout 骨架已就绪，但 Fencer 接口（OOB `ConfirmIsolated`）和 etcd Learner sidecar gRPC 未实现。
 - **DryRun 已落地**：用 clone map 模式实现，每次 Reconcile 从真实状态出发计算，不产生副作用。
-- **MigrationTargetHint**：Rescheduler evict 前写 `sync.Map` → webhook 创建 Pod 时读取，直接路由到目标节点。name-based 匹配（StatefulSet 同名有效），Deployment label-based 匹配留 v3.2。
+- **MigrationTargetHint**：Rescheduler evict 前写 `sync.Map` → webhook 创建 Pod 时读取，直接路由到目标节点。v3.2 name-based 匹配（StatefulSet 同名有效），v3.3 升级为双 key 存储 + 双路查找（name + `app.kubernetes.io/name` label），Deployment Pod 改名后通过 label 回退匹配。
 - **HashRing 一致性哈希**：40 virtual nodes/pod 的真一致性哈希环，4→3 pod 时仅 ~25% Cell 漂移（非全量）。
 - **KubePivot 无 K8s API import**：通过 `kubectl` CLI + 原始 HTTP/JSON webhook 操作 K8s，不依赖 `k8s.io/api` 等包。webhook 清单使用 `admissionregistration.k8s.io/v1`。
 

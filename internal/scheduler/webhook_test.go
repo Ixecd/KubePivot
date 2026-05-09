@@ -82,6 +82,7 @@ func TestWebhookMutate_PodAssigned(t *testing.T) {
 					Name         string `json:"name"`
 					Namespace    string `json:"namespace"`
 					GenerateName string `json:"generateName"`
+					Labels      map[string]string `json:"labels"`
 				}{Name: "pod-a", Namespace: "default"},
 				Spec: struct {
 					NodeSelector map[string]string `json:"nodeSelector"`
@@ -193,6 +194,7 @@ func TestWebhookMutate_AssignFails_AllowedTrue(t *testing.T) {
 					Name         string `json:"name"`
 					Namespace    string `json:"namespace"`
 					GenerateName string `json:"generateName"`
+					Labels      map[string]string `json:"labels"`
 				}{Name: "pod-b", Namespace: "default"},
 				Spec: struct {
 					NodeSelector map[string]string `json:"nodeSelector"`
@@ -289,6 +291,7 @@ func TestWebhookMutate_GenerateName(t *testing.T) {
 					Name         string `json:"name"`
 					Namespace    string `json:"namespace"`
 					GenerateName string `json:"generateName"`
+					Labels      map[string]string `json:"labels"`
 				}{GenerateName: "deploy-", Namespace: "default"},
 				Spec: struct {
 					NodeSelector map[string]string `json:"nodeSelector"`
@@ -411,6 +414,7 @@ func TestWebhookMutate_MigrationTargetHint(t *testing.T) {
 					Name         string `json:"name"`
 					Namespace    string `json:"namespace"`
 					GenerateName string `json:"generateName"`
+					Labels      map[string]string `json:"labels"`
 				}{Name: "pod-mig", Namespace: "default"},
 				Spec: struct {
 					NodeSelector map[string]string `json:"nodeSelector"`

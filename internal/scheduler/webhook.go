@@ -16,19 +16,44 @@ import (
 
 // migrationTargetHints stores pending migration target nodes.
 // Rescheduler writes before eviction, webhook reads during pod recreation.
-// Key: "ns/name" of the pod being evicted. For StatefulSet pods, the replacement
-// pod has the same name → lookup succeeds.
-// For Deployment pods (different names), label-based matching is deferred to v3.3.
+//
+// v3.3: 双路查找 — name-based (StatefulSet) + label-based (Deployment)。
+// Key 格式: "ns/name" (name-based) 或 "ns/label:value" (label-based)。
+// Label key 用 ":" 作为 naming convention（namespace 不含 ":"）。
 var migrationTargetHints sync.Map
 
 // SetMigrationTargetHint records the expected target node for a pod being evicted.
+//
+// v3.3: 同时存储 name-based 和 label-based key（如果 pod 有 app.kubernetes.io/name label）。
 func SetMigrationTargetHint(ns, name, targetNode string) {
 	migrationTargetHints.Store(ns+"/"+name, targetNode)
 }
 
+// SetMigrationTargetHintWithLabel 同时存储 name + label 双 key。
+// Deployment Pod 重建后改名，webhook 通过 label 回退查找。
+func SetMigrationTargetHintWithLabel(ns, name, appLabel, targetNode string) {
+	migrationTargetHints.Store(ns+"/"+name, targetNode)
+	if appLabel != "" {
+		migrationTargetHints.Store(ns+"/label:"+appLabel, targetNode)
+	}
+}
+
 // PopMigrationTargetHint returns and removes the target hint for a pod.
+// v3.3: name-based primary lookup + label-based fallback (for Deployment pods).
 func PopMigrationTargetHint(ns, name string) (string, bool) {
 	v, ok := migrationTargetHints.LoadAndDelete(ns + "/" + name)
+	if ok {
+		return v.(string), true
+	}
+	return "", false
+}
+
+// PopMigrationTargetHintByLabel label-based 回退查找（Deployment Pod 改名后）。
+func PopMigrationTargetHintByLabel(ns, appLabel string) (string, bool) {
+	if appLabel == "" {
+		return "", false
+	}
+	v, ok := migrationTargetHints.LoadAndDelete(ns + "/label:" + appLabel)
 	if !ok {
 		return "", false
 	}
@@ -135,11 +160,21 @@ func (ws *WebhookServer) handleMutate(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Migration target hint: 如果该 Pod 是迁移副本，直接路由到目标节点，避免回弹
+	// v3.3: name-based primary (StatefulSet) + label-based fallback (Deployment)
 	var node string
 	if hint, ok := PopMigrationTargetHint(pod.Namespace, pod.Name); ok {
 		node = hint
-		slog.Info("webhook: 使用迁移目标节点", "pod", pod.Namespace+"/"+pod.Name, "node", node)
-	} else {
+		slog.Info("webhook: 使用迁移目标节点 (name-based)", "pod", pod.Namespace+"/"+pod.Name, "node", node)
+	} else if appLabel := pod.Labels["app.kubernetes.io/name"]; appLabel != "" {
+		if hint, ok := PopMigrationTargetHintByLabel(pod.Namespace, appLabel); ok {
+			node = hint
+			slog.Info("webhook: 使用迁移目标节点 (label-based)",
+				"pod", pod.Namespace+"/"+pod.Name,
+				"app", appLabel, "node", node)
+		}
+	}
+
+	if node == "" {
 		// 正常调度路径
 		var err error
 		node, err = ws.scheduler.AssignPod(ctx, pod)
@@ -213,6 +248,7 @@ func extractPodFromRequest(req admissionRequest) *PodInfo {
 	p := &PodInfo{
 		Name:      req.Object.Metadata.Name,
 		Namespace: req.Object.Metadata.Namespace,
+		Labels:    req.Object.Metadata.Labels,
 	}
 	// 如果 Name 为空，可能由 GenerateName 生成，记录 GenerateName 用于日志
 	if p.Name == "" {
@@ -277,9 +313,10 @@ type admissionRequest struct {
 
 type podObj struct {
 	Metadata struct {
-		Name         string `json:"name"`
-		Namespace    string `json:"namespace"`
-		GenerateName string `json:"generateName"`
+		Name         string            `json:"name"`
+		Namespace    string            `json:"namespace"`
+		GenerateName string            `json:"generateName"`
+		Labels       map[string]string `json:"labels"`
 	} `json:"metadata"`
 	Spec struct {
 		NodeSelector map[string]string `json:"nodeSelector"`

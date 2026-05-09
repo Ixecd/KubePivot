@@ -46,7 +46,7 @@
 
 12. **Pod affinity/anti-affinity 拓扑约束** — 设计提到外层 `ConstraintChecker`，未实现。影响 GPU NVLink 亲和调度准确性。
 
-13. **Deployment Pod 迁移 target label-based 匹配** — `webhook.go:21` 显式标注 "deferred to v3.3"。当前 name-based hint 只对 StatefulSet 有效，Deployment Pod 重建后改名无法匹配。
+13. ~~**Deployment Pod 迁移 target label-based 匹配**~~ ✅ v3.3 — webhook 双路查找 (name + label)，rescheduler 双 key 存储。Deployment Pod 改名后通过 app.kubernetes.io/name 回退匹配。
 
 ### 部署
 

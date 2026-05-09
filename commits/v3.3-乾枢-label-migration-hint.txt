@@ -1,0 +1,60 @@
+feat(scheduler): webhook migration hint label-based fallback
+
+v3.3 P1#13: Deployment Pod 迁移时改名导致 migration target hint 丢失。
+webhook 双路查找 (name → label fallback)，rescheduler 双 key 存储。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+问题
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  StatefulSet Pod: evict myapp-0 → recreate myapp-0 → name match ✅
+  Deployment Pod:  evict myapp-7d9f8-abcde → recreate myapp-7d9f8-fghij → 改名失配 ❌
+
+  结果: Deployment Pod 迁移 hint 丢失，回弹到源节点，迁移引擎空转。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+方案
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  双 key 存储:
+    migrationTargetHints["ns/pod-name"] = targetNode       (name-based)
+    migrationTargetHints["ns/label:app-value"] = targetNode (label-based)
+
+  双路查找 (webhook handleMutate):
+    1. PopMigrationTargetHint(ns, name)          name primary
+    2. PopMigrationTargetHintByLabel(ns, label)  label fallback
+    3. scheduler.AssignPod()                     正常调度
+
+  SetMigrationTargetHintWithLabel(ns, name, appLabel, node):
+    同时写两个 key。appLabel 为空时仅写 name key（向后兼容）。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/scheduler/webhook.go
+    podObj.Metadata +Labels
+    extractPodFromRequest 提取 Labels → PodInfo
+    +SetMigrationTargetHintWithLabel()
+    +PopMigrationTargetHintByLabel()
+    handleMutate: name → label 双路查找
+    migrationTargetHints 注释更新
+
+  internal/scheduler/rescheduler.go
+    SetMigrationTargetHint → SetMigrationTargetHintWithLabel
+
+  internal/scheduler/webhook_test.go
+    4 处 podObj 匿名 struct +Labels 字段
+
+  FORGET.md                                      #13 ✅ done
+  docs/design/sharding.md                         FNV→jump hash 全文档刷新
+  docs/design/pooling-migration.md                MigrationTargetHint v3.2→v3.3
+  docs/cmd/scheduler/scheduler.md                 SetMigrationTargetHintWithLabel
+  docs/design/message-queue-draft.md              编辑记录
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+webhook migration hint name+label 双路匹配，
+Deployment Pod 迁移不丢目标节点，P1 #13 归零。

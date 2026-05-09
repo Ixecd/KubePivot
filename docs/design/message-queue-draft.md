@@ -428,5 +428,15 @@ watch loop 是单 goroutine。如果 dispatch 阻塞，整个 watch 暂停——
 2026-05-09  创建。覆盖三层队列 + 两条隐式路径 + rollbackTracker。
 2026-05-09  shard listener 落地。Informer.ForceResync() + ForceResyncAll() +
             OnShardChanged 接线 + force_resync_total 指标 + 防御性 cancel。
+2026-05-09  v3.3 P0 扫荡 (8/8):
+            - #5 rollbackTracker 指数退避 ✅
+            - #7 etcd config compact/defrag 接线 ✅
+            - #19 jump consistent hash 替换 FNV ✅
+            - #4 token bucket 入队限流 ✅
+            - #3 Webhook TLS 自签证书 + secret volume mount ✅
+            - #6 Prometheus /metrics HTTP server + 16 指标注册 ✅
+            - #1 shard gap 事件盲区归零 (ForceResync), reconcile gap 待 lease handoff 🟡
+            - #2 Quota hash 均匀化, lease rebalance 待 🟡
+            P1 #13 label migration hint name+label 双路查找 ✅
             共同作者: qc + DeepSeek
 ```

@@ -267,7 +267,7 @@ for each imbalance pair:
     ├─ Pod fits in SuggestedCPU/SuggestedMem ?
     │
     ├─ AssignPod(pod) → target node (Best Fit)
-    ├─ SetMigrationTargetHint(ns, name, targetNode)
+    ├─ SetMigrationTargetHintWithLabel(ns, name, appLabel, targetNode)  // v3.3: 双 key (name + label)
     ├─ kubectl delete pod --grace-period=30 --wait=false
     └─ migrated++
 ```
@@ -589,7 +589,7 @@ Controller (global.go)
   │     └── DefaultLeaseFencer (Lease 隔离)
   │
   ├── WebhookServer (webhook.go)
-  │     ├── /mutate → AssignPod + migration hint
+  │     ├── /mutate → AssignPod + migration hint (name + label 双路，v3.3)
   │     ├── /health
   │     └── TLS self-signed certs
   │

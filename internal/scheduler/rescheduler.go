@@ -371,7 +371,8 @@ func (rs *Rescheduler) migratePods(ctx context.Context, pairs []*imbalancePair, 
 			}
 
 			// 1.5. 注入迁移目标节点 hint — webhook 收到重建 Pod 时直接路由，防止回弹到源节点
-			SetMigrationTargetHint(p.Namespace, p.Name, node)
+			// v3.3: 双 key 存储（name + label），Deployment Pod 改名后通过 label 回退匹配
+			SetMigrationTargetHintWithLabel(p.Namespace, p.Name, p.Labels["app.kubernetes.io/name"], node)
 
 			// 2. 驱逐 Pod（K8s 重建 + Webhook 注入目标节点）
 			oldNode := p.NodeName

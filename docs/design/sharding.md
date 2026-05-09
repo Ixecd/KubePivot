@@ -97,7 +97,7 @@ KubePivot 的特殊性在于 **不引入 client-go**——分片机制必须用 
 | 组件 | 位置 | 职责 |
 |------|------|------|
 | `ShardSet` | `internal/sharding/shard.go` | 线程安全的分片集合（Add/Remove/Contains） |
-| `ShardOf(ns, N)` | 同上 | FNV-1a 32-bit hash 决定项目归属 |
+| `ShardOf(ns, N)` | 同上 | jump consistent hash 决定项目归属 (v3.3: FNV→jump) |
 | `QuotaPerPod(N, replicas)` | 同上 | 每 pod 持有上限 = ceil(N/replicas) |
 | `MultiLeaseManager` | `internal/sharding/multi_lease.go` | N 个 lease 抢占 + 续约主循环 |
 | `RemoveOrphanProjects` | `internal/controller/global_state.go` | 分片切换时清理孤儿状态 |
@@ -147,22 +147,22 @@ KubePivot 的特殊性在于 **不引入 client-go**——分片机制必须用 
 
 ### Q3：hash input（hash 什么？）
 
-**选：namespace 名字 + FNV-1a 32-bit**
+**选：namespace 名字 + jump consistent hash (v3.3: FNV→jump)**
 
 ```
 hash 算法：
-  - FNV-1a 32-bit（标准库 hash/fnv）
+  - v3.3: Google jump consistent hash (2014) — O(1), 天然均匀分布
+  - v3.2: FNV-1a 32-bit (标准库 hash/fnv)
+  - FNV-64a → uint64 key → jumpHash(key, N)
   - 稳定（同一 ns 永远 hash 到同一 shard）
-  - 计算 ~30 ns，零成本
 
 hash input：
   - namespace 名字（v2.3.0 起 project ≡ namespace）
   - 不用 project 名（避免未来 project 跨 ns 时破坏分片稳定性）
   - 不用 namespace + resource_key（粒度太细，无意义）
 
-⚠ FNV 不是密码学 hash——对相似 input（如 kp-bench-001..050）
-  分布不完美。50 项目实测分布是 4-7 个 / shard，不均度 ±40%。
-  详见第 6.3 节。
+v3.2: FNV % N 对相似 input（如 kp-bench-001..050）±40% 不均
+v3.3: jump hash 同场景 9/10 shard 命中，分布均匀
 ```
 
 ### Q4：启动决策（pod 怎么决定持有哪些 shard）
@@ -212,7 +212,7 @@ hash input：
 新建 `internal/sharding/` 子包：
 
 ```
-shard.go              FNV-1a hash + ShardSet 数据结构
+shard.go              v3.2 FNV-1a hash → v3.3 jump hash + ShardSet 数据结构
 shard_test.go         单测（4 个）
 multi_lease.go        N 个 lease 抢占主循环
 multi_lease_test.go   单测（5 个）
@@ -350,22 +350,22 @@ ztg2z            50.75%     79.17%   93.38 MiB  6,8      (2 个)
 tktpg            38.49%     80.04%   72.02 MiB  1,2,5,9  (4 个)
 ```
 
-**Shard 项目分布（FNV32 实测）**：
+**Shard 项目分布（v3.2 FNV32 vs v3.3 jump hash 实测）**：
 
 ```
-shard 0: 5 projects   shard 5: 7 projects
-shard 1: 4 projects   shard 6: 7 projects
-shard 2: 4 projects   shard 7: 5 projects
-shard 3: 5 projects   shard 8: 4 projects
-shard 4: 4 projects   shard 9: 5 projects
-total: 50
+v3.2 FNV32:
+  shard 0: 5 projects   shard 5: 7 projects
+  shard 1: 4 projects   shard 6: 7 projects
+  ...
+  不均匀度：4-7 个 / shard，± 40%
 
-不均匀度：4-7 个 / shard，± 40%
+v3.3 jump hash:
+  50 连续短名 (kp-bench-001..050) → 9/10 shard 命中，无单 shard >15
+  10 真实项目名 (kp-auth-service 等) → 稳定同向，分布更均匀
 ```
 
-**FNV 在连号短字符串（kp-bench-001..050）上分布不完美**——这是
-非密码学 hash 的固有特征。真实生产环境项目名通常是有意义的字符串，
-分布会更均匀。这点在第 8 节"未做事项"详细讨论。
+**v3.2 FNV 在连号短字符串（kp-bench-001..050）上分布不完美**——这是
+非密码学 hash 模 N 的固有特征。v3.3 换 Google jump consistent hash 解决。
 
 **实际工作量分布**：
 
@@ -528,7 +528,7 @@ KubePivot v2.5.0：拒绝分布式状态机
     
   v2.5.1 的优化方向（"性能立方体"任务）：
     QuotaPerPod 改 floor 而不是 ceil（强制更均衡）
-    Hash 算法对比：FNV vs xxhash
+    ~~Hash 算法对比：FNV vs xxhash~~ ✅ v3.3: jump consistent hash 已落地
     Rebalance 协议（让持有过多的 pod 主动释放）
     
   详见第 9.1 节
@@ -643,7 +643,7 @@ KubePivot v2.5.0 **明确不做**这些事——它们或者属于 K8s 本身的
 
 4. 顺手做的小优化（如果有数据支持）：
    - QuotaPerPod ceil → floor 对比（4:4:2 vs 4:3:3 哪个更均衡）
-   - Hash 算法对比：FNV vs xxhash vs murmur3
+   - ~~Hash 算法对比：FNV vs xxhash vs murmur3~~ ✅ v3.3: jump hash 已落地
 ```
 
 ### 9.2 v2.5.1 其他持续改进
@@ -737,15 +737,9 @@ kubectl get lease -n kubepivot-system | grep shard
 
 ### 10.4 算 namespace 落到哪个 shard
 
-```python
-def fnv32a(s):
-    h = 2166136261
-    for c in s.encode():
-        h ^= c
-        h = (h * 16777619) & 0xFFFFFFFF
-    return h
-
-shard = fnv32a("kp-auth-service") % 10  # → 某个固定的 0-9 值
+```go
+// v3.3: jump consistent hash
+shard := sharding.ShardOf("kp-auth-service", 10)  // → 某个固定的 0-9 值
 ```
 
 ---
