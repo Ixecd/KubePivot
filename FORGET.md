@@ -24,7 +24,7 @@
 
 ### 可观测性
 
-6. **Prometheus 指标未注册** — Scheduler metrics / Informer metrics 已定义，但 HTTP server 未实施。所有 7 + 9 = 16 个指标无法暴露。生产无可见性。
+6. ~~**Prometheus 指标未注册**~~ ✅ v3.3 — HTTP /metrics server 启动，scheduler + informer 指标注册到 DefaultRegisterer。metricsPort=9090 可配，0 关闭。
 
 7. ~~**etcdmanager compact/defrag 未接入 config**~~ ✅ v3.3 — EtcdManager 类型 int→time.Duration，NewEtcdManagerFromConfig() 接线，controller.Start() 自动启动维护循环。
 

@@ -8,6 +8,8 @@ controller:
   shards: 10
   # StatefulSet 副本数 = etcd 集群节点数（必须奇数 ≥3）
   replicas: 3
+  # Prometheus /metrics 端口（0 表示不启动 HTTP server）
+  metricsPort: 9090
   # Worker Pool 并发 reconcile goroutine 数
   workerPoolSize: 20
   # Worker Pool 入队速率限制（tokens/sec, 0=无限制）

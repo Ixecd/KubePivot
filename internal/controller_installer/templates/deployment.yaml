@@ -180,6 +180,9 @@ spec:
               value: "global"
             - name: ETCD_ENDPOINTS
               value: "http://localhost:2379"
+          ports:
+            - containerPort: 9090
+              name: metrics
           resources:
             requests:
               cpu: 100m

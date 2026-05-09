@@ -2,16 +2,23 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/Ixecd/kubepivot/internal/config"
 	"github.com/Ixecd/kubepivot/internal/etcdmanager"
+	"github.com/Ixecd/kubepivot/internal/scheduler"
 	"github.com/Ixecd/kubepivot/internal/state"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // Start 启动 controller。
@@ -48,6 +55,9 @@ func Start(args ...string) {
 
 		// etcd compact/defrag 维护（v3.3: 接入 config 系统，替代硬编码）
 		go startEtcdMaintenance(ctx)
+
+		// Prometheus /metrics HTTP server（v3.3: P0#6）
+		go startMetricsServer(ctx)
 
 		StartGlobal(ctx)
 	} else {
@@ -106,6 +116,48 @@ func startEtcdMaintenance(ctx context.Context) {
 	)
 
 	mgr.Run(ctx)
+}
+
+// startMetricsServer 启动 Prometheus /metrics HTTP server。
+//
+// v3.3: P0#6 — 注册 scheduler + informer metrics 到 DefaultRegisterer。
+// port 从 config.system.yaml metricsPort 读取，0=不启动。
+func startMetricsServer(ctx context.Context) {
+	cfg := config.Load()
+	if cfg.Controller.MetricsPort <= 0 {
+		return
+	}
+
+	// 注册调度器指标
+	prometheus.MustRegister(scheduler.GetSchedulerMetrics())
+
+	addr := fmt.Sprintf(":%d", cfg.Controller.MetricsPort)
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+
+	srv := &http.Server{
+		Addr:         addr,
+		Handler:      mux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		srv.Shutdown(shutdownCtx)
+	}()
+
+	slog.Info("📊 Prometheus /metrics 已启动", "addr", addr)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		slog.Error("metrics server error", "err", err)
+	}
 }
 
 func getenv(key, fallback string) string {

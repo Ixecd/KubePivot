@@ -27,6 +27,7 @@ type SystemConfig struct {
 type ControllerConfig struct {
 	Shards                int           `json:"shards" yaml:"shards"`
 	Replicas              int           `json:"replicas" yaml:"replicas"`
+	MetricsPort           int           `json:"metricsPort" yaml:"metricsPort"`
 	WorkerPoolSize        int           `json:"workerPoolSize" yaml:"workerPoolSize"`
 	WorkerPoolRateLimit   float64       `json:"workerPoolRateLimit" yaml:"workerPoolRateLimit"`
 	TaskTimeout           time.Duration `json:"taskTimeout" yaml:"taskTimeout"`
@@ -82,7 +83,7 @@ type EtcdConfig struct {
 func defaults() SystemConfig {
 	return SystemConfig{
 		Controller: ControllerConfig{
-			Shards: 10, Replicas: 3, WorkerPoolSize: 20, WorkerPoolRateLimit: 10,
+			Shards: 10, Replicas: 3, MetricsPort: 9090, WorkerPoolSize: 20, WorkerPoolRateLimit: 10,
 			TaskTimeout: 90 * time.Second, ReconcileInterval: 8 * time.Second,
 			OrphanSweeperInterval: 30 * time.Second, DriftSyncInterval: 30 * time.Second,
 			GracePeriod: 5 * time.Second,

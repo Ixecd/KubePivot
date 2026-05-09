@@ -1,0 +1,68 @@
+feat(controller): Prometheus /metrics HTTP server + collector registration
+
+v3.3: P0#6 — 启动 HTTP /metrics server，注册 scheduler (7 metrics) + informer (9 metrics)
+到 prometheus.DefaultRegisterer。metricsPort=9090 config 可配，0=关闭。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+HTTP server
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  controller.startMetricsServer(ctx):
+    config.Load() → MetricsPort (default 9090)
+    metricsPort <= 0 → 不启动
+    prometheus.MustRegister(scheduler.GetSchedulerMetrics())
+    mux.Handle("/metrics", promhttp.Handler())
+    mux.HandleFunc("/health", ...)
+    ListenAndServe → ctx.Done() → graceful shutdown(5s)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+指标注册
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  scheduler (7):
+    kubepivot_scheduler_iterations_total
+    kubepivot_scheduler_solve_duration_seconds
+    kubepivot_node_utilization_cpu_ratio
+    kubepivot_node_utilization_memory_ratio
+    kubepivot_pod_oomkill_total
+    kubepivot_scheduler_fallback_level
+    kubepivot_pod_migration_total
+
+  informer (9, per resource label):
+    kubepivot_informer_cache_size
+    kubepivot_informer_cache_hot_count
+    kubepivot_informer_cache_warm_count
+    kubepivot_informer_cache_cold_count
+    kubepivot_informer_events_total{type}
+    kubepivot_informer_watch_reconnects_total
+    kubepivot_informer_cache_hit_ratio
+    kubepivot_informer_memory_bytes
+    kubepivot_informer_last_resync_timestamp_seconds
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+config
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ControllerConfig.MetricsPort int (NEW, default 9090)
+  configs/system.yaml: metricsPort: 9090
+  deployment.yaml: controller container port 9090/metrics
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/controller/controller.go             +startMetricsServer(); imports
+  internal/controller/global.go                  +informerPool.RegisterMetrics()
+  internal/config/config.go                      +MetricsPort; defaults 9090
+  configs/system.yaml                            +metricsPort: 9090
+  internal/controller_installer/templates/
+    deployment.yaml                              controller port 9090/metrics
+  go.mod / go.sum                                tidy
+  FORGET.md                                      #6 ✅ done
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/metrics HTTP server 启动，16 个 prometheus 指标就位，
+controller :9090 可观测，P0 #6 归零。

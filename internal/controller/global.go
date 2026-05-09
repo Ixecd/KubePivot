@@ -15,6 +15,8 @@ import (
 	"github.com/Ixecd/kubepivot/internal/executor"
 	"github.com/Ixecd/kubepivot/internal/scheduler"
 	"github.com/Ixecd/kubepivot/internal/sharding"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // StartGlobal 启动 global 模式 controller（v2.5.0+ 分片版）
@@ -207,6 +209,11 @@ func StartGlobal(ctx context.Context) {
 	informerPool.Start(ctx, "nodes", "v1")
 	if nodeInformer := informerPool.Get("nodes"); nodeInformer != nil {
 		eventstream.NewNodeCacheBridge(nodeInformer, nodeCache)
+	}
+
+	// v3.3: 注册 informer metrics 到 prometheus DefaultRegisterer
+	if err := informerPool.RegisterMetrics(prometheus.DefaultRegisterer); err != nil {
+		slog.Warn("informer metrics 注册失败 (non-fatal)", "err", err)
 	}
 
 	// InformerAdapter：优先读 PodCache/NodeCache，cache 未就绪降级到 kubectlAdapter
