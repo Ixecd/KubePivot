@@ -1,0 +1,43 @@
+feat(sharding): lease rebalance — yield excess shard when over quota
+
+v3.4: reconcileShards Phase 2.5 — 持有数 > quota 时主动释放多余 shard。
+4:4:2 不均 → 其他 pod 下轮 scan 抢占, 负载趋向 3:3:4。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+机制
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  reconcileShards:
+    Phase 1:   续约已持有
+    Phase 2:   抢占新 shard (currentSize < quota)
+    Phase 2.5: rebalance — if currentSize > quota: yield one ← NEW
+    Phase 3:   通知 OnShardChanged
+
+  yield 策略:
+    选择列表末尾 shard 释放（jump hash 均匀, 各 shard 命名空间数接近）
+    kubectl delete lease → Remove from ShardSet
+    Phase 3 diff 含 yielded shard → OnShardChanged → ForceResyncAll
+
+  释放失败 non-fatal: 下轮 reconcile 再试
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DRY: releaseShard
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  +releaseShard(ctx, shardIdx): 删除单个 lease
+  ReleaseAll() 复用 releaseShard (DRY)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/sharding/multi_lease.go     +releaseShard();
+                                        Phase 2.5 rebalance;
+                                        ReleaseAll 复用 DRY
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+rebalance 主动 yield 多余 shard, 4:4:2 → 趋向 3:3:4,
+P0 #2 全部归零。

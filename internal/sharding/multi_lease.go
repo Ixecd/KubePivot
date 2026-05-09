@@ -130,6 +130,20 @@ func (m *MultiLeaseManager) Run(ctx context.Context) {
 	}
 }
 
+// releaseShard 删除单个 shard lease。
+func (m *MultiLeaseManager) releaseShard(ctx context.Context, shardIdx int) {
+	leaseName := m.leaseName(shardIdx)
+	exec := executor.GetExecutor()
+	_, err := exec.Kubectl(ctx, m.kubeconfig,
+		"delete", "lease", leaseName,
+		"-n", m.namespace,
+		"--ignore-not-found",
+	)
+	if err != nil {
+		slog.Warn("释放 shard lease 失败 (non-fatal)", "shard", shardIdx, "err", err)
+	}
+}
+
 // ReleaseAll 主动删除本 pod 持有的所有 shard lease。
 //
 // v3.4: lease handoff 预通知。pod 收到 SIGTERM 后 ctx 取消，
@@ -148,20 +162,9 @@ func (m *MultiLeaseManager) ReleaseAll() {
 	bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	exec := executor.GetExecutor()
 	for _, shardIdx := range held {
-		leaseName := m.leaseName(shardIdx)
-		out, err := exec.Kubectl(bgCtx, m.kubeconfig,
-			"delete", "lease", leaseName,
-			"-n", m.namespace,
-			"--ignore-not-found",
-		)
-		if err != nil {
-			slog.Warn("释放 shard lease 失败 (non-fatal)", "shard", shardIdx, "err", err)
-		} else {
-			slog.Info("已释放 shard lease", "shard", shardIdx, "lease", leaseName)
-		}
-		_ = out
+		m.releaseShard(bgCtx, shardIdx)
+		slog.Info("已释放 shard lease", "shard", shardIdx)
 	}
 }
 
@@ -212,6 +215,18 @@ func (m *MultiLeaseManager) reconcileShards(ctx context.Context) {
 			m.shards.Add(shardIdx)
 			currentSize++
 		}
+	}
+
+	// Phase 2.5 (v3.4): rebalance — 如果持有数 > quota，主动释放一个 shard
+	// 让其他 pod 在下一轮 scan 抢占，均摊负载。
+	currentSize = m.shards.Size()
+	if currentSize > m.quota {
+		held := m.shards.List()
+		yield := held[len(held)-1] // yield last shard (jump hash uniform)
+		slog.Info("⚖️ rebalance: 释放多余 shard",
+			"yield", yield, "held", currentSize, "quota", m.quota)
+		m.releaseShard(ctx, yield)
+		m.shards.Remove(yield)
 	}
 
 	// Phase 3：通知调用方 shard 变化
