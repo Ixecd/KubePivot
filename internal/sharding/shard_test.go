@@ -1,6 +1,7 @@
 package sharding
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 )
@@ -10,9 +11,31 @@ import (
 func TestShardOf_Stable(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		if got := ShardOf("kp-auth-service", 10); got != ShardOf("kp-auth-service", 10) {
-			t.Fatalf("FNV 应稳定，第 %d 次结果不同", i)
+			t.Fatalf("jump hash 应稳定，第 %d 次结果不同", i)
 		}
 	}
+}
+
+// TestJumpHash_SequentialNames v3.3: 验证 jump hash 在连续短名场景（FNV 弱项）的均匀性。
+// kp-bench-001..050 等连续命名在 FNV % N 下有 ±40% 不均（<5 shard 被命中），
+// jump hash 应命中 ≥7 shard（10 个中）。
+func TestJumpHash_SequentialNames(t *testing.T) {
+	const N = 10
+	dist := make(map[int]int)
+	for i := 0; i < 50; i++ {
+		ns := fmt.Sprintf("kp-bench-%03d", i+1)
+		dist[ShardOf(ns, N)]++
+	}
+	if len(dist) < 7 {
+		t.Errorf("50 个连续短名仅命中 %d 个 shard，jump hash 应 ≥7: %v", len(dist), dist)
+	}
+	// 无单个 shard 超过 3x 理想值（5*3=15）
+	for shard, count := range dist {
+		if count > 15 {
+			t.Errorf("shard %d count=%d，严重偏斜", shard, count)
+		}
+	}
+	t.Logf("50 连续短名分布 (jump hash, %d/10 shard 命中): %v", len(dist), dist)
 }
 
 func TestShardOf_DistributesEvenly(t *testing.T) {

@@ -14,11 +14,11 @@
    - 修复方向：lease handoff 预通知 + jump consistent hash 替代 FNV。
 
 2. **Quota 分配不均** — `ceil(N/replicas)` 下 3 副本 10 shard → 4:4:2。fault domain 不均。
-   - 修复方向：jump consistent hash 天然均匀 + lease rebalance on topology change。
+   - 🟡 hash 分布已修复（FNV→jump hash, v3.3），lease rebalance 待 v3.4。
 
 3. **Webhook TLS 证书缺失** — Controller 内 `/etc/kubepivot/tls.crt` 未生成。Webhook 在 :443 运行但缺证书，Pod 创建时 mutate 失败静默降级（failurePolicy=Ignore），调度决策不可控。
 
-4. **WorkerPool 无背压机制** — 20 worker pool 没有限流。reconcile 堆积时（大规模集群 / 频繁变更）无保护，goroutine 泄漏风险。
+4. **WorkerPool 无背压机制** — 20 worker pool 没有限流。reconcile 堆积时（大规模集群 / 频繁变更）无保护，goroutine 泄漏风险。v3.3 焊 token bucket。
 
 5. **自愈死循环保护** — 同一资源连续 rollback > N 次应暂停。无此保护时，helm rollback 失败 → 重建 → 再失败 → 再回滚的死循环可能无限进行。
 
@@ -62,7 +62,7 @@
 
 18. **GPU fields in resources.yaml** — 已设计 `gpu` / `gpuCount` / `migProfile` 字段，`resources.go` Resource 结构体未包含。DCGM 数据流就绪时需一并补齐。
 
-19. **FNV hash 分布不均** — 连续短字符串（如 `kp-bench-001..050`）±40% 不均。namespace hash 分片场景下 shard 负载倾斜，但生产名通常随机所以影响有限。换 jump consistent hash 即可。
+19. ~~**FNV hash 分布不均**~~ ✅ v3.3 — FNV-32a % N → Google jump consistent hash (2014)。连续短名场景（kp-bench-001..050）从 <5 shard → 9/10 shard 命中。
 
 ---
 

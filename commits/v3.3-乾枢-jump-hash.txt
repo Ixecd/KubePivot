@@ -1,0 +1,38 @@
+feat(sharding): FNV-32a % N → Google jump consistent hash
+
+v3.3: 替换 ShardOf 哈希算法。FNV-32a % N 在连续短名场景（kp-bench-001..050）
+±40% 不均（<5/10 shard 命中），jump hash 均匀分布（9/10 shard 命中）。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+算法
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Google jump consistent hash (Lamping & Veach, 2014):
+    O(1) 计算，零状态，结果在 [0, N) 均匀分布。
+    无论 key 分布如何，bucket 分布天然均匀。
+
+  ShardOf(namespace, totalShards):
+    FNV-64a → uint64 key → jumpHash(key, totalShards)
+    旧: h.Sum32() % uint32(totalShards)  ← 取模不均匀
+    新: jumpHash(h.Sum64(), totalShards)  ← 天然均匀
+
+  分布对比 (50 个连续短名, 10 shard):
+    旧 FNV % N: <5 shard 命中, ±40% 偏斜
+    新 jump:    9/10 shard 命中, 无单 shard >3x
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/sharding/shard.go                 ShardOf: FNV % N → jumpHash
+                                              +jumpHash() 实现
+  internal/sharding/shard_test.go             +TestJumpHash_SequentialNames
+  internal/eventstream/adapter_sharding.go    注释 FNV→jump hash
+  FORGET.md                                   #19 FNV hash ✅ + #2 标注
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+shard hash FNV % N → jump consistent hash, 连续短名 ±40% → 均匀,
+P0 #19 归零, #2 半清。

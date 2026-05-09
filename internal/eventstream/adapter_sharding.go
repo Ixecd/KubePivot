@@ -77,7 +77,7 @@ func NewShardSetAdapter(inner *sharding.ShardSet, totalShards int) ShardSet {
 // Owns 判定指定 namespace 是否归属本 pod 的 shard。
 //
 // 实现：直接调用 v2.5 的 OwnsNamespace。
-// hash 算法（FNV-1a 32-bit）由 v2.5 提供，本适配器不重复计算。
+// hash 算法（jump consistent hash, v3.3）由 v2.5 提供，本适配器不重复计算。
 //
 // 性能：sharding.ShardSet.OwnsNamespace 持有 RWMutex 读锁
 //       高频调用（每个事件一次）通常不是瓶颈
