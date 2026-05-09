@@ -17,6 +17,7 @@ import (
 
 	"github.com/Ixecd/kubepivot/internal/etcdmanager"
 	"github.com/Ixecd/kubepivot/internal/executor"
+	"github.com/Ixecd/kubepivot/internal/scheduler"
 )
 
 //go:embed templates/*.yaml
@@ -70,6 +71,11 @@ func (i *Installer) Install(ctx context.Context) error {
 		return fmt.Errorf("生成 etcd CA 证书失败: %w", err)
 	}
 
+	// 5. 生成 Webhook TLS 自签证书 → 写入 Secret
+	if err := i.ensureWebhookTLSSecret(ctx); err != nil {
+		return fmt.Errorf("生成 Webhook TLS 证书失败: %w", err)
+	}
+
 	return nil
 }
 
@@ -77,6 +83,29 @@ func (i *Installer) Install(ctx context.Context) error {
 // 所有 etcd Pod 启动时只读此 Secret，不需要写权限。
 func (i *Installer) ensureCertsSecret(ctx context.Context) error {
 	return etcdmanager.CreateCertsSecret(ctx, etcdmanager.DefaultCertConfig(), i.cfg.Namespace, false)
+}
+
+// ensureWebhookTLSSecret Controller 安装时预生成 Webhook TLS 自签证书并写入 Secret。
+// v3.3: 修复 P0#3 — Webhook 在 :443 运行但缺 TLS 证书，修复前静默降级（failurePolicy=Ignore）。
+func (i *Installer) ensureWebhookTLSSecret(ctx context.Context) error {
+	certPEM, keyPEM, _, err := scheduler.GenerateSelfSignedCert(i.cfg.Namespace)
+	if err != nil {
+		return fmt.Errorf("generate self-signed cert: %w", err)
+	}
+
+	yaml, err := scheduler.GenerateCertSecretYAML(certPEM, keyPEM, i.cfg.Namespace)
+	if err != nil {
+		return fmt.Errorf("generate secret yaml: %w", err)
+	}
+
+	// kubectl apply with stdin pipe
+	exec := executor.GetExecutor()
+	cmd := exec.CmdKubectl(ctx, i.cfg.Kubeconfig, "apply", "-f", "-")
+	cmd.Stdin = strings.NewReader(yaml)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("apply webhook tls secret: %w\n%s", err, string(out))
+	}
+	return nil
 }
 
 // Uninstall 卸载全局 controller

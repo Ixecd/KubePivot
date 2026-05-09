@@ -191,12 +191,18 @@ spec:
             - name: config
               mountPath: /etc/kp
               readOnly: true
+            - name: webhook-tls
+              mountPath: /etc/kubepivot
+              readOnly: true
             - name: tmp
               mountPath: /tmp
       volumes:
         - name: config
           configMap:
             name: kp-system-config
+        - name: webhook-tls
+          secret:
+            secretName: kubepivot-webhook-tls
         - name: tmp
           emptyDir:
             medium: Memory

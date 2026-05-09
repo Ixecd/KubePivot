@@ -16,7 +16,7 @@
 2. **Quota 分配不均** — `ceil(N/replicas)` 下 3 副本 10 shard → 4:4:2。fault domain 不均。
    - 🟡 hash 分布已修复（FNV→jump hash, v3.3），lease rebalance 待 v3.4。
 
-3. **Webhook TLS 证书缺失** — Controller 内 `/etc/kubepivot/tls.crt` 未生成。Webhook 在 :443 运行但缺证书，Pod 创建时 mutate 失败静默降级（failurePolicy=Ignore），调度决策不可控。
+3. ~~**Webhook TLS 证书缺失**~~ ✅ v3.3 — installer 自动生成自签证书写入 Secret，deployment volume mount 挂载 `/etc/kubepivot`。
 
 4. ~~**WorkerPool 无背压机制**~~ ✅ v3.3 — token bucket (10 tokens/sec) 入队限流，config 可配 (workerPoolRateLimit=0 关闭)。
 

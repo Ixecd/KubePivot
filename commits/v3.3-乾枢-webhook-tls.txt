@@ -1,0 +1,60 @@
+feat(scheduler): webhook TLS cert auto-generation on install
+
+v3.3: P0#3 修复。controller install 时自动生成自签 TLS 证书写入 Secret，
+deployment volume mount 挂载到 /etc/kubepivot。Webhook 从静默降级变为正常 HTTPS。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+install 流程
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  controller_installer.Install():
+    1. 读取 embed 模板 → 变量替换
+    2. kubectl apply (deployment/rbac/namespace)
+    3. ensureCertsSecret()      — etcd CA 证书
+    4. ensureWebhookTLSSecret() — Webhook TLS 证书  ← NEW
+
+  ensureWebhookTLSSecret():
+    GenerateSelfSignedCert(ns) → certPEM, keyPEM, caPEM
+    GenerateCertSecretYAML()   → Secret YAML
+    kubectl apply -f -         → Secret kubepivot-webhook-tls
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+deployment.yaml
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  controller container:
+    + volumeMount: webhook-tls → /etc/kubepivot (readOnly)
+
+  volumes:
+    + name: webhook-tls, secretName: kubepivot-webhook-tls
+
+  Webhook 启动路径 (global.go, 不变):
+    certFile: /etc/kubepivot/tls.crt
+    keyFile:  /etc/kubepivot/tls.key
+    ListenAndServeTLS(:443, tls.crt, tls.key)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+cert.go 增强
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  GenerateSelfSignedCert(serviceNamespace...):
+    变参向后兼容（不传默认 kubepivot-system）
+    SAN DNS: localhost + kubepivot-webhook + <ns> + <ns>.svc + <ns>.svc.cluster.local
+    SAN IP: 127.0.0.1
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/scheduler/cert.go                    GenerateSelfSignedCert 变参+NS指定
+  internal/controller_installer/installer.go     +ensureWebhookTLSSecret()
+  internal/controller_installer/templates/
+    deployment.yaml                              +webhook-tls volume+mount
+  FORGET.md                                      #3 ✅ done
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+install 自动生成 Webhook TLS 自签证书→Secret→volume mount，
+Webhook :443 HTTPS 正常启动，P0 #3 归零。
