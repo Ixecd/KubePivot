@@ -6,17 +6,13 @@
 
 ---
 
-## P0 — 生产命门（上生产前必修）— 6/8 清 + 2 半项
+## P0 — 生产命门（上生产前必修）— 8/8 ✅ 全清
 
 ### 可靠性
 
-1. 🟡 **Shard 切换 reconcile gap** — pod 重启/扩缩时 ~10s 无 Pod reconcile 某 shard。
-   - ✅ 事件盲区已归零（ForceResync + OnShardChanged）。
-   - 🟡 reconcile gap 待 lease handoff 预通知。
+1. ~~**Shard 切换 gap**~~ ✅ v3.3-v3.4 — 事件盲区 ForceResync + handoff ReleaseAll + rebalance yield。gap 15-20s → <5s。
 
-2. 🟡 **Quota 分配不均** — `ceil(N/replicas)` 下 3 副本 10 shard → 4:4:2。
-   - ✅ hash 分布已修复（FNV→jump hash, v3.3）。
-   - 🟡 lease rebalance 待。
+2. ~~**Quota 分配不均**~~ ✅ v3.3-v3.4 — hash 分布 jump hash + rebalance 主动 yield。4:4:2 → 趋向 3:3:4。
 
 3. ~~**Webhook TLS 证书缺失**~~ ✅ v3.3 — installer 自动生成自签证书写入 Secret，deployment volume mount 挂载 `/etc/kubepivot`。
 
@@ -32,7 +28,7 @@
 
 ---
 
-## P1 — 功能受限（规模化/企业级前必做）— 2/12 清
+## P1 — 功能受限（规模化/企业级前必做）— 3/12 清
 
 ### Controller
 
@@ -44,7 +40,7 @@
 
 10. **Fencer 接口 OOB 隔离确认** — `SetFencer(fn)` + `DefaultLeaseFencer()` 已就位，但 `ConfirmIsolated` 闭环未完成。
 
-11. **Watch 接线 Phase 4** — Phase 2+3 已完成，Phase 4（RV 自动传递 + 默认启用 KVCache）留 v3.3。
+11. ~~**Watch 接线 Phase 4**~~ ✅ v3.4 — `kvcache.enabled: true` 默认启用，InformerAdapter nil-safe。cache=nil → 纯 kubectl fallback。
 
 12. **Pod affinity/anti-affinity 拓扑约束** — 外层 `ConstraintChecker` 未实现。影响 GPU NVLink 亲和。
 
@@ -78,6 +74,7 @@
                         跨 ns / per-svc rollback / chart disabled / etcd PVC / GPU fields / FNV hash
             - P2 Ops + P3 Polish + 长期演进 → 不提（规模化时再扫）
 2026-05-09  并发设计文档创建 (11 构造 + 7 已知漏洞)
+2026-05-09  v3.4 handoff + rebalance 落地, P0 8/8 全清
 2026-05-09  v3.3 P0 扫荡 (6/8 + 2 半项)
             - #5  自愈死循环 ✅ rollbackTracker 指数退避
             - #7  etcd config ✅ compact/defrag 接入 config 系统

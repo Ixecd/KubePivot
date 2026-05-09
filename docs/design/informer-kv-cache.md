@@ -395,13 +395,16 @@ v2.7 Day 1 benchmark 已经证明了这件事——自建 Informer 在 Cache Get
 ### Phase 3: InformerAdapter + 切换
 
 - `internal/scheduler/informer_adapter.go`
-- feature flag：`KUBEPIVOT_USE_INFORMER_CACHE=true`
-- `false` 时走 kubectlAdapter（回退路径）
+- feature flag：`KUBEPIVOT_USE_INFORMER_CACHE=true` → v3.4 废弃
+- `false` 时走 kubectlAdapter（回退路径） → v3.4: config `kvcache.enabled: false`
 
-### Phase 4: 默认启用
+### Phase 4: 默认启用 ✅ v3.4
 
-- Informer KV 在生产环境跑过 N 周无 issues → 切默认 `true`
-- kubectlAdapter 保留作为 fallback，但不推荐
+- ~~Informer KV 在生产环境跑过 N 周无 issues → 切默认 `true`~~
+- v3.4: `kvcache.enabled: true` (config.system.yaml 默认)，KVCache 默认主路径
+- kubectlAdapter 保留作为 cache 未就绪时的 fallback
+- `kvcache.enabled: false` → 纯 kubectl 路径（podCache/nodeCache = nil）
+- InformerAdapter nil-safe：cache=nil → 直接走 fallback
 
 ## 八、可观测性指标
 

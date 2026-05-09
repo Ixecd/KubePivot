@@ -195,28 +195,37 @@ func StartGlobal(ctx context.Context) {
 		runVerifiedTrafficWriter(ctx, gs, shardMgr, totalShards, kubeconfig)
 	}()
 
-	// ── v3.2 KVCache 接线：创建 PodCache/NodeCache + Pod Informer + PodCacheBridge ──
-	podCache := eventstream.NewPodCache()
-	nodeCache := eventstream.NewNodeCache()
-	kubeAdapter := scheduler.NewKubectlAdapter(kubeconfig) // 保留为 fallback
+	// ── v3.4 Phase 4: KVCache 默认启用 ──
+	// config.system.yaml kvcache.enabled=false 可降级到纯 kubectl 路径。
+	var podCache *eventstream.PodCache
+	var nodeCache *eventstream.NodeCache
+	kubeAdapter := scheduler.NewKubectlAdapter(kubeconfig)
 
-	// Pod Informer → PodCacheBridge → PodCache 自动填充
-	informerPool.Start(ctx, "pods", "v1")
-	if podInformer := informerPool.Get("pods"); podInformer != nil {
-		eventstream.NewPodCacheBridge(podInformer, podCache)
-	}
-	// Node Informer → NodeCacheBridge → NodeCache 自动填充
-	informerPool.Start(ctx, "nodes", "v1")
-	if nodeInformer := informerPool.Get("nodes"); nodeInformer != nil {
-		eventstream.NewNodeCacheBridge(nodeInformer, nodeCache)
-	}
+	if cfg.KVCache.Enabled {
+		podCache = eventstream.NewPodCache()
+		nodeCache = eventstream.NewNodeCache()
 
-	// v3.3: 注册 informer metrics 到 prometheus DefaultRegisterer
-	if err := informerPool.RegisterMetrics(prometheus.DefaultRegisterer); err != nil {
-		slog.Warn("informer metrics 注册失败 (non-fatal)", "err", err)
+		// Pod Informer → PodCacheBridge → PodCache 自动填充
+		informerPool.Start(ctx, "pods", "v1")
+		if podInformer := informerPool.Get("pods"); podInformer != nil {
+			eventstream.NewPodCacheBridge(podInformer, podCache)
+		}
+		// Node Informer → NodeCacheBridge → NodeCache 自动填充
+		informerPool.Start(ctx, "nodes", "v1")
+		if nodeInformer := informerPool.Get("nodes"); nodeInformer != nil {
+			eventstream.NewNodeCacheBridge(nodeInformer, nodeCache)
+		}
+
+		// v3.3: 注册 informer metrics 到 prometheus DefaultRegisterer
+		if err := informerPool.RegisterMetrics(prometheus.DefaultRegisterer); err != nil {
+			slog.Warn("informer metrics 注册失败 (non-fatal)", "err", err)
+		}
+
+		slog.Info("📡 KVCache 已启用 (Phase 4 默认)", "merge_threshold", cfg.KVCache.MergeThreshold)
 	}
 
 	// InformerAdapter：优先读 PodCache/NodeCache，cache 未就绪降级到 kubectlAdapter
+	// v3.4: KVCache disabled 时 fallback 到纯 kubectl 路径
 	adapter := scheduler.NewInformerAdapter(podCache, nodeCache, kubeAdapter)
 
 	// ── 初始化乾枢调度器（Webhook 实时分配，优先走 KVCache）──

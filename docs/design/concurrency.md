@@ -643,5 +643,9 @@ Q4: 为什么 token bucket 不用 rate.Limiter？
             已知漏洞 + 设计 Q。
 2026-05-09  #1 WorkerPool 后置代币 (channel-first, token-after)。
             channelDropped 独立计数器, 令牌不白花。
+2026-05-09  #7 handoff ReleaseAll + rebalance Phase 2.5 yield。
+            P0 8/8 全清。
+2026-05-09  Phase 4 KVCache 默认启用。config kvcache.enabled=true,
+            InformerAdapter nil-safe (cache=nil → kubectl fallback)。
             共同作者: qc + DeepSeek
 ```

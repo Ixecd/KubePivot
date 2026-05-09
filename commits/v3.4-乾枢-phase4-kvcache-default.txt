@@ -1,0 +1,39 @@
+feat(kvcache): Phase 4 — KVCache default enabled, kubectl fallback
+
+v3.4: kvcache.enabled: true (config.system.yaml). InformerAdapter nil-safe,
+cache=nil 直接走 kubectl fallback。Phase 2+3 投资变现。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+config
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  KVCacheConfig.Enabled bool (NEW, default true)
+  configs/system.yaml: kvcache.enabled: true
+
+  enabled=true  → PodCache+NodeCache + Informer + CacheBridge (主路径)
+  enabled=false → podCache/nodeCache=nil, InformerAdapter → kubectl fallback
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+InformerAdapter nil-safe
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ListAllPods:  podCache != nil && IsReady() → cache; else → fallback
+  ListAllNodes: nodeCache != nil && IsReady() → cache; else → fallback
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/config/config.go                  +KVCacheConfig.Enabled; defaults true
+  configs/system.yaml                        +kvcache.enabled: true
+  internal/controller/global.go              cfg.KVCache.Enabled gate;
+                                              enabled=false → skip informer setup
+  internal/scheduler/informer_adapter.go     nil-safe cache check
+  docs/design/informer-kv-cache.md           Phase 4 ✅
+  FORGET.md                                  #11 ✅ done
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+KVCache 默认启用，Phase 2+3 三周投资变现，P1 #11 归零。

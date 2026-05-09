@@ -3,7 +3,8 @@
 // InformerAdapter 实现 PodLister 和 NodeLister 接口，
 // 从 eventstream PodCache/NodeCache 读取数据，替代 kubectlAdapter 的 kubectl 调用。
 //
-// 影子降级：cache.IsReady() == false 时透传到 kubectlAdapter。
+// 影子降级：cache == nil 或 cache.IsReady() == false 时透传到 kubectlAdapter。
+// v3.4: KVCache disabled (config) → cache=nil → 纯 kubectl 路径。
 
 package scheduler
 
@@ -53,9 +54,10 @@ func (a *InformerAdapter) allowFallback() bool {
 	return true
 }
 
-// ListAllPods 从缓存读取 Pod 列表。缓存未就绪时降级到 kubectl。
+// ListAllPods 从缓存读取 Pod 列表。缓存未就绪或未启用时降级到 kubectl。
+// v3.4: podCache=nil (KVCache disabled) → 直接走 fallback。
 func (a *InformerAdapter) ListAllPods(ctx context.Context) ([]*PodInfo, error) {
-	if a.podCache.IsReady() {
+	if a.podCache != nil && a.podCache.IsReady() {
 		entries := a.podCache.ListAll()
 		return convertPodEntries(entries), nil
 	}
@@ -65,9 +67,9 @@ func (a *InformerAdapter) ListAllPods(ctx context.Context) ([]*PodInfo, error) {
 	return nil, ErrCacheNotReady
 }
 
-// ListAllNodes 从缓存读取 Node 列表。缓存未就绪时降级到 kubectl。
+// ListAllNodes 从缓存读取 Node 列表。缓存未就绪或未启用时降级到 kubectl。
 func (a *InformerAdapter) ListAllNodes(ctx context.Context) ([]*NodeInfo, error) {
-	if a.nodeCache.IsReady() {
+	if a.nodeCache != nil && a.nodeCache.IsReady() {
 		entries := a.nodeCache.ListAll()
 		return convertNodeEntries(entries), nil
 	}

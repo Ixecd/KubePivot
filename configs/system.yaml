@@ -65,6 +65,8 @@ migration:
   maxRetries: 3
 
 kvcache:
+  # Phase 4: KVCache 默认启用，false=降级到 kubectlAdapter
+  enabled: true
   # delta map 大小阈值（超过此值触发异步 CoW flush）
   mergeThreshold: 200
   # ShardedPodCache 分片数（power-of-2, 16=4 goroutine/shard @64并发）

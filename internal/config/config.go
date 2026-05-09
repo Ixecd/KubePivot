@@ -58,6 +58,7 @@ type MigrationConfig struct {
 	MaxRetries       int           `json:"maxRetries" yaml:"maxRetries"`
 }
 type KVCacheConfig struct {
+	Enabled              bool          `json:"enabled" yaml:"enabled"`
 	MergeThreshold       int           `json:"mergeThreshold" yaml:"mergeThreshold"`
 	ShardCount           int           `json:"shardCount" yaml:"shardCount"`
 	StaleWatchdogMaxStale time.Duration `json:"staleWatchdogMaxStale" yaml:"staleWatchdogMaxStale"`
@@ -102,7 +103,8 @@ func defaults() SystemConfig {
 			PausedBackoff: 30 * time.Second, MaxRetries: 3,
 		},
 		KVCache: KVCacheConfig{
-			MergeThreshold: 200, ShardCount: 16, StaleWatchdogMaxStale: 5 * time.Minute,
+			Enabled: true, MergeThreshold: 200, ShardCount: 16,
+			StaleWatchdogMaxStale: 5 * time.Minute,
 		},
 		Etcd: EtcdConfig{
 			CompactInterval: 1 * time.Hour, DefragInterval: 24 * time.Hour,
