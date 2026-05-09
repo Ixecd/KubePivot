@@ -108,7 +108,8 @@ type fakeInformer struct {
 }
 
 func (f *fakeInformer) Start(ctx context.Context) <-chan error { return nil }
-func (f *fakeInformer) Stop() {}
+func (f *fakeInformer) Stop()        {}
+func (f *fakeInformer) ForceResync() {}
 func (f *fakeInformer) Get(ns, name string) (*Resource, bool) { return nil, false }
 func (f *fakeInformer) List(ns string) []*Resource { return nil }
 func (f *fakeInformer) ListAll() []*Resource { return f.resources }

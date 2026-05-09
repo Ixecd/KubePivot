@@ -55,7 +55,8 @@ func (f *cacheBackedFakeInformer) ListAll() []*eventstream.Resource      { retur
 func (f *cacheBackedFakeInformer) Subscribe(_ eventstream.EventHandler) eventstream.Subscription {
 	return nil
 }
-func (f *cacheBackedFakeInformer) Stop() {}
+func (f *cacheBackedFakeInformer) ForceResync() {}
+func (f *cacheBackedFakeInformer) Stop()        {}
 func (f *cacheBackedFakeInformer) Stats() eventstream.InformerStats {
 	return eventstream.InformerStats{Resource: f.resource}
 }

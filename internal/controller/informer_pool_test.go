@@ -32,6 +32,7 @@ func (f *fakeInformer) Subscribe(_ eventstream.EventHandler) eventstream.Subscri
 	return nil
 }
 func (f *fakeInformer) Stop()                              { f.stopped = true }
+func (f *fakeInformer) ForceResync()                       {}
 func (f *fakeInformer) Stats() eventstream.InformerStats   { return eventstream.InformerStats{Resource: f.resource} }
 
 // withMockedNewInformer 替换 newInformerFunc 为返回成功 fakeInformer 的函数。

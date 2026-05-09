@@ -401,9 +401,9 @@ watch loop 是单 goroutine。如果 dispatch 阻塞，整个 watch 暂停——
 
 | # | 待办 | 优先级 | 版本 | 说明 |
 |---|------|--------|------|------|
-| 1 | WorkerPool 背压 | 中 | v3.4 | token bucket（10/s），满时上游暂停入队 |
-| 2 | Subscriber ack | 中 | v3.4 | inflight pop 后 upstream 确认，替换 drop |
-| 3 | ShardSet 回调 | 高 | v3.3 | adapter 接 OnShardChanged，force resync |
+| 1 | ShardSet 回调 | ✅ 高 | v3.3 | Informer.ForceResync() + InformerPool.ForceResyncAll() + global.go 接线 |
+| 2 | WorkerPool 背压 | 中 | v3.4 | token bucket（10/s），满时上游暂停入队 |
+| 3 | Subscriber ack | 中 | v3.4 | inflight pop 后 upstream 确认，替换 drop |
 | 4 | 混合队列 | 低 | v3.4+ | VIP ns 走 ReconcileQueue，散兵走 WorkerPool |
 | 5 | prom metrics | 中 | - | queue_depth / dropped_total / dirty_size → Grafana |
 
@@ -418,6 +418,7 @@ watch loop 是单 goroutine。如果 dispatch 阻塞，整个 watch 暂停——
 | ReconcileQueue | `TestWorkQueue_Dedup`, `TestWorkQueue_ProcessingDedup`, `TestWorkQueue_DoneRequeue` | - |
 | rollbackTracker | 间接：controller 测试全绿 | `TestRollbackTracker_Cooldown`, `TestRollbackTracker_Cleanup` |
 | delta buffer | `TestPodCache_MergeOnRead`, `TestPodCache_DeltaFlush` | - |
+| shard listener | controller + eventstream 测试全绿 (2026-05-09) | shard flip e2e |
 
 ---
 
@@ -425,5 +426,7 @@ watch loop 是单 goroutine。如果 dispatch 阻塞，整个 watch 暂停——
 
 ```
 2026-05-09  创建。覆盖三层队列 + 两条隐式路径 + rollbackTracker。
+2026-05-09  shard listener 落地。Informer.ForceResync() + ForceResyncAll() +
+            OnShardChanged 接线 + force_resync_total 指标 + 防御性 cancel。
             共同作者: qc + DeepSeek
 ```

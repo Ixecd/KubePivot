@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -81,6 +82,16 @@ type informerImpl struct {
 	// started 标记 Start 是否已被调用过
 	// 用于 Stop 判断"是否需要等 watch goroutine 退出"
 	started atomic.Bool
+
+	// forceResync 外部触发立即全量 relist（cap=1 合并多次触发）
+	forceResync chan struct{}
+
+	// forceResyncTotal 累计 force resync 触发次数（atomic）
+	forceResyncTotal atomic.Uint64
+
+	// watchCancel 当前 watch 的取消函数，ForceResync 用它中断长连接
+	watchCancel   context.CancelFunc
+	watchCancelMu sync.Mutex
 }
 
 // subscriberImpl 单个订阅句柄。
@@ -146,11 +157,12 @@ func NewInformer(ctx context.Context, opts InformerOptions) (Informer, error) {
 	opts.APIServerURL = k8sCfg.APIServerURL()
 
 	im := &informerImpl{
-		opts:       opts,
-		cache:      NewCache(),
-		stopCh:     make(chan struct{}),
-		doneCh:     make(chan struct{}),
-		httpClient: k8sCfg.HTTPClient(),
+		opts:         opts,
+		cache:        NewCache(),
+		stopCh:       make(chan struct{}),
+		doneCh:       make(chan struct{}),
+		forceResync:  make(chan struct{}, 1),
+		httpClient:   k8sCfg.HTTPClient(),
 	}
 
 	return im, nil
@@ -230,10 +242,11 @@ func (im *informerImpl) Subscribe(handler EventHandler) Subscription {
 // Stats 返回当前监控指标快照。
 func (im *informerImpl) Stats() InformerStats {
 	stats := InformerStats{
-		Resource:        im.opts.Resource,
-		EventsTotal:     im.eventsTotal.Load(),
-		WatchReconnects: im.watchReconnects.Load(),
-		EventsByType:    make(map[EventType]uint64),
+		Resource:         im.opts.Resource,
+		EventsTotal:      im.eventsTotal.Load(),
+		WatchReconnects:  im.watchReconnects.Load(),
+		ForceResyncTotal: im.forceResyncTotal.Load(),
+		EventsByType:     make(map[EventType]uint64),
 	}
 
 	cacheStats := im.cache.Stats()
@@ -263,6 +276,27 @@ func (im *informerImpl) Stats() InformerStats {
 	}
 
 	return stats
+}
+
+// ForceResync 触发立即全量 relist（中断当前 watch，relist，重启 watch）。
+//
+// 并发安全，可在任意 goroutine 调用。
+// 多次快速调用被合并（channel cap=1，重复发送 no-op）。
+func (im *informerImpl) ForceResync() {
+	im.forceResyncTotal.Add(1)
+
+	// 非阻塞发送，合并重复触发
+	select {
+	case im.forceResync <- struct{}{}:
+	default:
+	}
+
+	// 中断当前 watch，让 watch loop 感知到 forceResync 信号
+	im.watchCancelMu.Lock()
+	if im.watchCancel != nil {
+		im.watchCancel()
+	}
+	im.watchCancelMu.Unlock()
 }
 
 // Stop 停止 informer。
@@ -414,25 +448,52 @@ func (im *informerImpl) runWatchLoop(ctx context.Context) error {
 	}
 
 	for {
-		// 检查终止信号
+		// 检查终止信号 + forceResync
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-im.stopCh:
 			return nil
+		case <-im.forceResync:
+			// 防御性 cancel：确保当前 watch 已中断再 relist
+			// 避免竞速 — watch 可能在本 case 触发后、relist 前重新建立
+			im.watchCancelMu.Lock()
+			if im.watchCancel != nil {
+				im.watchCancel()
+			}
+			im.watchCancelMu.Unlock()
+
+			slog.Info("eventstream: force resync triggered",
+				"resource", im.opts.Resource)
+			im.setResourceVersion("")
+			if err := im.doInitialList(ctx); err != nil {
+				slog.Error("eventstream: force resync list failed",
+					"resource", im.opts.Resource, "err", err)
+			}
+			attempt = 0
+			continue
 		default:
 		}
 
-		// 发起 watch
-		err := im.doWatch(ctx)
+		// 用独立 cancel context 发起 watch，使 ForceResync 能中断长连接
+		watchCtx, watchCancel := context.WithCancel(ctx)
+		im.watchCancelMu.Lock()
+		im.watchCancel = watchCancel
+		im.watchCancelMu.Unlock()
 
-		// watch 退出原因分类
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-im.stopCh:
-			return nil
-		default:
+		err := im.doWatch(watchCtx)
+		watchCancel()
+
+		im.watchCancelMu.Lock()
+		im.watchCancel = nil
+		im.watchCancelMu.Unlock()
+
+		// ForceResync 触发的中断 → 跳过错误处理和退避，直接进入下一轮
+		if errors.Is(err, context.Canceled) {
+			// 可能是 forceResync 触发，也可能是 ctx parent 取消
+			// 前者由上方 forceResync select case 处理
+			// 后者由下一轮 ctx.Done() select case 处理
+			continue
 		}
 
 		// watch 退出（无论错误还是正常关流）都计入 reconnects
@@ -483,6 +544,17 @@ func (im *informerImpl) runWatchLoop(ctx context.Context) error {
 			im.setResourceVersion("")
 			if err := im.doInitialList(ctx); err != nil {
 				slog.Error("eventstream: resync list failed",
+					"resource", im.opts.Resource, "err", err)
+			}
+			attempt = 0
+		case <-im.forceResync:
+			// 退避期间收到 forceResync：立即 relist
+			// 此时无 active watch（在退避中），watchCancel 已 nil，无需 cancel
+			slog.Info("eventstream: force resync triggered (during backoff)",
+				"resource", im.opts.Resource)
+			im.setResourceVersion("")
+			if err := im.doInitialList(ctx); err != nil {
+				slog.Error("eventstream: force resync list failed",
 					"resource", im.opts.Resource, "err", err)
 			}
 			attempt = 0

@@ -1,0 +1,76 @@
+feat(eventstream): shard listener — ForceResync + OnShardChanged 接线，盲区归零
+
+v3.3 高优：shard 翻转时 informer 立即 force resync，不再依赖 30min 周期性兜底。
+Informer 接口加 ForceResync()，InformerPool 加 ForceResyncAll()，global.go 接线。
+防御性 cancel 竞速保护 + force_resync_total 指标。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ForceResync 机制
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Informer.ForceResync():
+    ├─ forceResyncTotal.Add(1)         计数器
+    ├─ forceResync <- {} (cap=1, non-blocking)  合并重复触发
+    └─ watchCancel()                   中断当前 HTTP watch 长连接
+
+  runWatchLoop 三处 forceResync 处理:
+    1. top-of-loop:    select { case <-forceResync: 防御性 cancel → relist → continue }
+    2. during backoff: select { case <-forceResync: relist → attempt=0 }
+    3. doWatch 返回后:  errors.Is(err, context.Canceled) → continue (跳过退避)
+
+  防御性 cancel (top-of-loop):
+    防止竞速 — forceResync 信号到达时 watch 可能在信号处理前重新建立
+    watchCancelMu.Lock() + if watchCancel != nil { watchCancel() }
+
+  InformerPool.ForceResyncAll():
+    RLock informers map → 遍历 informer.ForceResync()
+    无 informer 启动时 silent no-op
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+global.go 接线
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  OnShardChanged 回调内:
+    len(added) > 0 → informerPool.ForceResyncAll()
+    同步执行（非阻塞：channel send + context cancel），不依赖 2s 延迟 goroutine
+
+  触发链:
+    MultiLeaseManager.reconcileShards() → go callback(added, removed)
+      → OnShardChanged → ForceResyncAll() → 每个 informer.ForceResync()
+        → watchCancel() → runWatchLoop 中断 → forceResync select → relist
+
+  盲区: 30min resync ticker 兜底 → 0 (shard flip 后 <1s relist)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+指标
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  InformerStats.ForceResyncTotal uint64
+    ForceResync() 调用时 atomic.Add(1)
+    prom collector 下次注册时自动暴露 force_resync_total
+
+  log 侧:
+    "informer pool force resync all" count=N  (Loki grep)
+    "eventstream: force resync triggered" resource=X
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/eventstream/informer.go            接口 +ForceResync(); +ForceResyncTotal
+  internal/eventstream/informer_impl.go        struct +3 字段; ForceResync() 实现;
+                                               runWatchLoop 三处 forceResync 处理 + 防御性 cancel
+  internal/controller/informer_pool.go         +ForceResyncAll()
+  internal/controller/global.go               OnShardChanged 接线
+  internal/eventstream/pod_bridge_test.go      fake 补 ForceResync() stub
+  internal/eventstream/metrics_test.go         staticMock + dynamicMock 补 stub
+  internal/controller/informer_pool_test.go    fake 补 stub
+  internal/controller/informer_detector_test.go cacheBackedFake 补 stub
+  docs/design/message-queue-draft.md           待办表刷新 (shard listener done) + 编辑记录
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+shard listener 落地：Informer.ForceResync() 中断 watch + 立即 relist，
+OnShardChanged 接线盲区归零，16 包测试全绿零回归。

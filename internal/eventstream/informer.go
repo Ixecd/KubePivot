@@ -127,6 +127,15 @@ type Informer interface {
 	// Stats 返回监控指标。
 	Stats() InformerStats
 
+	// ForceResync 触发立即全量重同步（中断当前 watch，relist，重启 watch）。
+	//
+	// 用于 shard 变化等场景：新接管的 namespace 需要立即回填事件，
+	// 不等周期性 resync ticker。
+	//
+	// 并发安全，可在任意 goroutine 调用。
+	// 多次快速调用会被合并（最多触发一次 relist）。
+	ForceResync()
+
 	// Stop 停止 informer。
 	// 关闭所有订阅、停止 watch loop、清理 cache。
 	Stop()
@@ -224,6 +233,10 @@ type InformerStats struct {
 
 	// GoroutineCount 当前 informer 持有的 goroutine 数。
 	GoroutineCount int
+
+	// ForceResyncTotal 累计 force resync 触发次数。
+	// shard 变化时 ForceResyncAll() 触发，用于观测分片翻转频率。
+	ForceResyncTotal uint64
 
 	// MemoryBytes 估算内存占用。
 	MemoryBytes uint64

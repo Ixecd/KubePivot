@@ -117,6 +117,12 @@ func StartGlobal(ctx context.Context) {
 						"added_shards", added, "synced_projects", syncedCount)
 				}()
 			}
+
+			// v3.3: shard 接管后 force resync 所有 informer
+			// 回填新接管 namespace 在接管前遗漏的事件
+			if len(added) > 0 {
+				informerPool.ForceResyncAll()
+			}
 		},
 	})
 

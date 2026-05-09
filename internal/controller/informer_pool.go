@@ -171,6 +171,26 @@ func (p *InformerPool) StopAll() {
 	p.informers = make(map[string]eventstream.Informer)
 }
 
+// ForceResyncAll 对所有已启动 informer 触发立即全量 relist。
+//
+// 用于 shard 变化场景（本 pod 接管新 shard）：
+// 新接管的 namespace 事件回填，不等周期性 resync。
+//
+// 并发：RLock 读 informers map，各 informer.ForceResync 独立并发安全。
+// 无 informer 启动时 silent no-op。
+func (p *InformerPool) ForceResyncAll() {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if len(p.informers) == 0 {
+		return
+	}
+	slog.Info("informer pool force resync all", "count", len(p.informers))
+	for resource, informer := range p.informers {
+		informer.ForceResync()
+		_ = resource // resource 仅用于诊断，不在此处日志
+	}
+}
+
 // RegisterMetrics 注册所有 informer 到给定的 Prometheus registry。
 //
 // Step 2a-2 阶段调用方通常不调（HTTP server 未实施）。

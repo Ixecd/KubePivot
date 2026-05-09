@@ -30,6 +30,7 @@ func (m *staticMockInformer) Get(_, _ string) (*Resource, bool)     { panic("not
 func (m *staticMockInformer) List(_ string) []*Resource             { panic("not used") }
 func (m *staticMockInformer) ListAll() []*Resource                  { panic("not used") }
 func (m *staticMockInformer) Subscribe(_ EventHandler) Subscription { panic("not used") }
+func (m *staticMockInformer) ForceResync()                          { panic("not used") }
 func (m *staticMockInformer) Stop()                                 { panic("not used") }
 func (m *staticMockInformer) Stats() InformerStats                  { return m.stats }
 
@@ -55,6 +56,7 @@ func (m *dynamicMockInformer) Get(_, _ string) (*Resource, bool)     { panic("no
 func (m *dynamicMockInformer) List(_ string) []*Resource             { panic("not used") }
 func (m *dynamicMockInformer) ListAll() []*Resource                  { panic("not used") }
 func (m *dynamicMockInformer) Subscribe(_ EventHandler) Subscription { panic("not used") }
+func (m *dynamicMockInformer) ForceResync()                          { panic("not used") }
 func (m *dynamicMockInformer) Stop()                                 { panic("not used") }
 func (m *dynamicMockInformer) Stats() InformerStats {
 	if p := m.current.Load(); p != nil {
