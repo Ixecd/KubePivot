@@ -508,7 +508,7 @@ OwnsNamespace(ns, N):             Add/Remove:
 | 为什么 RWMutex？ | 高频 RLock | 每个 event 调一次 OwnsNamespace |
 | 为什么读锁粒度是整个 Owns？ | 简单 | ShardOf 是纯函数无锁，Owns 只 RLock ShardSet |
 
-### 2.11 MultiLeaseManager — 异步通知循环
+### 2.11 MultiLeaseManager — 异步通知循环 + handoff (v3.4)
 
 **位置**：`internal/sharding/multi_lease.go`
 
@@ -517,12 +517,19 @@ OwnsNamespace(ns, N):             Add/Remove:
 ```
 Run(ctx):
   for { select { case <-ticker: reconcileShards(ctx) } }
+  ↓ ctx.Done()
+  ReleaseAll()  ← v3.4: handoff 预通知
 
 reconcileShards:
   1. 续约已持有 shard (可能失去)
   2. 抢占新 shard (quota 允许)
   3. diff: added / removed
   4. if diff: go callback(added, removed)  // 异步通知
+
+ReleaseAll():
+  for each held shard:
+    kubectl delete lease <name> --ignore-not-found
+  失败不阻塞退出（lease 最终 TTL 过期）
 ```
 
 **设计决策**：
@@ -531,6 +538,11 @@ reconcileShards:
 |---|-----|------|
 | 为什么 callback 异步？ | 不阻塞 lease 循环 | callback 可能做 I/O(ForceResyncAll) |
 | 为什么 shards RWMutex？ | 高频读 OwnsNamespace | reconcile 路径每次事件查一次 |
+| v3.4 为什么 Run() 退出时 ReleaseAll？ | handoff 预通知 | shard gap 15-20s(TTL) → <5s(scan抢) |
+
+**已知漏洞**：
+
+- ~~shard gap~~ ✅ v3.4 — ReleaseAll handoff 预通知，gap <5s
 
 ---
 

@@ -1,0 +1,40 @@
+feat(sharding): lease handoff pre-notification on shutdown
+
+v3.4: MultiLeaseManager.Run() 退出时主动删除所有持有的 shard lease。
+shard gap 从 15-20s (TTL 过期) → <5s (下轮 scan 即抢)。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+机制
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  旧流程 (v3.3):
+    SIGTERM → ctx 取消 → Run() 退出 → lease 留着等 TTL 过期(15s)
+    → 其他 pod 下轮 scan(5s) 看到 lease 未过期 → 跳过
+    → TTL 过期后 → 下下轮 scan → 抢占
+    总 gap: 15-20s
+
+  新流程 (v3.4):
+    SIGTERM → ctx 取消 → Run() 退出
+    → ReleaseAll() 删全部 lease (kubectl delete --ignore-not-found)
+    → 其他 pod 下轮 scan(≤5s) 看到空 lease → 立即抢占
+    总 gap: <5s
+
+  ReleaseAll():
+    ShardSet.List() → for each: kubectl delete lease <name>
+    10s timeout 背景 context
+    删除失败 non-fatal (lease 最终 TTL 过期兜底)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/sharding/multi_lease.go     +ReleaseAll();
+                                        Run() ctx.Done() 后 auto-release
+  docs/design/concurrency.md            §2.11 handoff 更新
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+lease handoff 预通知，shard gap 15s → <5s，
+pod 退出瞬间释放，下游即抢。

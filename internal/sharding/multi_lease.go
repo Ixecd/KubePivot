@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Ixecd/kubepivot/internal/executor"
 )
 
 // MultiLeaseManager 管理 N 个分片 lease 的抢占 + 续约
@@ -119,10 +120,48 @@ func (m *MultiLeaseManager) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			slog.Info("🧩 MultiLeaseManager 退出", "identity", m.identity)
+			// v3.4: handoff 预通知 — 主动删除所有持有的 lease
+			// 缩短 shard gap 从 15-20s(TTL 过期) → <5s(下轮 scan 即抢)
+			m.ReleaseAll()
 			return
 		case <-ticker.C:
 			m.reconcileShards(ctx)
 		}
+	}
+}
+
+// ReleaseAll 主动删除本 pod 持有的所有 shard lease。
+//
+// v3.4: lease handoff 预通知。pod 收到 SIGTERM 后 ctx 取消，
+// Run() 退出前调用此方法，立即释放所有 shard。
+// 其他 pod 在下个 scan 周期（5s 内）看到空 lease 直接抢占，
+// shard gap 从 TTL 过期 15-20s → <5s。
+//
+// 删除失败不阻塞退出（lease 最终会 TTL 过期）。
+func (m *MultiLeaseManager) ReleaseAll() {
+	held := m.shards.List()
+	if len(held) == 0 {
+		return
+	}
+
+	slog.Info("🧩 释放所有 shard lease (handoff)", "shards", held, "identity", m.identity)
+	bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	exec := executor.GetExecutor()
+	for _, shardIdx := range held {
+		leaseName := m.leaseName(shardIdx)
+		out, err := exec.Kubectl(bgCtx, m.kubeconfig,
+			"delete", "lease", leaseName,
+			"-n", m.namespace,
+			"--ignore-not-found",
+		)
+		if err != nil {
+			slog.Warn("释放 shard lease 失败 (non-fatal)", "shard", shardIdx, "err", err)
+		} else {
+			slog.Info("已释放 shard lease", "shard", shardIdx, "lease", leaseName)
+		}
+		_ = out
 	}
 }
 
