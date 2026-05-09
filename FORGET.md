@@ -18,7 +18,7 @@
 
 3. **Webhook TLS 证书缺失** — Controller 内 `/etc/kubepivot/tls.crt` 未生成。Webhook 在 :443 运行但缺证书，Pod 创建时 mutate 失败静默降级（failurePolicy=Ignore），调度决策不可控。
 
-4. **WorkerPool 无背压机制** — 20 worker pool 没有限流。reconcile 堆积时（大规模集群 / 频繁变更）无保护，goroutine 泄漏风险。v3.3 焊 token bucket。
+4. ~~**WorkerPool 无背压机制**~~ ✅ v3.3 — token bucket (10 tokens/sec) 入队限流，config 可配 (workerPoolRateLimit=0 关闭)。
 
 5. **自愈死循环保护** — 同一资源连续 rollback > N 次应暂停。无此保护时，helm rollback 失败 → 重建 → 再失败 → 再回滚的死循环可能无限进行。
 

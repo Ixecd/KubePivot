@@ -15,7 +15,7 @@ func TestWorkerPool_BasicDispatch(t *testing.T) {
 		return nil
 	}
 
-	pool := NewWorkerPool(5, handler)
+	pool := NewWorkerPool(5, 0, handler)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go pool.Start(ctx)
@@ -58,7 +58,7 @@ func TestWorkerPool_RejectsProtectedNS(t *testing.T) {
 		atomic.AddInt32(&processed, 1)
 		return nil
 	}
-	pool := NewWorkerPool(2, handler)
+	pool := NewWorkerPool(2, 0, handler)
 
 	// 投递到黑名单 namespace
 	if ok := pool.Enqueue(ReconcileTask{
@@ -85,7 +85,7 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 		return nil
 	}
 
-	pool := NewWorkerPool(3, handler)
+	pool := NewWorkerPool(3, 0, handler)
 	ctx, cancel := context.WithCancel(context.Background())
 	go pool.Start(ctx)
 	defer cancel()
@@ -110,7 +110,7 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 
 func TestWorkerPool_SizeFromEnv(t *testing.T) {
 	t.Setenv("KUBEPIVOT_WORKER_POOL_SIZE", "7")
-	pool := NewWorkerPool(20, func(ctx context.Context, t ReconcileTask) error { return nil })
+	pool := NewWorkerPool(20, 0, func(ctx context.Context, t ReconcileTask) error { return nil })
 	if pool.size != 7 {
 		t.Errorf("pool.size = %d, want 7（env 应覆盖）", pool.size)
 	}
@@ -119,13 +119,13 @@ func TestWorkerPool_SizeFromEnv(t *testing.T) {
 func TestWorkerPool_SizeFallback(t *testing.T) {
 	// 无效的 env 值
 	t.Setenv("KUBEPIVOT_WORKER_POOL_SIZE", "not-a-number")
-	pool := NewWorkerPool(15, func(ctx context.Context, t ReconcileTask) error { return nil })
+	pool := NewWorkerPool(15, 0, func(ctx context.Context, t ReconcileTask) error { return nil })
 	if pool.size != 15 {
 		t.Errorf("pool.size = %d, want 15（无效 env 应降级到 defaultSize）", pool.size)
 	}
 
 	// 负数降级到 20
-	pool2 := NewWorkerPool(-1, func(ctx context.Context, t ReconcileTask) error { return nil })
+	pool2 := NewWorkerPool(-1, 0, func(ctx context.Context, t ReconcileTask) error { return nil })
 	if pool2.size != 20 {
 		t.Errorf("pool.size = %d, want 20（负值 defaultSize 应降级到 20）", pool2.size)
 	}

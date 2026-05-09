@@ -28,6 +28,7 @@ type ControllerConfig struct {
 	Shards                int           `json:"shards" yaml:"shards"`
 	Replicas              int           `json:"replicas" yaml:"replicas"`
 	WorkerPoolSize        int           `json:"workerPoolSize" yaml:"workerPoolSize"`
+	WorkerPoolRateLimit   float64       `json:"workerPoolRateLimit" yaml:"workerPoolRateLimit"`
 	TaskTimeout           time.Duration `json:"taskTimeout" yaml:"taskTimeout"`
 	ReconcileInterval     time.Duration `json:"reconcileInterval" yaml:"reconcileInterval"`
 	OrphanSweeperInterval time.Duration `json:"orphanSweeperInterval" yaml:"orphanSweeperInterval"`
@@ -81,9 +82,10 @@ type EtcdConfig struct {
 func defaults() SystemConfig {
 	return SystemConfig{
 		Controller: ControllerConfig{
-			Shards: 10, Replicas: 3, WorkerPoolSize: 20, TaskTimeout: 90 * time.Second,
-			ReconcileInterval: 8 * time.Second, OrphanSweeperInterval: 30 * time.Second,
-			DriftSyncInterval: 30 * time.Second, GracePeriod: 5 * time.Second,
+			Shards: 10, Replicas: 3, WorkerPoolSize: 20, WorkerPoolRateLimit: 10,
+			TaskTimeout: 90 * time.Second, ReconcileInterval: 8 * time.Second,
+			OrphanSweeperInterval: 30 * time.Second, DriftSyncInterval: 30 * time.Second,
+			GracePeriod: 5 * time.Second,
 			ProtectedNamespaces: []string{"kube-system", "kube-public", "kubepivot-system"},
 		},
 		Leader: LeaderConfig{

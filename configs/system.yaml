@@ -10,6 +10,8 @@ controller:
   replicas: 3
   # Worker Pool 并发 reconcile goroutine 数
   workerPoolSize: 20
+  # Worker Pool 入队速率限制（tokens/sec, 0=无限制）
+  workerPoolRateLimit: 10
   # 单个 reconcile task 最大执行时间
   taskTimeout: 90s
   # 周期性 reconcile 扫描间隔

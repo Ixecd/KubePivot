@@ -63,7 +63,7 @@ func StartGlobal(ctx context.Context) {
 	// v3.2: detector 复用——创建一次，所有 handleTask 共享
 	detector := NewInformerDetector(informerPool, NewKubectlDetector(kubeconfig))
 
-	pool := NewWorkerPool(cfg.Controller.WorkerPoolSize, func(taskCtx context.Context, task ReconcileTask) error {
+	pool := NewWorkerPool(cfg.Controller.WorkerPoolSize, cfg.Controller.WorkerPoolRateLimit, func(taskCtx context.Context, task ReconcileTask) error {
 		return handleTask(gs, kubeconfig, task, detector)
 	})
 

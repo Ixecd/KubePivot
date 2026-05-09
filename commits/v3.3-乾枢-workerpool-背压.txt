@@ -1,0 +1,71 @@
+feat(controller): WorkerPool token bucket 入队限流
+
+v3.3: WorkerPool 加令牌桶限流（默认 10 tokens/sec），防 reconcile 洪峰。
+config.system.yaml workerPoolRateLimit 可配，0=无限制。纯算法 0 外部依赖。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+token bucket 实现
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/controller/token_bucket.go (NEW):
+    0 外部依赖。令牌以固定速率补充，初始满桶。
+    allow() 返回 true=通过, false=限流拒绝。
+    rate <= 0 → 永远 true（无限流，向后兼容）。
+    并发安全: sync.Mutex。
+
+  算法:
+    tokens += elapsed * rate  (补充)
+    tokens = min(tokens, burst)
+    if tokens >= 1: tokens--; return true
+    else: return false
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WorkerPool 接线
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Enqueue() 入队流程:
+    Protected ns check → tokenBucket.allow() → channel send
+    限流拒绝: 计入 rateLimited, Warn 日志 "⏳ 令牌桶限流"
+
+  NewWorkerPool(defaultSize, rateLimit, handler):
+    rateLimit <= 0 → unlimited (向后兼容测试)
+    rateLimit > 0  → newTokenBucket(rateLimit)
+
+  Stats() 新增:
+    RateLimited() uint64  — 被限流丢弃的任务数
+
+  Start log:
+    "rate_limit" 字段附加到启动日志
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+config 系统
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ControllerConfig.WorkerPoolRateLimit float64 (NEW)
+    defaults: 10 (tokens/sec)
+    system.yaml: workerPoolRateLimit: 10
+
+  global.go:
+    NewWorkerPool(cfg.Controller.WorkerPoolSize, cfg.Controller.WorkerPoolRateLimit, handler)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/controller/token_bucket.go (NEW)      令牌桶实现
+  internal/controller/token_bucket_test.go (NEW)  4 单测 (无限/限流/补充/并发)
+  internal/controller/worker_pool.go              +rateLimiter 字段; Enqueue 限流;
+                                                   NewWorkerPool +rateLimit 参数;
+                                                   +RateLimited(); 启动日志
+  internal/controller/worker_pool_test.go         6 调用处 +rateLimit=0
+  internal/controller/global.go                  config.WorkerPoolRateLimit 传入
+  internal/config/config.go                      +WorkerPoolRateLimit 字段; defaults 10
+  configs/system.yaml                            +workerPoolRateLimit: 10
+  FORGET.md                                      #4 ✅ done
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WorkerPool token bucket (10/s) 入队限流，config 可配，
+reconcile 洪峰压不垮 kubectl，P0 #4 归零。

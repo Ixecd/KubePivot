@@ -39,6 +39,7 @@ type TaskHandler func(ctx context.Context, task ReconcileTask) error
 // 设计要点：
 //   - 固定大小（默认 20），避免 Leader 被大量并发 goroutine 压垮
 //   - channel buffer = poolSize × 4，允许短暂突发
+//   - token bucket 入队限流（默认 10/s），防止 reconcile 洪峰压垮 kubectl
 //   - 每个任务独立 ctx + timeout，单任务失败不影响其他
 //   - 优雅关闭：ctx.Done() → 停止接收新任务 → 等待 in-flight 任务完成
 type WorkerPool struct {
@@ -49,11 +50,15 @@ type WorkerPool struct {
 	// 任务执行超时
 	taskTimeout time.Duration
 
+	// v3.3: 令牌桶入队限流
+	rateLimiter *tokenBucket
+
 	// 观测
-	enqueued uint64
-	done     uint64
-	failed   uint64
-	mu       sync.Mutex
+	enqueued    uint64
+	rateLimited uint64 // 被限流丢弃的任务数
+	done        uint64
+	failed      uint64
+	mu          sync.Mutex
 
 	wg sync.WaitGroup
 }
@@ -64,7 +69,9 @@ type WorkerPool struct {
 //  1. KUBEPIVOT_WORKER_POOL_SIZE 环境变量（运行时覆盖）
 //  2. 传入的 defaultSize 参数
 //  3. 硬降级到 20（防止 0 或负值导致死锁）
-func NewWorkerPool(defaultSize int, handler TaskHandler) *WorkerPool {
+//
+// rateLimit: 入队速率限制 (tokens/sec), <=0 表示无限制。
+func NewWorkerPool(defaultSize int, rateLimit float64, handler TaskHandler) *WorkerPool {
 	size := defaultSize
 	if envSize := getenv("KUBEPIVOT_WORKER_POOL_SIZE", ""); envSize != "" {
 		if n, err := strconv.Atoi(envSize); err == nil && n > 0 {
@@ -80,12 +87,15 @@ func NewWorkerPool(defaultSize int, handler TaskHandler) *WorkerPool {
 		tasks:       make(chan ReconcileTask, size*4),
 		handler:     handler,
 		taskTimeout: 90 * time.Second,
+		rateLimiter: newTokenBucket(rateLimit),
 	}
 }
 
 // Start 启动 worker 池。阻塞直到 ctx.Done()
 func (p *WorkerPool) Start(ctx context.Context) {
-	slog.Info("🧵 Worker Pool 启动", "size", p.size, "buffer", cap(p.tasks))
+	slog.Info("🧵 Worker Pool 启动",
+		"size", p.size, "buffer", cap(p.tasks),
+		"rate_limit", p.rateLimiter.rate)
 
 	for i := 0; i < p.size; i++ {
 		p.wg.Add(1)
@@ -105,7 +115,10 @@ func (p *WorkerPool) Start(ctx context.Context) {
 		"enqueued", p.enqueued, "done", p.done, "failed", p.failed)
 }
 
-// Enqueue 投递一个任务到 channel。非阻塞：如果 channel 满则丢弃并告警
+// Enqueue 投递一个任务到 channel。非阻塞：如果 channel 满则丢弃并告警。
+//
+// v3.3: token bucket 入队限流（默认 10/s）。
+// 限流拒绝优先级低于 channel full，先过令牌桶再过 channel。
 func (p *WorkerPool) Enqueue(task ReconcileTask) bool {
 	if task.EnqueuedAt.IsZero() {
 		task.EnqueuedAt = time.Now()
@@ -113,6 +126,16 @@ func (p *WorkerPool) Enqueue(task ReconcileTask) bool {
 	// 护栏：Protected namespace 在入队前就拒绝，避免消费侧浪费
 	if IsProtectedNamespace(task.Namespace) {
 		slog.Warn("🛡 拒绝对 protected namespace 入队",
+			"namespace", task.Namespace, "kind", task.Kind, "name", task.Name)
+		return false
+	}
+
+	// v3.3: 令牌桶限流
+	if !p.rateLimiter.allow() {
+		p.mu.Lock()
+		p.rateLimited++
+		p.mu.Unlock()
+		slog.Warn("⏳ Worker Pool 令牌桶限流，丢弃任务",
 			"namespace", task.Namespace, "kind", task.Kind, "name", task.Name)
 		return false
 	}
@@ -181,4 +204,11 @@ func (p *WorkerPool) Stats() (enqueued, done, failed uint64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.enqueued, p.done, p.failed
+}
+
+// RateLimited 返回被令牌桶限流丢弃的任务数。
+func (p *WorkerPool) RateLimited() uint64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.rateLimited
 }
