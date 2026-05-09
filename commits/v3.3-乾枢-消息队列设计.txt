@@ -1,0 +1,60 @@
+docs(controller): message queue architecture design + rollback dead-loop protection
+
+三层队列架构设计文档（Subscriber/WorkerPool/ReconcileQueue）+ 隐式缓冲路径 +
+rollback 自循环保护实现。429 行设计文档，62 行代码改动。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+消息队列设计文档
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  docs/design/message-queue-draft.md (NEW):
+    九章 429 行，覆盖：
+    §一 全景架构（ASCII 分层数据流图）
+    §二 三层队列逐一定义（代码摘录 + 属性表 + 数据流）
+    §三 隐式缓冲：KVCache delta buffer + InformerAdapter 限流
+    §四 rollback 自循环保护
+    §五 五层对比表
+    §六 设计决策记录（Q1-Q4：为何三层并存/不去重/non-blocking/ns粒度）
+    §七 已知待办 + v3.3-v3.4 排期
+    §八 测试策略（已有 + 待补）
+    §九 编辑记录
+
+  核心结论：
+    三层队列语义互斥 — Subscriber 洪峰缓冲（cap=1024, drop），
+    WorkerPool 高吞吐池化（cap=80, drop），ReconcileQueue 幂等阻塞（三集合, 零丢）。
+    五者分层解耦，上层不卡底层，各自护城河。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+rollback 自循环保护
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  问题：handleCrashLoop 检测 CrashLoopBackOff（restarts>=5）→ 自动 rollback。
+        rollback 后资源再次不稳 → 再次 rollback → 死循环。
+
+  方案：package-level rollbackTracker，按 namespace 追踪连续 rollback 次数。
+    同 ns 连续 3 次后启动指数退避（1min→2min→4min→…），
+    冷却期内 skip（不占 worker slot）。每小时 GC 2h 无活动 entry。
+
+  并发模型：
+    shouldBlock → RLock（20 worker 并发读，零争用）
+    record     → Lock（写路径低频）
+
+  退避表：
+    cnt=0-2  放行
+    cnt=3    1min 冷却
+    cnt=4    2min
+    cnt=5    4min
+    cnt=n    2^(n-3) min 指数发散
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  docs/design/message-queue-draft.md (NEW)     消息队列架构设计文档
+  internal/controller/heal.go (MOD)            rollbackTracker + 自循环保护
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+五层队列分层解耦设计文档落地，rollback 自循环保护指数退避封顶自愈爆炸半径。

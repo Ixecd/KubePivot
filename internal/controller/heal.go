@@ -479,6 +479,83 @@ func analyzeCrashType(kubeconfig, namespace, podName string) crashType {
 	return classifyCrashLogs(strings.ToLower(string(out)))
 }
 
+// ── rollback 自循环保护 ──────────────────────────────────────────────────────
+
+// rollbackEntry 单 ns 的 rollback 追踪状态。
+type rollbackEntry struct {
+	cnt    int
+	lastAt time.Time
+}
+
+// rollbackTracker 按 namespace 追踪 rollback 频率，防止自愈死循环。
+//
+// 设计：
+//   - 同一 ns 连续 rollback >= 3 次后启动指数退避（1min, 2min, 4min…）
+//   - 冷却期内到达的 reconcile 直接跳过（不 block worker）
+//   - 读路径 (shouldBlock) 用 RLock：20 worker 并发无争用
+//   - 写路径 (record / cleanup) 用 Lock
+//   - 每小时清理 2h 无活动的 entry，防止 map 无限增长
+//   - 全局模式（handleTask 每次 new Reconciler）和 standalone 模式共享同一 tracker
+type rollbackTracker struct {
+	mu      sync.RWMutex
+	entries map[string]rollbackEntry
+}
+
+// shouldBlock 判定 ns 是否在 rollback 冷却期内。
+// blocked=true 时 remaining 为剩余冷却时间。
+func (t *rollbackTracker) shouldBlock(ns string) (blocked bool, remaining time.Duration) {
+	t.mu.RLock()
+	e, ok := t.entries[ns]
+	t.mu.RUnlock()
+
+	if !ok || e.cnt < 3 {
+		return false, 0
+	}
+
+	// 指数退避：cnt=3 → 1min, cnt=4 → 2min, cnt=5 → 4min …
+	backoff := time.Duration(1<<uint(e.cnt-3)) * time.Minute
+	if since := time.Since(e.lastAt); since < backoff {
+		return true, backoff - since
+	}
+	return false, 0
+}
+
+// record 记录一次成功的 rollback。
+func (t *rollbackTracker) record(ns string) {
+	t.mu.Lock()
+	e := t.entries[ns]
+	e.cnt++
+	e.lastAt = time.Now()
+	t.entries[ns] = e
+	t.mu.Unlock()
+}
+
+// startCleanup 启动周期性清理 goroutine（仅首次调用生效）。
+func (t *rollbackTracker) startCleanup() {
+	go func() {
+		for {
+			time.Sleep(1 * time.Hour)
+			t.mu.Lock()
+			cutoff := time.Now().Add(-2 * time.Hour)
+			for ns, e := range t.entries {
+				if e.lastAt.Before(cutoff) {
+					delete(t.entries, ns)
+				}
+			}
+			t.mu.Unlock()
+		}
+	}()
+}
+
+// 包级单例，standalone + global 两种模式共享。
+var rollbackTk = &rollbackTracker{
+	entries: make(map[string]rollbackEntry),
+}
+
+func init() {
+	rollbackTk.startCleanup()
+}
+
 // handleCrashLoop CrashLoopBackOff 处理逻辑
 func (r *Reconciler) handleCrashLoop(res Resource, pod podStatus, ct crashType) {
 	switch ct {
@@ -492,8 +569,19 @@ func (r *Reconciler) handleCrashLoop(res Resource, pod podStatus, ct crashType) 
 			"advice", "检查应用日志，考虑回滚到上一版本：kp rollback")
 		// 运行时崩溃且重启次数过多，自动触发 rollback
 		if pod.RestartCount >= 5 {
+			// rollback 自循环保护：同 ns 连续 3 次 rollback 后指数退避
+			if blocked, remaining := rollbackTk.shouldBlock(res.Namespace); blocked {
+				slog.Warn("rollback 自循环保护触发，跳过本次 rollback",
+					"namespace", res.Namespace, "resource", res.Name,
+					"remaining_sec", int(remaining.Seconds()))
+				return
+			}
 			slog.Warn("重启次数 >= 5，触发自动 rollback", "resource", res.Name)
-			r.healRollback(res)
+			if err := r.healRollback(res); err != nil {
+				slog.Error("自动 rollback 失败", "resource", res.Name, "err", err)
+			} else {
+				rollbackTk.record(res.Namespace)
+			}
 		}
 	default:
 		slog.Warn("CrashLoopBackOff（原因不明）",
