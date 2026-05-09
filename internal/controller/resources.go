@@ -14,6 +14,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// GPUConfig GPU 调度需求（v3.4: P1#18）。
+// yaml key: "gpu", 零值 = 不启用 GPU 调度。
+type GPUConfig struct {
+	Count    int    `yaml:"count"`              // GPU 卡数（>0 触发 GPU 路径）
+	Product  string `yaml:"product,omitempty"`  // 型号过滤，如 "A100-SXM4-40GB"
+	Topology string `yaml:"topology,omitempty"` // NVLink 亲和策略: "same-nvswitch"
+	Profile  string `yaml:"profile,omitempty"`  // sizing profile: "gpu"
+}
+
 type Resource struct {
 	// v2.4.0：显式 helm release 名（蓝绿 / 金丝雀场景下覆盖默认推断）
 	// 不声明则走 findReleaseForResource 的默认推断（PROJECT_NAME-Name）
@@ -27,6 +36,9 @@ type Resource struct {
 	Fallback     string   `yaml:"fallback"`
 	ForceSync    bool     `yaml:"force-sync"`
 	NoSyncFields []string `yaml:"no-sync-fields"`
+
+	// v3.4: GPU 调度需求（P1#18）
+	GPU *GPUConfig `yaml:"gpu,omitempty"`
 
 	// yaml tag 用 supply-chain 保持用户配置文件可读性
 	// json tag 用 supply_chain 保持 API 一致性

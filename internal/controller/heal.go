@@ -314,6 +314,10 @@ func (r *Reconciler) healScaleDown(res Resource) error {
 
 // ── OOMKilled 处理 ────────────────────────────────────────────────────────────
 
+// ReportOOM 由 StartGlobal 注入，OOM 事件通知 Rescheduler + Metrics。
+// nil 时 OOM 处理照常执行，仅跳过通知。
+var ReportOOM func()
+
 type podStatus struct {
 	Name             string
 	OOMKilled        bool
@@ -399,6 +403,11 @@ func (r *Reconciler) handleOOMKilled(res Resource, pod podStatus) error {
 	if newLimit == "" {
 		slog.Warn("无法解析 memory limit，跳过自动调整", "current", pod.MemoryLimit)
 		return nil
+	}
+
+	// v3.4: 通知 Rescheduler + Metrics（降级层级感知 OOM）
+	if ReportOOM != nil {
+		ReportOOM()
 	}
 
 	slog.Info("自动调整 memory limit",

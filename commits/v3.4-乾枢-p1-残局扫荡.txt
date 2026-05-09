@@ -1,0 +1,61 @@
+feat(controller): P1 sweep — OOM wiring + GPU fields + Phase 4 KVCache
+
+v3.4: P1 残局扫荡。3 项落地, 7 项标 FORGET 待设计讨论。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#8 OOM 接线
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  heal.go:
+    +var ReportOOM func()             package-level callback
+    handleOOMKilled: if ReportOOM != nil { ReportOOM() }
+
+  global.go:
+    ReportOOM = func() {
+      rescheduler.ReportOOM()         Rescheduler 降级层级感知 OOM
+      scheduler.GetSchedulerMetrics().IncOOMKill()  Prometheus 指标
+    }
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#18 GPU fields
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  resources.go:
+    +GPUConfig struct { Count, Product, Topology, Profile }
+    Resource.GPU *GPUConfig `yaml:"gpu,omitempty"`
+    零值 = 不启用 GPU 调度
+
+  yaml 格式:
+    gpu:
+      count: 4
+      product: A100-SXM4-40GB
+      topology: same-nvswitch
+      profile: gpu
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+标 FORGET（需设计讨论, 7 项）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  #9  Jitter 校准            需生产数据
+  #10 Fencer OOB 隔离确认     需 GPU reset/网络断连检测设计
+  #12 Pod affinity 拓扑约束   需 ConstraintChecker 设计 + GPU 环境
+  #14 跨 ns 依赖部署          需执行层设计
+  #15 per-service rollback    helm 架构限制
+  #16 Controller chart        全局 install 已替代, v2.2 遗留
+  #17 Etcd PVC                deployment 已用 volumeClaimTemplates
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/controller/heal.go                +ReportOOM callback
+  internal/controller/global.go              ReportOOM 注入
+  internal/controller/resources.go           +GPUConfig struct
+  FORGET.md                                  P1 全盘点: 5/12 ✅, 7 待讨论
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+P1 5/12 落地, 7 项标 FORGET 待设计,
+P0+P1 可执行项全部归零。

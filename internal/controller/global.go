@@ -241,6 +241,12 @@ func StartGlobal(ctx context.Context) {
 	}
 	rescheduler := scheduler.NewRescheduler(sched, adapter, adapter, reschedulerCfg)
 
+	// v3.4: OOM 事件 → Rescheduler 降级层级 + Prometheus 指标
+	ReportOOM = func() {
+		rescheduler.ReportOOM()
+		scheduler.GetSchedulerMetrics().IncOOMKill()
+	}
+
 	// ── 启动乾枢重调度器 ──
 	wg.Add(1)
 	go func() {
