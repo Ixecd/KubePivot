@@ -39,7 +39,8 @@ type TaskHandler func(ctx context.Context, task ReconcileTask) error
 // 设计要点：
 //   - 固定大小（默认 20），避免 Leader 被大量并发 goroutine 压垮
 //   - channel buffer = poolSize × 4，允许短暂突发
-//   - token bucket 入队限流（默认 10/s），防止 reconcile 洪峰压垮 kubectl
+//   - 两阶段门控：channel 先行 → 成功再耗 token（后置代币，v3.4）
+//     channel 满即 drop，不浪费令牌；token 统计 = 实际入队速率
 //   - 每个任务独立 ctx + timeout，单任务失败不影响其他
 //   - 优雅关闭：ctx.Done() → 停止接收新任务 → 等待 in-flight 任务完成
 type WorkerPool struct {
@@ -50,15 +51,16 @@ type WorkerPool struct {
 	// 任务执行超时
 	taskTimeout time.Duration
 
-	// v3.3: 令牌桶入队限流
+	// v3.3: 令牌桶入队限流（v3.4: 后置消费）
 	rateLimiter *tokenBucket
 
 	// 观测
-	enqueued    uint64
-	rateLimited uint64 // 被限流丢弃的任务数
-	done        uint64
-	failed      uint64
-	mu          sync.Mutex
+	enqueued       uint64
+	rateLimited    uint64 // 令牌桶拒绝数
+	channelDropped uint64 // channel 满丢弃数
+	done           uint64
+	failed         uint64
+	mu             sync.Mutex
 
 	wg sync.WaitGroup
 }
@@ -95,7 +97,8 @@ func NewWorkerPool(defaultSize int, rateLimit float64, handler TaskHandler) *Wor
 func (p *WorkerPool) Start(ctx context.Context) {
 	slog.Info("🧵 Worker Pool 启动",
 		"size", p.size, "buffer", cap(p.tasks),
-		"rate_limit", p.rateLimiter.rate)
+		"rate_track", p.rateLimiter.rate,
+		"mode", "channel-first (后置代币)")
 
 	for i := 0; i < p.size; i++ {
 		p.wg.Add(1)
@@ -117,8 +120,8 @@ func (p *WorkerPool) Start(ctx context.Context) {
 
 // Enqueue 投递一个任务到 channel。非阻塞：如果 channel 满则丢弃并告警。
 //
-// v3.3: token bucket 入队限流（默认 10/s）。
-// 限流拒绝优先级低于 channel full，先过令牌桶再过 channel。
+// v3.4: 后置代币 — channel 先行，成功再耗 token。
+// channel 满不浪费令牌，token 统计 = 实际入队速率，非尝试速率。
 func (p *WorkerPool) Enqueue(task ReconcileTask) bool {
 	if task.EnqueuedAt.IsZero() {
 		task.EnqueuedAt = time.Now()
@@ -130,23 +133,20 @@ func (p *WorkerPool) Enqueue(task ReconcileTask) bool {
 		return false
 	}
 
-	// v3.3: 令牌桶限流
-	if !p.rateLimiter.allow() {
-		p.mu.Lock()
-		p.rateLimited++
-		p.mu.Unlock()
-		slog.Warn("⏳ Worker Pool 令牌桶限流，丢弃任务",
-			"namespace", task.Namespace, "kind", task.Kind, "name", task.Name)
-		return false
-	}
-
 	select {
 	case p.tasks <- task:
+		// 后置代币：channel 成功后才消费令牌
+		// 令牌统计 = 实际入队速率，非尝试速率
+		p.rateLimiter.allow()
 		p.mu.Lock()
 		p.enqueued++
 		p.mu.Unlock()
 		return true
 	default:
+		// channel 满：不浪费令牌，直接 drop
+		p.mu.Lock()
+		p.channelDropped++
+		p.mu.Unlock()
 		slog.Warn("⚠️  Worker Pool channel 已满，丢弃任务",
 			"namespace", task.Namespace, "kind", task.Kind, "name", task.Name)
 		return false
@@ -206,9 +206,17 @@ func (p *WorkerPool) Stats() (enqueued, done, failed uint64) {
 	return p.enqueued, p.done, p.failed
 }
 
-// RateLimited 返回被令牌桶限流丢弃的任务数。
+// RateLimited 返回被令牌桶限流拒绝的任务数（前置限流，已废弃于 v3.4 后置代币）。
+// v3.4: 令牌后置消费，此值始终为 0。
 func (p *WorkerPool) RateLimited() uint64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.rateLimited
+}
+
+// ChannelDropped 返回因 channel 满被丢弃的任务数（v3.4，主要丢弃原因）。
+func (p *WorkerPool) ChannelDropped() uint64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.channelDropped
 }

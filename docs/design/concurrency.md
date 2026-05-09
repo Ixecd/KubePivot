@@ -82,23 +82,34 @@ allow():
 
 **已知漏洞**：
 
-- **令牌浪费**：`allow()` 消耗令牌后，WorkerPool channel 可能满——令牌"白花"但不影响正确性（限流的目的是减速生产者，达到了）
+- ~~**令牌浪费**~~ ✅ v3.4 — 后置代币（channel 先行，成功再耗 token），令牌不白花
 - **burst 边界**：`rate=0` 时 `burst=1` 但 path 走 `rate<=0` 分支永不读取 burst。代码味非 bug
 
-### 2.2 WorkerPool + tokenBucket — 两阶段门控
+### 2.2 WorkerPool + tokenBucket — 两阶段门控 (v3.4: 后置代币)
 
 **位置**：`internal/controller/worker_pool.go`
 
-**数据流**：
+**v3.4 数据流**：
 
 ```
 Enqueue(task):
-  1. tokenBucket.allow()          ← 信号量门控
-     ↓ 拒绝 → rateLimited++, return false
-  2. select { case tasks <- task } ← channel 门控
-     ↓ 满 → drop + Warn
+  1. select { case tasks <- task }  ← channel 先行
+     ↓ 满 → channelDropped++, return false
+  2. tokenBucket.allow()            ← 后置代币（成功再耗）
   3. enqueued++, return true
 ```
+
+**v3.3 数据流（旧）**：
+
+```
+Enqueue(task):
+  1. tokenBucket.allow()            ← 前置限流
+     ↓ 拒绝 → rateLimited++, return false
+  2. select { case tasks <- task }  ← channel
+     ↓ 满 → drop (令牌已浪费)
+```
+
+**v3.4 改进**：channel 满时不浪费令牌。token 统计 = 实际入队速率，非尝试速率。
 
 **生产者-消费者模型**：
 
@@ -120,14 +131,15 @@ Watchers (3 goroutines)           Workers (20 goroutines)
 
 | Q | 选 | 理由 |
 |---|-----|------|
-| 为什么先 token 后 channel？ | 先限流 | 令牌稀缺（10/s），先过稀缺资源 |
+| v3.3 为什么先 token 后 channel？ | 前置限流 | 令牌稀缺，先过稀缺资源 |
+| v3.4 为什么改为先 channel 后 token？ | 后置代币 | channel 满不浪费令牌，统计准 |
 | 为什么 channel 不用阻塞发送？ | non-blocking | 生产者是 watch loop，不能卡 |
 | 为什么不去重？ | 幂等 handler | healRollback 到同 revision 是 no-op |
 
-**已知漏洞**：
-
-- **无优先级**：token bucket 不区分 VIP namespace。洪峰时关键 ns 任务可能被限流。Hybrid queue 是解（v3.4+）
-- **rateLimited vs channel drop 统计混淆**：两者都 drop，但只有 rateLimited 有独立计数器
+**v3.4 改进**：
+- `channelDropped` 独立计数器：channel 满 drop vs 令牌拒绝，不再混淆
+- 令牌统计 = 实际入队速率（非尝试速率）
+- 自然背压：channel 满 = worker 消费不过来，令牌跟踪但不阻止
 
 ### 2.3 ReconcileQueue — 条件变量阻塞队列
 
@@ -583,7 +595,7 @@ reconcileShards:
 | 4 | FlushDelta 无并发去重 | 低 | v3.4 | atomic flag 或 channel gate |
 | 5 | ReconcileQueue goroutine churn | 低 | - | Go 1.23+ `sync.Cond.WaitContext` 后迁移 |
 | 6 | rollbackTracker cleanup 竞态 | 极低 | - | 生产几乎不触发 |
-| 7 | tokenBucket burst 初始化 | 极低 | - | 代码味，非 bug |
+| 7 | ~~token bucket 令牌白花~~ ✅ v3.4 | - | 后置代币，channel 满不浪费令牌 |
 
 ---
 
@@ -617,5 +629,7 @@ Q4: 为什么 token bucket 不用 rate.Limiter？
 ```
 2026-05-09  创建。覆盖 11 种并发构造 + 生产者-消费者关系图 +
             已知漏洞 + 设计 Q。
+2026-05-09  #1 WorkerPool 后置代币 (channel-first, token-after)。
+            channelDropped 独立计数器, 令牌不白花。
             共同作者: qc + DeepSeek
 ```

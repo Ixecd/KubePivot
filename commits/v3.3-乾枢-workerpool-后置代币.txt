@@ -1,0 +1,37 @@
+fix(controller): WorkerPool post-consume token — channel first, token after
+
+v3.4: 后置代币。Enqueue 先投 channel，成功再耗 token。
+channel 满不浪费令牌，token 统计 = 实际入队速率（非尝试速率）。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Enqueue 顺序:
+    v3.3: tokenBucket.allow() → channel send
+          令牌先耗，channel 满 → 令牌白花
+    v3.4: channel send → tokenBucket.allow()
+          channel 满 → 不耗令牌，直接 drop
+
+  统计:
+    +channelDropped uint64   channel 满丢弃数（主要丢弃原因）
+    rateLimited              v3.4 始终为 0（令牌后置消费）
+    +ChannelDropped()        独立查询方法
+
+  设计:
+    自然背压 — channel 满 = worker 消费不过来
+    令牌跟踪但不再前置阻止 — 统计准而无假象
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/controller/worker_pool.go     Enqueue 后置代币; +channelDropped;
+                                          +ChannelDropped(); 启动日志
+  docs/design/concurrency.md              §2.2 v3.3/v3.4 对比; #7 ✅ done
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+channel 先行，成功再耗 token，令牌不白花，统计不撒谎。
