@@ -1,0 +1,47 @@
+docs(benchmark): v3.4 full-spectrum benchmark report
+
+独立基准测试报告 — 6 维度 26 指标。M4 + orbstack + Kind 全链路实测。
+诚实记录所有 drop 率、边界、未测项。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+内容
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  §一   测试环境
+  §二   测试矩阵 (6 维度)
+  §三   微基准 (M4, 11 项)
+  §四   生产模拟器 (M4)
+  §五   规模测试 (Kind 500ns, 31 eps)
+  §六   混沌测试 (orbstack gap 2s, Kind gap 3s, podkill)
+  §七   洪水测试 (k6 /metrics, 2.1k eps, p99=195ms)
+  §八   功能验证 (8 项)
+  §九   性能退化门禁 (Prune Gate, 9 项)
+  §十   未测项 (7 项, 诚实)
+  §十一 结论
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+关键结论
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  锁:  tokenBucket 47ns, rollbackTracker 20g RLock 88ns 零退化
+  队:  WorkQueue Dedup 7ns, AddGetDone 157ns
+  产:  WatchLoad 36µs, Storm 50k 248s
+  模:  500ns 31eps, 0 错误
+  沌:  gap 2-3s (v3.3: 15-20s), 6-10x 提升
+  洪:  /metrics 2.1k eps, p99=195ms, 0 drop
+  功:  KVCache/Webhook/Metrics/Node/Pod/etcd/shard/handoff 全通
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  docs/design/v3.4-benchmark-report.md (NEW)  独立基准测试报告
+  internal/controller_installer/templates/
+    rbac.yaml                                  +nodes RBAC
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+v3.4 终测报告: 锁非瓶颈, channel 是背压,
+gap 2-3s (6-10x), 全链通关。

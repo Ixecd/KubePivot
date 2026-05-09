@@ -15,4 +15,4 @@ benchmark/results/*
 
 _output
 
-.claude
+.claudebuild/docker/controller/bin/build/docker/controller/bin/

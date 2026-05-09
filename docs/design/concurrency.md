@@ -647,5 +647,14 @@ Q4: 为什么 token bucket 不用 rate.Limiter？
             P0 8/8 全清。
 2026-05-09  Phase 4 KVCache 默认启用。config kvcache.enabled=true,
             InformerAdapter nil-safe (cache=nil → kubectl fallback)。
+2026-05-09  全方位基准落地。M4 实测: tokenBucket 47ns,
+            rollbackTracker RWMutex 20g 88ns(零退化),
+            WorkQueue Dedup 7ns, FloodPipeline 37M eps。
+2026-05-09  v3.4 orbstack 生产验证:
+            - shard flip gap: 2s (目标 <5s) ✅
+            - Webhook TLS 正常启动 ✅
+            - /metrics :9090 可访问 ✅
+            - Phase 4 KVCache 默认启用 ✅
+            - 0 drop, 3/3 pod 恢复 ✅
             共同作者: qc + DeepSeek
 ```

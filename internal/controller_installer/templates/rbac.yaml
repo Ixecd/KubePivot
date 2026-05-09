@@ -25,6 +25,11 @@ rules:
     resources: ["pods", "pods/log", "services", "endpoints", "persistentvolumeclaims", "configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
+  # Node Informer (v3.4 fix: RBAC 缺 nodes watch → NodeCache 锈)
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+
   # Namespace 发现（watch managed label）
   - apiGroups: [""]
     resources: ["namespaces"]
