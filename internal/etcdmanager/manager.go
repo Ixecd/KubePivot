@@ -12,23 +12,45 @@ import (
 
 // EtcdManager 运行时 etcd 集群管理。
 type EtcdManager struct {
-	PodIndex    int // 当前 Pod 在 StatefulSet 中的序号 (0-based)
-	TotalPods   int // controller 副本数
-	Namespace   string
-	CertDir     string // TLS 证书目录
-	CompactHour int    // compact 间隔（默认 1h）
-	DefragHour  int    // defrag 间隔（默认 24h）
+	PodIndex  int // 当前 Pod 在 StatefulSet 中的序号 (0-based)
+	TotalPods int // controller 副本数
+	Namespace string
+	CertDir   string // TLS 证书目录
+
+	CompactInterval time.Duration // compact 间隔（默认 1h）
+	DefragInterval  time.Duration // defrag 间隔（默认 24h）
 }
 
-// DefaultEtcdManager 返回默认配置。
+// DefaultEtcdManager 返回默认配置（向后兼容，测试/脚本用）。
 func DefaultEtcdManager(podIndex, totalPods int, namespace string) *EtcdManager {
 	return &EtcdManager{
-		PodIndex:    podIndex,
-		TotalPods:   totalPods,
-		Namespace:   namespace,
-		CertDir:     "/data/etcd/certs",
-		CompactHour: 1,
-		DefragHour:  24,
+		PodIndex:        podIndex,
+		TotalPods:       totalPods,
+		Namespace:       namespace,
+		CertDir:         "/data/etcd/certs",
+		CompactInterval: 1 * time.Hour,
+		DefragInterval:  24 * time.Hour,
+	}
+}
+
+// NewEtcdManagerFromConfig 从 config.EtcdConfig 创建 EtcdManager。
+//
+// 生产入口：controller.Start() 从 config.Load() 取 etcd 配置传入。
+// 零值时自动降级到默认值（1h compact / 24h defrag）。
+func NewEtcdManagerFromConfig(podIndex, totalPods int, namespace string, compactInterval, defragInterval time.Duration) *EtcdManager {
+	if compactInterval <= 0 {
+		compactInterval = 1 * time.Hour
+	}
+	if defragInterval <= 0 {
+		defragInterval = 24 * time.Hour
+	}
+	return &EtcdManager{
+		PodIndex:        podIndex,
+		TotalPods:       totalPods,
+		Namespace:       namespace,
+		CertDir:         "/data/etcd/certs",
+		CompactInterval: compactInterval,
+		DefragInterval:  defragInterval,
 	}
 }
 
@@ -39,7 +61,7 @@ func (m *EtcdManager) Run(ctx context.Context) {
 }
 
 func (m *EtcdManager) compactLoop(ctx context.Context) {
-	ticker := time.NewTicker(time.Duration(m.CompactHour) * time.Hour)
+	ticker := time.NewTicker(m.CompactInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -58,7 +80,9 @@ func (m *EtcdManager) defragLoop(ctx context.Context) {
 	// 按 Pod 序号分布 Defrag 时间窗，避免全集群同时进入阻塞状态。
 	// Pod-0: 02:00, Pod-1: 04:00, Pod-2: 06:00 ...
 	hour := (2 + m.PodIndex*(24/__max(m.TotalPods, 1))) % 24
-	slog.Info("etcdmanager: defrag scheduled", "pod_index", m.PodIndex, "hour_utc", hour)
+	slog.Info("etcdmanager: defrag scheduled",
+		"pod_index", m.PodIndex, "hour_utc", hour,
+		"interval", m.DefragInterval)
 
 	for {
 		now := time.Now().UTC()

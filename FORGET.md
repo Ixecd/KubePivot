@@ -26,7 +26,7 @@
 
 6. **Prometheus 指标未注册** — Scheduler metrics / Informer metrics 已定义，但 HTTP server 未实施。所有 7 + 9 = 16 个指标无法暴露。生产无可见性。
 
-7. **etcdmanager compact/defrag 未接入 config** — 内置 compact 1h / defrag 24h 硬编码，未走 system.yaml。etcd 性能敏感场景无法调整。
+7. ~~**etcdmanager compact/defrag 未接入 config**~~ ✅ v3.3 — EtcdManager 类型 int→time.Duration，NewEtcdManagerFromConfig() 接线，controller.Start() 自动启动维护循环。
 
 ---
 
@@ -75,4 +75,8 @@
             - P1 12 项：OOM 接线 / jitter 校准 / Fencer / Watch Phase 4 / 拓扑约束 / label-based 匹配
                         跨 ns / per-svc rollback / chart disabled / etcd PVC / GPU fields / FNV hash
             - P2 Ops + P3 Polish + 长期演进 → 不提（规模化时再扫）
+2026-05-09  v3.3 P0 扫荡
+            - #5 自愈死循环 ✅ rollbackTracker 指数退避
+            - #7 etcd config ✅ compact/defrag 接入 config 系统
+            - #1 shard gap 事件盲区 ✅ ForceResync + OnShardChanged 接线
 ```

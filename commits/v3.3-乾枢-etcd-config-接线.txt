@@ -1,0 +1,67 @@
+feat(etcdmanager): wire compact/defrag intervals to config system
+
+EtcdManager 类型 int→time.Duration，NewEtcdManagerFromConfig() 接线 config，
+controller.Start() 自动启动 etcd 维护循环。硬编码 1h/24h → config.Load() 驱动。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+类型升级
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  EtcdManager:
+    CompactHour int    → CompactInterval time.Duration
+    DefragHour  int    → DefragInterval  time.Duration
+
+  compactLoop:
+    time.Duration(m.CompactHour) * time.Hour → m.CompactInterval
+
+  NewEtcdManagerFromConfig(podIndex, totalPods, namespace, compactInterval, defragInterval):
+    零值自动降级：compact<0 → 1h, defrag<0 → 24h
+    向后兼容 DefaultEtcdManager 保留（测试/脚本用）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+controller 接线
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  controller.Start():
+    global mode → go startEtcdMaintenance(ctx) → NewEtcdManagerFromConfig()
+    POD_INDEX 从 KUBEPIVOT_POD_INDEX 环境变量读取
+    replicas 从 config.Controller.Replicas 读取
+    compact/defrag 间隔从 config.Etcd 读取
+
+  不启动条件:
+    per-project 模式（无 etcd 集群）
+    config 字段空 → 降级默认值 (1h/24h)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+config 系统 (已有，无需改动)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  configs/system.yaml (已有):
+    etcd.compactInterval: 1h
+    etcd.defragInterval:  24h
+
+  config.EtcdConfig (已有):
+    CompactInterval time.Duration
+    DefragInterval  time.Duration
+
+  defaults() (已有):
+    CompactInterval: 1 * time.Hour
+    DefragInterval:  24 * time.Hour
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+变更:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  internal/etcdmanager/manager.go          类型 int→time.Duration;
+                                            +NewEtcdManagerFromConfig();
+                                            compactLoop/defragLoop 接入 Duration
+  internal/controller/controller.go         +startEtcdMaintenance();
+                                            import config + etcdmanager + strconv
+  FORGET.md                                 #7 ✅ done
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+一句话总结:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+etcd compact/defrag 硬编码→config 接线，controller 启动自动维护，
+P0 第 7 项闭单。

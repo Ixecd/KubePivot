@@ -5,9 +5,12 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 
+	"github.com/Ixecd/kubepivot/internal/config"
+	"github.com/Ixecd/kubepivot/internal/etcdmanager"
 	"github.com/Ixecd/kubepivot/internal/state"
 )
 
@@ -42,6 +45,10 @@ func Start(args ...string) {
 
 	if global {
 		slog.Info("🌐 controller 启动（global 模式 v2.3.0）")
+
+		// etcd compact/defrag 维护（v3.3: 接入 config 系统，替代硬编码）
+		go startEtcdMaintenance(ctx)
+
 		StartGlobal(ctx)
 	} else {
 		slog.Info("🚀 controller 启动（per-project 模式，向后兼容）")
@@ -73,6 +80,32 @@ func startPerProject(ctx context.Context) {
 		reconciler.Start(leaderCtx, &wg)
 		wg.Wait()
 	})
+}
+
+// startEtcdMaintenance 启动 etcd compact/defrag 维护循环。
+//
+// v3.3: 从 config 系统读 compact/defrag 间隔（替代硬编码 1h/24h）。
+// 仅在 global 模式下运行（per-project 无 etcd 集群）。
+// POD_INDEX 从 KUBEPIVOT_POD_INDEX 环境变量读取（StatefulSet 注入）。
+func startEtcdMaintenance(ctx context.Context) {
+	podIndex, _ := strconv.Atoi(os.Getenv("KUBEPIVOT_POD_INDEX"))
+	cfg := config.Load()
+
+	mgr := etcdmanager.NewEtcdManagerFromConfig(
+		podIndex,
+		cfg.Controller.Replicas,
+		"kubepivot-system",
+		cfg.Etcd.CompactInterval,
+		cfg.Etcd.DefragInterval,
+	)
+
+	slog.Info("etcd maintenance 启动",
+		"pod_index", podIndex,
+		"compact_interval", cfg.Etcd.CompactInterval,
+		"defrag_interval", cfg.Etcd.DefragInterval,
+	)
+
+	mgr.Run(ctx)
 }
 
 func getenv(key, fallback string) string {
